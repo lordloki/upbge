@@ -324,7 +324,7 @@ const unsigned char *RAS_OpenGLRasterizer::GetGraphicsCardVendor()
 
 void RAS_OpenGLRasterizer::PrintHardwareInfo()
 {
-  CM_Message("GL_VENDOR: " << glGetString(GL_VENDOR));
+  /*CM_Message("GL_VENDOR: " << glGetString(GL_VENDOR));
   CM_Message("GL_RENDERER: " << glGetString(GL_RENDERER));
   CM_Message("GL_VERSION: " << glGetString(GL_VERSION));
   CM_Message("GL_SHADING_LANGUAGE_VERSION: " << glGetString(GL_SHADING_LANGUAGE_VERSION));
@@ -391,5 +391,5 @@ void RAS_OpenGLRasterizer::PrintHardwareInfo()
              << (epoxy_has_gl_extension("GL_ARB_texture_env_combine") ? "yes." : "no."));
 
   CM_Message(" GL_ARB_draw_instanced supported?  "
-             << (epoxy_has_gl_extension("GL_ARB_draw_instanced") ? "yes." : "no."));
+             << (epoxy_has_gl_extension("GL_ARB_draw_instanced") ? "yes." : "no."));*/
 }

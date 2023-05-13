@@ -67,6 +67,7 @@ void GPG_Canvas::EndFrame()
 
 void GPG_Canvas::BeginDraw()
 {
+  /* Note Vulkan : Calling wm_window_make_drawable(m_wm, m_win); as in KX_BlenderCanvas sounds to make window opened faster. */
 }
 
 void GPG_Canvas::EndDraw()
@@ -103,8 +104,8 @@ void GPG_Canvas::Init()
   if (m_window) {
     const float clear_col[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     GPU_framebuffer_clear_color_depth(GPU_framebuffer_active_get(), clear_col, 1.0f);
-    m_window->setDrawingContextType(GHOST_kDrawingContextTypeOpenGL);
-    BLI_assert(m_window->getDrawingContextType() == GHOST_kDrawingContextTypeOpenGL);
+    //m_window->setDrawingContextType(GHOST_kDrawingContextTypeOpenGL);
+    //BLI_assert(m_window->getDrawingContextType() == GHOST_kDrawingContextTypeOpenGL);
   }
 }
 

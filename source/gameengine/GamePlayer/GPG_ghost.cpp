@@ -737,9 +737,9 @@ static int GetShadingTypeRuntime(bContext *C)
   View3D *v3d = CTX_wm_view3d(C);
   bool not_eevee = (v3d->shading.type != OB_RENDER) && (v3d->shading.type != OB_MATERIAL);
 
-  if (not_eevee) {
+  /*if (not_eevee) {
     return OB_RENDER;
-  }
+  }*/
   return v3d->shading.type;
 }
 
@@ -827,6 +827,8 @@ int main(int argc,
 #endif
 
   BlendFileData *bfd = nullptr;
+
+  GPU_backend_type_selection_set(GPU_BACKEND_VULKAN);
 
   /* creator.c */
 

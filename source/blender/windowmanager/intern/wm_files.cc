@@ -1691,6 +1691,7 @@ static ImBuf *blend_file_thumb_from_camera(const bContext *C,
                                            bScreen *screen,
                                            BlendThumbnail **r_thumb)
 {
+  return nullptr; //tmp blenderplayer vulkan window test
   *r_thumb = nullptr;
 
   /* Scene can be nullptr if running a script at startup and calling the save operator. */

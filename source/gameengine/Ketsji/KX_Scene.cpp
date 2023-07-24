@@ -756,6 +756,21 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
    * for next drawing loop. */
   for (KX_GameObject *gameobj : GetObjectList()) {
     gameobj->TagForTransformUpdate(is_overlay_pass, is_last_render_pass);
+
+    /* Option to leave dynamic paint work during bge session :
+     * Tag the brush for transform to update simulation */
+    Object *ob = gameobj->GetBlenderObject();
+    if (BKE_modifiers_findby_type(ob, eModifierType_DynamicPaint)) {
+      if (scene->gm.flag & GAME_USE_INTERACTIVE_DYNAPAINT) {
+        ModifierData *md = BKE_modifiers_findby_type(ob, eModifierType_DynamicPaint);
+        if (md && md->mode & (eModifierMode_Realtime | eModifierMode_Render)) {
+          DynamicPaintModifierData *pmd2 = (DynamicPaintModifierData *)md;
+          if (pmd2->brush) {
+            DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+          }
+        }
+      }
+    }
   }
 
   /* Notify depsgraph for other changes */

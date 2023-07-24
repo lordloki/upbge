@@ -89,6 +89,10 @@ class RENDER_PT_game_resolution(RenderButtonsPanel, Panel):
         col.prop(gs, "use_viewport_render")
 
         row = layout.row()
+        col = row.column()
+        col.prop(gs, "use_interactive_dynapaint")
+
+        row = layout.row()
         row.active = not gs.use_viewport_render
         row.prop(gs, "samp_per_frame", text="Samples Per Frame")
 

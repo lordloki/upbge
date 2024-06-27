@@ -21,10 +21,10 @@ jobs:
     steps:
     - name: Setup APT
       run: |
-        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02noble.list \
-          -o /etc/apt/sources.list.d/02noble.list && \
-        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02ubuntu \
-          -o /etc/apt/apt.conf.d/02ubuntu
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/03oracular.list \
+          -o /etc/apt/sources.list.d/03oracular.list && \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/03ubuntu \
+          -o /etc/apt/apt.conf.d/03ubuntu
 
     - name: Install Tools
       run: | 
@@ -44,9 +44,9 @@ jobs:
           libboost-serialization-dev libboost-program-options-dev libboost-iostreams-dev \
           libboost-python-dev libboost-numpy-dev clang-format libboost-dev \
           libtbb-dev libopencolorio-dev libimath-dev libopenexr-dev openimageio-tools \
-          clang libclang-dev llvm-dev libosd-dev libblosc-dev \
+          libopenimageio-dev clang libclang-dev llvm-dev libosd-dev libblosc-dev \
           libnanovdb-dev libopenvdb-dev opencollada-dev libembree-dev libopenxr-dev \
-          libavdevice-dev ffmpeg pybind11-dev
+          libavdevice-dev ffmpeg
 
     - name: Install Python
       uses: actions/setup-python@v5
@@ -61,23 +61,6 @@ jobs:
     - name: Setup Python Path
       run: |
         sudo sh -c "echo '$pythonLocation/lib' >> /etc/ld.so.conf.d/python.conf" && \
-        sudo ldconfig
-
-    - name: Checkout OpenImageIO 2.5
-      uses: actions/checkout@v3
-      with:
-        repository: "AcademySoftwareFoundation/OpenImageIO"
-        ref: "release"
-        path: "oiio"
-        
-    - name: Compile OpenImageIO 2.5
-      run: |
-        cd oiio
-        mkdir build
-        cd build
-        cmake ..
-        make -j `nproc`
-        sudo make install
         sudo ldconfig
 
     - name: Checkout sources
@@ -156,10 +139,10 @@ jobs:
 
     - name: Setup APT
       run: |
-        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02noble.list \
-          -o /etc/apt/sources.list.d/02noble.list && \
-        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02ubuntu \
-          -o /etc/apt/apt.conf.d/02ubuntu
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/03oracular.list \
+          -o /etc/apt/sources.list.d/03oracular.list && \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/03ubuntu \
+          -o /etc/apt/apt.conf.d/03ubuntu
 
     - name: Install Tools
       run: | 

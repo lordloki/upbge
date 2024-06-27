@@ -44,7 +44,7 @@ jobs:
           libboost-serialization-dev libboost-program-options-dev libboost-iostreams-dev \
           libboost-python-dev libboost-numpy-dev clang-format libboost-dev \
           libtbb-dev libopencolorio-dev libimath-dev libopenexr-dev openimageio-tools \
-          libopenimageio-dev clang libclang-dev llvm-dev libosd-dev libblosc-dev \
+          clang libclang-dev llvm-dev libosd-dev libblosc-dev \
           libnanovdb-dev libopenvdb-dev opencollada-dev libembree-dev libopenxr-dev \
           libavdevice-dev ffmpeg
 
@@ -61,6 +61,18 @@ jobs:
     - name: Setup Python Path
       run: |
         sudo sh -c "echo '$pythonLocation/lib' >> /etc/ld.so.conf.d/python.conf" && \
+        sudo ldconfig
+
+    - name: Install OpenImageIO 2.5
+      run: |
+        sudo git clone https://github.com/OpenImageIO/oiio.git
+        cd oiio
+        git checkout Release-2.5.11
+        mkdir build
+        cd build
+        cmake ..
+        make -j$(nproc)
+        sudo make install
         sudo ldconfig
 
     - name: Checkout sources

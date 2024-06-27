@@ -66,13 +66,14 @@ jobs:
     - name: Checkout OpenImageIO 2.5
       uses: actions/checkout@v3
       with:
-        repository: "OpenImageIO/oiio"
-        ref: "Release-2.5.11"
+        repository: "AcademySoftwareFoundation/OpenImageIO"
+        ref: "master"
         path: "oiio"
         
     - name: Compile OpenImageIO 2.5
       run: |
         cd oiio
+        git checkout v2.5.12.0
         mkdir build
         cd build
         cmake ..

@@ -25,17 +25,28 @@ jobs:
           -o /etc/apt/sources.list.d/02noble.list && \
         sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02ubuntu \
           -o /etc/apt/apt.conf.d/02ubuntu
-    # We downgrade libgbm1 & libglapi-mesa to fix libegl-mesa0 installation
+
     - name: Install Tools
       run: | 
         sudo apt update && \
         sudo apt dist-upgrade && \
-        # sudo apt --allow-downgrades install libgbm1=23.0.4-0ubuntu1~23.04.1 && \
-        # sudo apt --allow-downgrades install libglapi-mesa=23.0.4-0ubuntu1~23.04.1 && \
-        sudo apt install -y build-essential cmake libembree-dev libavutil-dev \
-          libxi-dev libxxf86vm-dev libboost-dev libboost-locale-dev libgl1-mesa-dev \
-          libavformat-dev libswscale-dev libavdevice-dev libblas3 libopenimageio-dev \
-          libzstd-dev libopenimageio-dev libfreetype-dev libepoxy-dev libdecor-0-dev
+        sudo apt install -y build-essential git-lfs git subversion cmake ninja-build \
+          cmake-curses-gui cmake-gui patch libx11-dev libxxf86vm-dev libxcursor-dev \
+          libxi-dev libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev \
+          libdecor-0-dev wayland-protocols libdbus-1-dev libgl-dev libegl-dev \
+          libjpeg-dev libpng-dev libfreetype-dev libfontconfig-dev libzstd-dev \
+          libbz2-dev liblzma-dev libsdl2-dev libshaderc-dev libepoxy-dev libxml2-dev \
+          libhpdf-dev libpystring-dev libopenjp2-7-dev libtiff-dev libjack-jackd2-dev \
+          libpulse-dev libopenal-dev libsndfile1-dev libjemalloc-dev libvulkan-dev \
+          libgmp-dev libpugixml-dev libfftw3-dev libpotrace-dev libyaml-cpp-dev libdeflate-dev \
+          libboost-filesystem-dev libboost-locale-dev libboost-thread-dev libboost-regex-dev \
+          libboost-system-dev libboost-date-time-dev libboost-wave-dev libboost-atomic-dev \
+          libboost-serialization-dev libboost-program-options-dev libboost-iostreams-dev \
+          libboost-python-dev libboost-numpy-dev clang-format libboost-dev \
+          libtbb-dev libopencolorio-dev libimath-dev libopenexr-dev openimageio-tools \
+          libopenimageio-dev clang libclang-dev llvm-dev libosd-dev libblosc-dev \
+          libnanovdb-dev libopenvdb-dev opencollada-dev libembree-dev libopenxr-dev \
+          libavdevice-dev ffmpeg
 
     - name: Install Python
       uses: actions/setup-python@v5
@@ -45,7 +56,7 @@ jobs:
     - name: Install Python Dependencies
       run: | 
         curl https://bootstrap.pypa.io/get-pip.py | python && \
-        python -m pip install numpy requests cython
+        python -m pip install numpy requests cython3 idna charset-normalizer urllib3 certifi zstandard
 
     - name: Setup Python Path
       run: |

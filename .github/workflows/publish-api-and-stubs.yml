@@ -46,7 +46,7 @@ jobs:
           libtbb-dev libopencolorio-dev libimath-dev libopenexr-dev openimageio-tools \
           clang libclang-dev llvm-dev libosd-dev libblosc-dev \
           libnanovdb-dev libopenvdb-dev opencollada-dev libembree-dev libopenxr-dev \
-          libavdevice-dev ffmpeg
+          libavdevice-dev ffmpeg pybind11-dev
 
     - name: Install Python
       uses: actions/setup-python@v5

@@ -63,15 +63,20 @@ jobs:
         sudo sh -c "echo '$pythonLocation/lib' >> /etc/ld.so.conf.d/python.conf" && \
         sudo ldconfig
 
-    - name: Install OpenImageIO 2.5
+    - name: Checkout OpenImageIO 2.5
+      uses: actions/checkout@v3
+      with:
+        repository: "OpenImageIO/oiio"
+        ref: "Release-2.5.11"
+        path: "oiio"
+        
+    - name: Compile OpenImageIO 2.5
       run: |
-        sudo git clone https://github.com/OpenImageIO/oiio.git
         cd oiio
-        git checkout Release-2.5.11
         mkdir build
         cd build
         cmake ..
-        make -j$(nproc)
+        make -j `nproc`
         sudo make install
         sudo ldconfig
 

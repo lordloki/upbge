@@ -56,7 +56,7 @@ jobs:
     - name: Install Python Dependencies
       run: | 
         curl https://bootstrap.pypa.io/get-pip.py | python && \
-        python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard
+        python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
 
     - name: Setup Python Path
       run: |

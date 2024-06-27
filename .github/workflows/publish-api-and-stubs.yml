@@ -21,9 +21,9 @@ jobs:
     steps:
     - name: Setup APT
       run: |
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/02noble.list \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02noble.list \
           -o /etc/apt/sources.list.d/02noble.list && \
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/02ubuntu \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02ubuntu \
           -o /etc/apt/apt.conf.d/02ubuntu
     # We downgrade libgbm1 & libglapi-mesa to fix libegl-mesa0 installation
     - name: Install Tools
@@ -55,7 +55,7 @@ jobs:
     - name: Checkout sources
       uses: actions/checkout@v3
       with:
-        repository: "UPBGE/upbge"
+        repository: "lordloki/upbge"
         ref: "master"
         path: "upbge"
 
@@ -128,9 +128,9 @@ jobs:
 
     - name: Setup APT
       run: |
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/02noble.list \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02noble.list \
           -o /etc/apt/sources.list.d/02noble.list && \
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/02ubuntu \
+        sudo curl https://raw.githubusercontent.com/lordloki/upbge/master/.github/workflows/02ubuntu \
           -o /etc/apt/apt.conf.d/02ubuntu
 
     - name: Install Tools
@@ -158,7 +158,7 @@ jobs:
     - name: Checkout sources
       uses: actions/checkout@v3
       with:
-        repository: "UPBGE/upbge"
+        repository: "lordloki/upbge"
         ref: "master"
         path: "upbge"
 

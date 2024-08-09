@@ -92,6 +92,7 @@ jobs:
                  -C upbge/build_files/cmake/config/blender_release.cmake \
                  -DWITH_GAMEENGINE=ON \
                  -DWITH_PLAYER=OFF \
+                 -DWITH_SDL=OFF \
                  -DCMAKE_BUILD_TYPE=Release \
                  -DWITH_INSTALL_PORTABLE=ON \
                  -DWITH_MOD_OCEANSIM=OFF \

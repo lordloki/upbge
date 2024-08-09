@@ -93,6 +93,7 @@ jobs:
                  -DWITH_GAMEENGINE=ON \
                  -DWITH_PLAYER=OFF \
                  -DWITH_SDL=OFF \
+                 -DWITH_SDL_DYNLOAD=OFF \
                  -DCMAKE_BUILD_TYPE=Release \
                  -DWITH_INSTALL_PORTABLE=ON \
                  -DWITH_MOD_OCEANSIM=OFF \

@@ -206,6 +206,10 @@ enum eDebugMode : uint32_t {
    * Show evaluation cost of each pixel.
    */
   DEBUG_GBUFFER_EVALUATION = 15u,
+  /**
+   * Color different buffers of the depth of field.
+   */
+  DEBUG_DOF_PLANES = 16u,
 };
 
 /** \} */
@@ -391,7 +395,7 @@ struct FilmData {
   int2 render_extent;
   /**
    * Sub-pixel offset applied to the window matrix.
-   * NOTE: In final film pixel unit.
+   * NOTE: In render target pixel unit.
    * NOTE: Positive values makes the view translate in the negative axes direction.
    * NOTE: The origin is the center of the lower left film pixel of the area covered by a render
    * pixel if using scaled resolution rendering.
@@ -1352,6 +1356,12 @@ struct ShadowRenderView {
   bool32_t is_directional;
   /** If directional, distance along the negative Z axis of the near clip in view space. */
   float clip_near;
+  /** Copy of `ShadowTileMapData.tiles_index`. */
+  int tilemap_tiles_index;
+  /** The level of detail of the tilemap this view is rendering. */
+  int tilemap_lod;
+  /** Updated region of the tilemap. */
+  int2 rect_min;
 };
 BLI_STATIC_ASSERT_ALIGN(ShadowRenderView, 16)
 
@@ -1981,12 +1991,14 @@ struct SubsurfaceData {
   /** xy: 2D sample position [-1..1], zw: sample_bounds. */
   /* NOTE(fclem) Using float4 for alignment. */
   float4 samples[SSS_SAMPLE_MAX];
-  /** Sample index after which samples are not randomly rotated anymore. */
-  int jitter_threshold;
   /** Number of samples precomputed in the set. */
   int sample_len;
-  int _pad0;
+  /** WORKAROUND: To avoid invalid integral for components that have very small radius, we clamp
+   * the minimal radius. This add bias to the SSS effect but this is the simplest workaround I
+   * could find to ship this without visible artifact. */
+  float min_radius;
   int _pad1;
+  int _pad2;
 };
 BLI_STATIC_ASSERT_ALIGN(SubsurfaceData, 16)
 

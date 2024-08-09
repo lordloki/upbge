@@ -679,7 +679,10 @@ static Drawing legacy_gpencil_frame_to_grease_pencil_drawing(const bGPDframe &gp
   int num_points = 0;
   bool has_bezier_stroke = false;
   LISTBASE_FOREACH (bGPDstroke *, gps, &gpf.strokes) {
-    if (gps->editcurve != nullptr) {
+    /* Check for a valid edit curve. This is only the case when the `editcurve` exists and wasn't
+     * tagged for a stroke update. This tag indicates that the stroke points have changed,
+     * invalidating the edit curve. */
+    if (gps->editcurve != nullptr && (gps->editcurve->flag & GP_CURVE_NEEDS_STROKE_UPDATE) == 0) {
       if (gps->editcurve->tot_curve_points == 0) {
         continue;
       }
@@ -766,7 +769,6 @@ static Drawing legacy_gpencil_frame_to_grease_pencil_drawing(const bGPDframe &gp
   /* Curve Attributes. */
   SpanAttributeWriter<bool> stroke_cyclic = attributes.lookup_or_add_for_write_span<bool>(
       "cyclic", AttrDomain::Curve);
-  /* TODO: This should be a `double` attribute. */
   SpanAttributeWriter<float> stroke_init_times = attributes.lookup_or_add_for_write_span<float>(
       "init_time", AttrDomain::Curve);
   SpanAttributeWriter<int8_t> stroke_start_caps = attributes.lookup_or_add_for_write_span<int8_t>(
@@ -795,8 +797,8 @@ static Drawing legacy_gpencil_frame_to_grease_pencil_drawing(const bGPDframe &gp
     }
 
     stroke_cyclic.span[stroke_i] = (gps->flag & GP_STROKE_CYCLIC) != 0;
-    /* TODO: This should be a `double` attribute. */
-    stroke_init_times.span[stroke_i] = float(gps->inittime);
+    /* Truncating time in ms to uint32 then we don't lose precision in lower bits. */
+    stroke_init_times.span[stroke_i] = float(uint32_t(gps->inittime * double(1e3))) / float(1e3);
     stroke_start_caps.span[stroke_i] = int8_t(gps->caps[0]);
     stroke_end_caps.span[stroke_i] = int8_t(gps->caps[1]);
     stroke_softness.span[stroke_i] = 1.0f - gps->hardness;
@@ -902,7 +904,7 @@ static void legacy_gpencil_to_grease_pencil(ConversionData &conversion_data,
 {
   using namespace blender::bke::greasepencil;
 
-  if (gpd.flag & LIB_FAKEUSER) {
+  if (gpd.flag & ID_FLAG_FAKEUSER) {
     id_fake_user_set(&grease_pencil.id);
   }
 
@@ -1048,7 +1050,7 @@ static bNodeTree *offset_radius_node_tree_add(ConversionData &conversion_data, L
       &conversion_data.bmain, library, OFFSET_RADIUS_NODETREE_NAME, "GeometryNodeTree");
 
   if (!group->geometry_node_asset_traits) {
-    group->geometry_node_asset_traits = MEM_new<GeometryNodeAssetTraits>(__func__);
+    group->geometry_node_asset_traits = MEM_cnew<GeometryNodeAssetTraits>(__func__);
   }
   group->geometry_node_asset_traits->flag |= GEO_NODE_ASSET_MODIFIER;
 
@@ -2495,9 +2497,9 @@ static void legacy_object_modifier_weight_proximity(ConversionData &conversion_d
                                    false);
 }
 
-static void legacy_object_modifier_weight_lineart(ConversionData &conversion_data,
-                                                  Object &object,
-                                                  GpencilModifierData &legacy_md)
+static void legacy_object_modifier_lineart(ConversionData &conversion_data,
+                                           Object &object,
+                                           GpencilModifierData &legacy_md)
 {
   ModifierData &md = legacy_object_modifier_common(
       conversion_data, object, eModifierType_GreasePencilLineart, legacy_md);
@@ -2726,7 +2728,7 @@ static void legacy_object_modifiers(ConversionData &conversion_data, Object &obj
         legacy_object_modifier_weight_proximity(conversion_data, object, *gpd_md);
         break;
       case eGpencilModifierType_Lineart:
-        legacy_object_modifier_weight_lineart(conversion_data, object, *gpd_md);
+        legacy_object_modifier_lineart(conversion_data, object, *gpd_md);
         break;
       case eGpencilModifierType_Build:
         legacy_object_modifier_build(conversion_data, object, *gpd_md);
@@ -2998,6 +3000,7 @@ void lineart_wrap_v3(const LineartGpencilModifierData *lmd_legacy,
   lmd->source_object = lmd_legacy->source_object;
   lmd->source_collection = lmd_legacy->source_collection;
   lmd->target_material = lmd_legacy->target_material;
+  STRNCPY(lmd->target_layer, lmd_legacy->target_layer);
   STRNCPY(lmd->source_vertex_group, lmd_legacy->source_vertex_group);
   STRNCPY(lmd->vgname, lmd_legacy->vgname);
   lmd->overscan = lmd_legacy->overscan;
@@ -3006,7 +3009,7 @@ void lineart_wrap_v3(const LineartGpencilModifierData *lmd_legacy,
   lmd->shadow_camera_near = lmd_legacy->shadow_camera_near;
   lmd->shadow_camera_far = lmd_legacy->shadow_camera_far;
   lmd->opacity = lmd_legacy->opacity;
-  lmd->thickness = lmd_legacy->thickness / 2;
+  lmd->thickness = lmd_legacy->thickness;
   lmd->mask_switches = lmd_legacy->mask_switches;
   lmd->material_mask_bits = lmd_legacy->material_mask_bits;
   lmd->intersection_mask = lmd_legacy->intersection_mask;
@@ -3049,7 +3052,7 @@ void lineart_unwrap_v3(LineartGpencilModifierData *lmd_legacy,
   lmd_legacy->shadow_camera_near = lmd->shadow_camera_near;
   lmd_legacy->shadow_camera_far = lmd->shadow_camera_far;
   lmd_legacy->opacity = lmd->opacity;
-  lmd_legacy->thickness = lmd->thickness * 2;
+  lmd_legacy->thickness = lmd->thickness;
   lmd_legacy->mask_switches = lmd->mask_switches;
   lmd_legacy->material_mask_bits = lmd->material_mask_bits;
   lmd_legacy->intersection_mask = lmd->intersection_mask;

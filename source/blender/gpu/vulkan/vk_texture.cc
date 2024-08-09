@@ -13,6 +13,7 @@
 #include "vk_data_conversion.hh"
 #include "vk_framebuffer.hh"
 #include "vk_memory.hh"
+#include "vk_pixel_buffer.hh"
 #include "vk_shader.hh"
 #include "vk_shader_interface.hh"
 #include "vk_state_manager.hh"
@@ -88,15 +89,16 @@ void VKTexture::generate_mipmap()
 void VKTexture::copy_to(VKTexture &dst_texture, VkImageAspectFlags vk_image_aspect)
 {
   render_graph::VKCopyImageNode::CreateInfo copy_image = {};
-  copy_image.src_image = vk_image_handle();
-  copy_image.dst_image = dst_texture.vk_image_handle();
-  copy_image.region.srcSubresource.aspectMask = vk_image_aspect;
-  copy_image.region.srcSubresource.mipLevel = 0;
-  copy_image.region.srcSubresource.layerCount = vk_layer_count(1);
-  copy_image.region.dstSubresource.aspectMask = vk_image_aspect;
-  copy_image.region.dstSubresource.mipLevel = 0;
-  copy_image.region.dstSubresource.layerCount = vk_layer_count(1);
-  copy_image.region.extent = vk_extent_3d(0);
+  copy_image.node_data.src_image = vk_image_handle();
+  copy_image.node_data.dst_image = dst_texture.vk_image_handle();
+  copy_image.node_data.region.srcSubresource.aspectMask = vk_image_aspect;
+  copy_image.node_data.region.srcSubresource.mipLevel = 0;
+  copy_image.node_data.region.srcSubresource.layerCount = vk_layer_count(1);
+  copy_image.node_data.region.dstSubresource.aspectMask = vk_image_aspect;
+  copy_image.node_data.region.dstSubresource.mipLevel = 0;
+  copy_image.node_data.region.dstSubresource.layerCount = vk_layer_count(1);
+  copy_image.node_data.region.extent = vk_extent_3d(0);
+  copy_image.vk_image_aspect = to_vk_image_aspect_flag_bits(device_format_get());
 
   VKContext &context = *VKContext::get();
   context.render_graph.add_node(copy_image);
@@ -311,13 +313,13 @@ void VKTexture::update_sub(
   context.render_graph.add_node(copy_buffer_to_image);
 }
 
-void VKTexture::update_sub(int /*offset*/[3],
-                           int /*extent*/[3],
-                           eGPUDataFormat /*format*/,
-                           GPUPixelBuffer * /*pixbuf*/)
+void VKTexture::update_sub(int offset_[3],
+                           int extent_[3],
+                           eGPUDataFormat format,
+                           GPUPixelBuffer *pixbuf)
 {
-  BLI_assert(!is_texture_view());
-  NOT_YET_IMPLEMENTED;
+  VKPixelBuffer &pixel_buffer = *unwrap(unwrap(pixbuf));
+  update_sub(0, offset_, extent_, format, pixel_buffer.map());
 }
 
 /* TODO(fclem): Legacy. Should be removed at some point. */
@@ -356,26 +358,9 @@ bool VKTexture::init_internal()
 
 bool VKTexture::init_internal(VertBuf *vbo)
 {
+  BLI_assert(source_buffer_ == nullptr);
   device_format_ = format_;
-  if (!allocate()) {
-    return false;
-  }
-  VKVertexBuffer *vertex_buffer = unwrap(vbo);
-
-  render_graph::VKCopyBufferToImageNode::CreateInfo copy_buffer_to_image = {};
-  copy_buffer_to_image.src_buffer = vertex_buffer->vk_handle();
-  copy_buffer_to_image.dst_image = vk_image_handle();
-  copy_buffer_to_image.region.imageExtent.width = w_;
-  copy_buffer_to_image.region.imageExtent.height = 1;
-  copy_buffer_to_image.region.imageExtent.depth = 1;
-  copy_buffer_to_image.region.imageSubresource.aspectMask = to_vk_image_aspect_single_bit(
-      to_vk_image_aspect_flag_bits(device_format_), false);
-  copy_buffer_to_image.region.imageSubresource.mipLevel = 0;
-  copy_buffer_to_image.region.imageSubresource.layerCount = 1;
-
-  VKContext &context = *VKContext::get();
-  context.render_graph.add_node(copy_buffer_to_image);
-
+  source_buffer_ = unwrap(vbo);
   return true;
 }
 
@@ -514,8 +499,11 @@ bool VKTexture::allocate()
   }
   debug::object_label(vk_image_, name_);
 
-  device.resources.add_image(
-      vk_image_, VK_IMAGE_LAYOUT_UNDEFINED, render_graph::ResourceOwner::APPLICATION);
+  device.resources.add_image(vk_image_,
+                             image_info.arrayLayers,
+                             VK_IMAGE_LAYOUT_UNDEFINED,
+                             render_graph::ResourceOwner::APPLICATION,
+                             name_);
 
   return result == VK_SUCCESS;
 }
@@ -525,6 +513,13 @@ void VKTexture::add_to_descriptor_set(AddToDescriptorSetContext &data,
                                       shader::ShaderCreateInfo::Resource::BindType bind_type,
                                       const GPUSamplerState sampler_state)
 {
+  /* Forwarding the call to the source vertex buffer as in vulkan a texel buffer is a buffer(view)
+   * and not a texture. */
+  if (type_ == GPU_TEXTURE_BUFFER) {
+    source_buffer_->add_to_descriptor_set(data, binding, bind_type, sampler_state);
+    return;
+  }
+
   const std::optional<VKDescriptorSet::Location> location =
       data.shader_interface.descriptor_set_location(bind_type, binding);
   if (location) {
@@ -537,9 +532,17 @@ void VKTexture::add_to_descriptor_set(AddToDescriptorSetContext &data,
       const VKSampler &sampler = device.samplers().get(sampler_state);
       data.descriptor_set.bind(*this, *location, sampler, arrayed);
     }
+    uint32_t layer_base = 0;
+    uint32_t layer_count = VK_REMAINING_ARRAY_LAYERS;
+    if (arrayed == VKImageViewArrayed::ARRAYED && is_texture_view()) {
+      layer_base = layer_offset_;
+      layer_count = vk_layer_count(VK_REMAINING_ARRAY_LAYERS);
+    }
     data.resource_access_info.images.append({vk_image_handle(),
                                              data.shader_interface.access_mask(bind_type, binding),
-                                             to_vk_image_aspect_flag_bits(device_format_)});
+                                             to_vk_image_aspect_flag_bits(device_format_),
+                                             layer_base,
+                                             layer_count});
   }
 }
 
@@ -555,7 +558,7 @@ IndexRange VKTexture::mip_map_range() const
 IndexRange VKTexture::layer_range() const
 {
   if (is_texture_view()) {
-    return IndexRange(layer_offset_, 1);
+    return IndexRange(layer_offset_, layer_count());
   }
   else {
     return IndexRange(
@@ -566,7 +569,7 @@ IndexRange VKTexture::layer_range() const
 int VKTexture::vk_layer_count(int non_layered_value) const
 {
   if (is_texture_view()) {
-    return 1;
+    return layer_count();
   }
   return type_ == GPU_TEXTURE_CUBE   ? d_ :
          (type_ & GPU_TEXTURE_ARRAY) ? layer_count() :

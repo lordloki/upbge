@@ -5,11 +5,11 @@
 /** \file
  * \ingroup bke
  *
- * UV Islands for PBVH Pixel extraction. When primitives share an edge they belong to the same UV
- * Island.
+ * UV Islands for pbvh::Tree Pixel extraction. When primitives share an edge they belong to the
+ * same UV Island.
  *
- * \note Similar to `uvedit_islands.cc`, but optimized for PBVH painting without using BMesh for
- * performance reasons. Non-manifold meshes only (i.e. edges must have less than 3 faces).
+ * \note Similar to `uvedit_islands.cc`, but optimized for pbvh::Tree painting without using BMesh
+ * for performance reasons. Non-manifold meshes only (i.e. edges must have less than 3 faces).
  *
  * Polygons (face with more than 3 edges) are supported as they are split up to primitives.
  *
@@ -35,7 +35,6 @@
 
 namespace blender::bke::pbvh::uv_islands {
 
-struct MeshEdge;
 struct UVBorder;
 struct UVEdge;
 struct UVIslands;
@@ -43,11 +42,6 @@ struct UVIslandsMask;
 struct UVPrimitive;
 struct MeshData;
 struct UVVertex;
-
-struct MeshEdge {
-  int vert1;
-  int vert2;
-};
 
 class VertToEdgeMap {
   Array<Vector<int>> edges_of_vert_;
@@ -123,7 +117,7 @@ struct MeshData {
 
   VertToEdgeMap vert_to_edge_map;
 
-  Vector<MeshEdge> edges;
+  Vector<int2> edges;
   EdgeToPrimitiveMap edge_to_primitive_map;
 
   TriangleToEdgeMap primitive_to_edge_map;
@@ -167,7 +161,7 @@ struct UVEdge {
   UVVertex *get_other_uv_vertex(const int vertex_index);
   bool has_shared_edge(Span<float2> uv_map, const int loop_1, const int loop_2) const;
   bool has_shared_edge(const UVEdge &other) const;
-  bool has_same_vertices(const MeshEdge &edge) const;
+  bool has_same_vertices(const int2 &edge) const;
   bool is_border_edge() const;
 
  private:

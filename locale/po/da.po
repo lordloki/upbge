@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 4.2.0 Beta (b'37e2a27bdddc')\n"
+"Project-Id-Version: Blender 4.3.0 Alpha (b'e981389bddb1')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-06-24 08:56+0000\n"
+"POT-Creation-Date: 2024-08-05 09:10+0000\n"
 "PO-Revision-Date: 2024-05-23 14:56+0000\n"
 "Last-Translator: leif larsen <linuxdk1978@gmail.com>\n"
 "Language-Team: Danish <https://translate.blender.org/projects/blender-ui/ui/da/>\n"
@@ -53,6 +53,10 @@ msgstr "Liste over AOVs"
 
 msgid "Collection of AOVs"
 msgstr "Samling af AOVs"
+
+
+msgid "F-Curves"
+msgstr "F-curves"
 
 
 msgid "Action F-Curves"
@@ -239,6 +243,34 @@ msgid "Collection of action groups"
 msgstr "Samling af handlingsgrupper"
 
 
+msgid "Influence"
+msgstr "Indflydelse"
+
+
+msgid "Mix Mode"
+msgstr "Blandingstilstand"
+
+
+msgid "Replace"
+msgstr "Udskift"
+
+
+msgid "Add"
+msgstr "Tilføj"
+
+
+msgid "Subtract"
+msgstr "Fratrække"
+
+
+msgid "Multiply"
+msgstr "Gange"
+
+
+msgid "Strips"
+msgstr "stimmel"
+
+
 msgid "Action Pose Markers"
 msgstr "Handling poserings markøre"
 
@@ -261,6 +293,18 @@ msgstr "Aktiv poséringsmarkør indeks"
 
 msgid "Index of active pose marker"
 msgstr "Indeks for aktive poséringsmarkører"
+
+
+msgid "Active"
+msgstr "Aktiv"
+
+
+msgid "Show Expanded"
+msgstr "Vis udvidet"
+
+
+msgid "Keyframe"
+msgstr "Nøglebillede"
 
 
 msgid "Add-on"
@@ -491,10 +535,6 @@ msgid "Method used for combining Active Action's result with result of NLA stack
 msgstr "Metode brugt til at kombinere Active Actions resultat med resultat af NLA stak"
 
 
-msgid "Replace"
-msgstr "Udskift"
-
-
 msgid "The strip values replace the accumulated results by amount specified by influence"
 msgstr "Stripværdierne erstatter de akkumulerede resultater med mængde specificeret ved indflydelse"
 
@@ -507,24 +547,12 @@ msgid "The strip values are combined with accumulated results by appropriately u
 msgstr "Stripværdierne kombineres med akkumulerede resultater ved passende at bruge addition, multiplikation eller quaternion matematik baseret på kanaltype"
 
 
-msgid "Add"
-msgstr "Tilføj"
-
-
 msgid "Weighted result of strip is added to the accumulated results"
 msgstr "Det vægtede resultat af strimlen føjes til de akkumulerede resultater"
 
 
-msgid "Subtract"
-msgstr "Fratrække"
-
-
 msgid "Weighted result of strip is removed from the accumulated results"
 msgstr "Det vægtede resultat af strimlen fjernes fra de akkumulerede resultater"
-
-
-msgid "Multiply"
-msgstr "Gange"
 
 
 msgid "Weighted result of strip is multiplied with the accumulated results"
@@ -801,10 +829,6 @@ msgstr "Vis stier til stillinger inden for det specificerede område"
 
 msgid "Bake to active Camera"
 msgstr "Bag til aktivt kamera"
-
-
-msgid "Motion path points will be baked into the camera space of the active camera. This means they will only look right when looking through that camera. Switching cameras using markers is not supported"
-msgstr "Bevægelsesstipunkter vil blive indbygget i kamerarummet på det aktive kamera. Det betyder, at de kun ser rigtigt ud, når de ser gennem det kamera. Skift kamera ved hjælp af markører er ikke understøttet"
 
 
 msgid "Any Type"
@@ -1111,10 +1135,6 @@ msgid "Catalog UUID"
 msgstr "Katalog UUID"
 
 
-msgid "Identifier for the asset's catalog, used by Blender to look up the asset's catalog path. Must be a UUID according to RFC4122"
-msgstr "Identifikator for aktivets katalog, brugt af Blender til at slå aktivets katalogsti op. Skal være et UUID i henhold til RFC4122"
-
-
 msgid "Catalog Simple Name"
 msgstr "Katalog enkelt navn"
 
@@ -1127,10 +1147,6 @@ msgid "Copyright"
 msgstr "ophavsret"
 
 
-msgid "Copyright notice for this asset. An empty copyright notice does not necessarily indicate that this is copyright-free. Contact the author if any clarification is needed"
-msgstr "Ophavsretsmeddelelse for dette aktiv. En tom ophavsretsmeddelelse betyder ikke nødvendigvis, at dette er ophavsretsfrit. Kontakt forfatteren, hvis der er behov for nogen afklaring"
-
-
 msgid "Description"
 msgstr "Beskrivelse"
 
@@ -1141,10 +1157,6 @@ msgstr "En beskrivelse af det aktiv, der skal vises for brugeren"
 
 msgid "License"
 msgstr "Licens"
-
-
-msgid "The type of license this asset is distributed under. An empty license name does not necessarily indicate that this is free of licensing terms. Contact the author if any clarification is needed"
-msgstr "Den type licens, som dette aktiv er distribueret under. Et tomt licensnavn betyder ikke nødvendigvis, at dette er fri for licensvilkår. Kontakt forfatteren, hvis der er behov for en afklaring"
 
 
 msgid "Tags"
@@ -1394,10 +1406,6 @@ msgid "No Asset Dragging"
 msgstr "Ingen aktiv træk"
 
 
-msgid "Disable the default asset dragging on drag events. Useful for implementing custom dragging via custom key-map items"
-msgstr "Deaktiver standardaktivets træk ved trækhændelser. Nyttigt til at implementere tilpasset træk via brugerdefinerede nøglekortelementer"
-
-
 msgid "Visible by Default"
 msgstr "Synlig som standard"
 
@@ -1440,10 +1448,6 @@ msgstr "Filtrer aktiver efter navn"
 
 msgid "Show Names"
 msgstr "Vis Navne"
-
-
-msgid "Show the asset name together with the preview. Otherwise only the preview will be visible"
-msgstr "Vis aktivnavnet sammen med forhåndsvisningen. Ellers vil kun forhåndsvisningen være synlig"
 
 
 msgid "Asset Tag"
@@ -1670,6 +1674,14 @@ msgid "Active attribute"
 msgstr "Arktive atributer"
 
 
+msgid "Active Attribute Index"
+msgstr "Aktivt attributindeks"
+
+
+msgid "Active attribute index"
+msgstr "Aktivt attributindeks"
+
+
 msgid "Active Color"
 msgstr "Aktiv farve"
 
@@ -1694,14 +1706,6 @@ msgid "The name of the active color attribute for display and editing"
 msgstr "Navnet på den aktive farveattribut til visning og redigering"
 
 
-msgid "Active Attribute Index"
-msgstr "Aktivt attributindeks"
-
-
-msgid "Active attribute index"
-msgstr "Aktivt attributindeks"
-
-
 msgid "Default Color Attribute"
 msgstr "Standardfarveattribut"
 
@@ -1724,10 +1728,6 @@ msgstr "Bag data til en Scene-datablok"
 
 msgid "Cage Extrusion"
 msgstr "Bur ekstrudering"
-
-
-msgid "Inflate the active object by the specified distance for baking. This helps matching to points nearer to the outside of the selected object meshes"
-msgstr "Pust den aktive genstand op med den angivne afstand til bagning. Dette hjælper med at matche til punkter tættere på ydersiden af de valgte objektmasker"
 
 
 msgid "Cage Object"
@@ -1772,10 +1772,6 @@ msgstr "Forlæng"
 
 msgid "Extend border pixels outwards"
 msgstr "Forlæng kantpixel udad"
-
-
-msgid "The maximum ray distance for matching points between the active and selected objects. If zero, there is no limit"
-msgstr "Den maksimale stråleafstand for at matche punkter mellem de aktive og valgte objekter. Hvis nul, er der ingen grænse"
 
 
 msgid "Normal Space"
@@ -2034,10 +2030,6 @@ msgid "Mode"
 msgstr "tilstand"
 
 
-msgid "Active"
-msgstr "Aktiv"
-
-
 msgid "Material"
 msgstr "Materiale"
 
@@ -2048,10 +2040,6 @@ msgstr "Retning"
 
 msgid "Threshold"
 msgstr "Tærskel"
-
-
-msgid "Blur"
-msgstr "Sløring"
 
 
 msgid "Object Path"
@@ -2158,10 +2146,6 @@ msgid "Show this image as background"
 msgstr "Vis dette billede som baggrund"
 
 
-msgid "Show Expanded"
-msgstr "Vis udvidet"
-
-
 msgid "Show On Foreground"
 msgstr "Vis på forgrunden"
 
@@ -2246,8 +2230,8 @@ msgid "Look"
 msgstr "udseende"
 
 
-msgid "Influence"
-msgstr "Indflydelse"
+msgid "Temperature"
+msgstr "Temperatur"
 
 
 msgid "Disable"
@@ -2296,10 +2280,6 @@ msgstr "Låst spor"
 
 msgid "Armature"
 msgstr "Armatur"
-
-
-msgid "Mix Mode"
-msgstr "Blandingstilstand"
 
 
 msgid "Target object"
@@ -2403,20 +2383,8 @@ msgid "Visibility"
 msgstr "Synlighed"
 
 
-msgid "Keyframe"
-msgstr "Nøglebillede"
-
-
 msgid "Blend Mode"
 msgstr "Blandings måde"
-
-
-msgid "Camera Object"
-msgstr "Kamera objekt"
-
-
-msgid "Target Object"
-msgstr "Mål objekt"
 
 
 msgid "Ping Pong"
@@ -2439,16 +2407,16 @@ msgid "Text"
 msgstr "Tekst"
 
 
-msgid "F-Curves"
-msgstr "F-curves"
-
-
 msgid "B-Bone"
 msgstr "B-Knogle"
 
 
 msgid "Local"
 msgstr "Lokal"
+
+
+msgid "Blur"
+msgstr "Sløring"
 
 
 msgid "Occlusion"
@@ -2574,6 +2542,14 @@ msgstr "Fil"
 
 msgid "New"
 msgstr "ny"
+
+
+msgid "Camera Object"
+msgstr "Kamera objekt"
+
+
+msgid "Target Object"
+msgstr "Mål objekt"
 
 
 msgid "Play Mode"
@@ -2720,12 +2696,24 @@ msgid "Limit"
 msgstr "Grænse"
 
 
+msgid "Inflate the active object by the specified distance for baking. This helps matching to points nearer to the outside of the selected object meshes"
+msgstr "Pust den aktive genstand op med den angivne afstand til bagning. Dette hjælper med at matche til punkter tættere på ydersiden af de valgte objektmasker"
+
+
+msgid "The maximum ray distance for matching points between the active and selected objects. If zero, there is no limit"
+msgstr "Den maksimale stråleafstand for at matche punkter mellem de aktive og valgte objekter. Hvis nul, er der ingen grænse"
+
+
 msgid "Child"
 msgstr "Barn"
 
 
 msgid "Reset"
 msgstr "Nulstil"
+
+
+msgid "Property Name"
+msgstr "Egenskabens navn"
 
 
 msgid "Property"
@@ -2740,20 +2728,12 @@ msgid "State"
 msgstr "Tilstand"
 
 
-msgid "Property Name"
-msgstr "Egenskabens navn"
-
-
 msgid "Sensitivity"
 msgstr "Følsomhed"
 
 
 msgid "Dynamics"
 msgstr "dynamik"
-
-
-msgid "Strips"
-msgstr "stimmel"
 
 
 msgid "Timeline"
@@ -2786,10 +2766,6 @@ msgstr "Forældere beregningstyrper"
 
 msgid "Password"
 msgstr "Kodeord"
-
-
-msgid "Temperature"
-msgstr "Temperatur"
 
 
 msgid "Gray Scale"
@@ -2866,6 +2842,14 @@ msgstr "Tiden er gået"
 
 msgid "Sharpen"
 msgstr "Skarpere"
+
+
+msgid "ON"
+msgstr "Til"
+
+
+msgid "OFF"
+msgstr "Fra"
 
 
 msgid "Keyframe not in F-Curve"
@@ -2970,14 +2954,6 @@ msgstr "W3"
 
 msgid "W4"
 msgstr "W4"
-
-
-msgid "ON"
-msgstr "Til"
-
-
-msgid "OFF"
-msgstr "Fra"
 
 
 msgid "unsupported format"

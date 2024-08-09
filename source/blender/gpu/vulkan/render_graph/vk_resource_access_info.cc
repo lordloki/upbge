@@ -42,18 +42,6 @@ VkImageLayout VKImageAccess::to_vk_image_layout() const
   return VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
-/** Which access flags are considered for read access. */
-static constexpr VkAccessFlags VK_ACCESS_READ_MASK = VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
-                                                     VK_ACCESS_INDEX_READ_BIT |
-                                                     VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
-                                                     VK_ACCESS_UNIFORM_READ_BIT |
-                                                     VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
-                                                     VK_ACCESS_SHADER_READ_BIT |
-                                                     VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                                     VK_ACCESS_TRANSFER_READ_BIT |
-                                                     VK_ACCESS_HOST_READ_BIT;
-
 /** Which access flags are considered for write access. */
 static constexpr VkAccessFlags VK_ACCESS_WRITE_MASK =
     VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
@@ -64,35 +52,43 @@ void VKResourceAccessInfo::build_links(VKResourceStateTracker &resources,
                                        VKRenderGraphNodeLinks &node_links) const
 {
   for (const VKBufferAccess &buffer_access : buffers) {
-    VkAccessFlags read_access = buffer_access.vk_access_flags & VK_ACCESS_READ_MASK;
-    if (read_access != VK_ACCESS_NONE) {
-      ResourceWithStamp versioned_resource = resources.get_buffer(buffer_access.vk_buffer);
-      node_links.inputs.append({versioned_resource, read_access, VK_IMAGE_LAYOUT_UNDEFINED});
+    const bool writes_to_resource = bool(buffer_access.vk_access_flags & VK_ACCESS_WRITE_MASK);
+    ResourceWithStamp versioned_resource = writes_to_resource ?
+                                               resources.get_buffer_and_increase_stamp(
+                                                   buffer_access.vk_buffer) :
+                                               resources.get_buffer(buffer_access.vk_buffer);
+    if (writes_to_resource) {
+      node_links.outputs.append(
+          {versioned_resource, buffer_access.vk_access_flags, VK_IMAGE_LAYOUT_UNDEFINED});
     }
-
-    VkAccessFlags write_access = buffer_access.vk_access_flags & VK_ACCESS_WRITE_MASK;
-    if (write_access != VK_ACCESS_NONE) {
-      ResourceWithStamp versioned_resource = resources.get_buffer_and_increase_version(
-          buffer_access.vk_buffer);
-      node_links.outputs.append({versioned_resource, write_access, VK_IMAGE_LAYOUT_UNDEFINED});
+    else {
+      node_links.inputs.append(
+          {versioned_resource, buffer_access.vk_access_flags, VK_IMAGE_LAYOUT_UNDEFINED});
     }
   }
 
   for (const VKImageAccess &image_access : images) {
     VkImageLayout image_layout = image_access.to_vk_image_layout();
-    VkAccessFlags read_access = image_access.vk_access_flags & VK_ACCESS_READ_MASK;
-    if (read_access != VK_ACCESS_NONE) {
-      ResourceWithStamp versioned_resource = resources.get_image(image_access.vk_image);
-      node_links.inputs.append(
-          {versioned_resource, read_access, image_layout, image_access.vk_image_aspect});
+    const bool writes_to_resource = bool(image_access.vk_access_flags & VK_ACCESS_WRITE_MASK);
+    ResourceWithStamp versioned_resource = writes_to_resource ?
+                                               resources.get_image_and_increase_stamp(
+                                                   image_access.vk_image) :
+                                               resources.get_image(image_access.vk_image);
+    if (writes_to_resource) {
+      node_links.outputs.append({versioned_resource,
+                                 image_access.vk_access_flags,
+                                 image_layout,
+                                 image_access.vk_image_aspect,
+                                 image_access.layer_base,
+                                 image_access.layer_count});
     }
-
-    VkAccessFlags write_access = image_access.vk_access_flags & VK_ACCESS_WRITE_MASK;
-    if (write_access != VK_ACCESS_NONE) {
-      ResourceWithStamp versioned_resource = resources.get_image_and_increase_stamp(
-          image_access.vk_image);
-      node_links.outputs.append(
-          {versioned_resource, write_access, image_layout, image_access.vk_image_aspect});
+    else {
+      node_links.inputs.append({versioned_resource,
+                                image_access.vk_access_flags,
+                                image_layout,
+                                image_access.vk_image_aspect,
+                                image_access.layer_base,
+                                image_access.layer_count});
     }
   }
 }

@@ -51,11 +51,11 @@ struct VKGraphicsInfo {
 
     bool operator==(const VertexIn &other) const
     {
-      // TODO: use an exact implementation and remove the hash compare.
-      /*
+      /* TODO: use an exact implementation and remove the hash compare. */
+#if 0
       return vk_topology == other.vk_topology && attributes.hash() == other.attributes.hash() &&
              bindings.hash() == other.bindings.hash();
-      */
+#endif
       return hash() == other.hash();
     }
 
@@ -97,13 +97,29 @@ struct VKGraphicsInfo {
     VkShaderModule vk_fragment_module;
     Vector<VkViewport> viewports;
     Vector<VkRect2D> scissors;
+    std::optional<uint64_t> cached_hash;
 
     bool operator==(const FragmentShader &other) const
     {
       // TODO: Do not use hash.
       return vk_fragment_module == other.vk_fragment_module && hash() == other.hash();
     }
+
     uint64_t hash() const
+    {
+      if (cached_hash.has_value()) {
+        return *cached_hash;
+      }
+      return calc_hash();
+    }
+
+    void update_hash()
+    {
+      cached_hash = calc_hash();
+    }
+
+   private:
+    uint64_t calc_hash() const
     {
       uint64_t hash = 0;
       hash = hash * 33 ^ uint64_t(vk_fragment_module);
@@ -230,6 +246,8 @@ class VKDevice;
  * lacking.
  */
 class VKPipelinePool : public NonCopyable {
+  friend class VKDevice;
+
  public:
  private:
   Map<VKComputeInfo, VkPipeline> compute_pipelines_;

@@ -27,8 +27,9 @@
 #include "BKE_material.h"
 #include "BKE_multires.hh"
 #include "BKE_object.hh"
-#include "BKE_packedFile.h"
+#include "BKE_packedFile.hh"
 #include "BKE_paint.hh"
+#include "BKE_scene.hh"
 #include "BKE_screen.hh"
 #include "BKE_undo_system.hh"
 
@@ -47,6 +48,7 @@
 #include "ED_sculpt.hh"
 #include "ED_space_api.hh"
 #include "ED_util.hh"
+#include "ED_view3d.hh"
 
 #include "GPU_immediate.hh"
 
@@ -70,6 +72,21 @@ void ED_editors_init_for_undo(Main *bmain)
     if (ob && (ob->mode & OB_MODE_TEXTURE_PAINT)) {
       BKE_texpaint_slots_refresh_object(scene, ob);
       ED_paint_proj_mesh_data_check(*scene, *ob, nullptr, nullptr, nullptr, nullptr);
+    }
+
+    /* UI Updates. */
+    /* Flag local View3D's to check and exit if they are empty. */
+    LISTBASE_FOREACH (bScreen *, screen, &bmain->screens) {
+      LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+        LISTBASE_FOREACH (SpaceLink *, sl, &area->spacedata) {
+          if (sl->spacetype == SPACE_VIEW3D) {
+            View3D *v3d = reinterpret_cast<View3D *>(sl);
+            if (v3d->localvd) {
+              v3d->localvd->runtime.flag |= V3D_RUNTIME_LOCAL_MAYBE_EMPTY;
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -117,6 +134,7 @@ void ED_editors_init(bContext *C)
       }
       else if (mode & OB_MODE_ALL_PAINT_GPENCIL) {
         ED_gpencil_toggle_brush_cursor(C, true, nullptr);
+        BKE_paint_ensure_from_paintmode(bmain, scene, BKE_paintmode_get_active_from_context(C));
       }
       continue;
     }
@@ -161,7 +179,8 @@ void ED_editors_init(bContext *C)
     else if (mode & OB_MODE_ALL_SCULPT) {
       if (obact == ob) {
         if (mode == OB_MODE_SCULPT) {
-          ED_object_sculptmode_enter_ex(*bmain, *depsgraph, *scene, *ob, true, reports);
+          blender::ed::sculpt_paint::object_sculpt_mode_enter(
+              *bmain, *depsgraph, *scene, *ob, true, reports);
         }
         else if (mode == OB_MODE_VERTEX_PAINT) {
           ED_object_vpaintmode_enter_ex(*bmain, *depsgraph, *scene, *ob);

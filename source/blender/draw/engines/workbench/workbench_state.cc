@@ -152,17 +152,6 @@ void SceneState::init(Object *camera_ob /*=nullptr*/)
     reset_taa = true;
   }
 
-  bool _overlays_enabled = v3d && !(v3d->flag2 & V3D_HIDE_OVERLAYS);
-  /* Depth is always required in Wireframe mode. */
-  _overlays_enabled = _overlays_enabled || shading.type < OB_SOLID;
-  /* Some overlay passes can be rendered even with overlays disabled (See #116403). */
-  _overlays_enabled = _overlays_enabled || new_clip_state & DRW_STATE_CLIP_PLANES;
-  if (assign_if_different(overlays_enabled, _overlays_enabled)) {
-    /* Reset TAA when enabling overlays, since we won't have valid sample0 depth textures.
-     * (See #113741) */
-    reset_taa = true;
-  }
-
   if (reset_taa || samples_len <= 1) {
     sample = 0;
   }
@@ -244,7 +233,8 @@ ObjectState::ObjectState(const SceneState &scene_state,
   }
 
   if (sculpt_pbvh) {
-    if (color_type == V3D_SHADING_TEXTURE_COLOR && BKE_pbvh_type(*ob->sculpt->pbvh) != PBVH_FACES)
+    if (color_type == V3D_SHADING_TEXTURE_COLOR &&
+        ob->sculpt->pbvh->type() != bke::pbvh::Type::Mesh)
     {
       /* Force use of material color for sculpt. */
       color_type = V3D_SHADING_MATERIAL_COLOR;

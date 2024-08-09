@@ -1,7 +1,7 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 4.2.0 Beta (b'37e2a27bdddc')\n"
+"Project-Id-Version: Blender 4.3.0 Alpha (b'e981389bddb1')\n"
 "Report-Msgid-Bugs-To: \n"
 "PO-Revision-Date: 2024-04-29 13:23+0000\n"
 "Last-Translator: Anonymous <noreply@weblate.org>\n"
@@ -103,10 +103,6 @@ msgid "Mode"
 msgstr "А́иҿкаашьа"
 
 
-msgid "Marker"
-msgstr "Ашьҭа"
-
-
 msgid "Image"
 msgstr "Асахьанҵа"
 
@@ -187,10 +183,6 @@ msgid "Window"
 msgstr "Аԥенџьыр"
 
 
-msgid "Edit Mode"
-msgstr "Аиҭакра Аиҿкаашьа"
-
-
 msgid "Lattice"
 msgstr "Аҭыџьеихац"
 
@@ -261,6 +253,10 @@ msgid "Object Mode"
 msgstr "Амаҭәар Аиҿкаашьа"
 
 
+msgid "Edit Mode"
+msgstr "Аиҭакра Аиҿкаашьа"
+
+
 msgid "Sculpt Mode"
 msgstr "Ашәаҳара Аиҿкаашьа"
 
@@ -284,6 +280,10 @@ msgstr "Аҭацәы"
 
 msgid "3D Cursor"
 msgstr "3Д Ахырхага"
+
+
+msgid "Marker"
+msgstr "Ашьҭа"
 
 
 msgid "Keying"

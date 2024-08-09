@@ -78,9 +78,8 @@ typedef enum eFModifier_Types {
   FMODIFIER_TYPE_ENVELOPE = 3,
   FMODIFIER_TYPE_CYCLES = 4,
   FMODIFIER_TYPE_NOISE = 5,
-  /** Unimplemented - for applying: FFT, high/low pass filters, etc. */
-  FMODIFIER_TYPE_FILTER = 6,
-  FMODIFIER_TYPE_PYTHON = 7,
+  FMODIFIER_TYPE_FILTER = 6, /* Was never implemented, removed in #123906. */
+  FMODIFIER_TYPE_PYTHON = 7, /* Was never implemented, removed in #123906. */
   FMODIFIER_TYPE_LIMITS = 8,
   FMODIFIER_TYPE_STEPPED = 9,
 
@@ -223,14 +222,6 @@ typedef enum eFMod_Cycling_Modes {
   FCM_EXTRAPOLATE_MIRROR,
 } eFMod_Cycling_Modes;
 
-/* Python-script modifier data */
-typedef struct FMod_Python {
-  /** Text buffer containing script to execute. */
-  struct Text *script;
-  /** ID-properties to provide 'custom' settings. */
-  IDProperty *prop;
-} FMod_Python;
-
 /* limits modifier data */
 typedef struct FMod_Limits {
   /** Rect defining the min/max values. */
@@ -297,7 +288,8 @@ typedef enum eFMod_Stepped_Flags {
 
 /* Drivers -------------------------------------- */
 
-/* Driver Target (dtar)
+/**
+ * Driver Target (`dtar`)
  *
  * Defines how to access a dependency needed for a driver variable.
  */
@@ -421,7 +413,7 @@ typedef enum eDriverTarget_ContextProperty {
 #define MAX_DRIVER_TARGETS 8
 
 /**
- * Driver Variable (dvar)
+ * Driver Variable (`dvar`)
  *
  * A 'variable' for use as an input for the driver evaluation.
  * Defines a way of accessing some channel to use, that can be
@@ -496,7 +488,7 @@ typedef enum eDriverVar_Flags {
   DVAR_FLAG_INVALID_EMPTY = (1 << 8),
 } eDriverVar_Flags;
 
-/* All invalid dvar name flags */
+/** All invalid `dvar` name flags. */
 #define DVAR_ALL_INVALID_FLAGS \
   (DVAR_FLAG_INVALID_NAME | DVAR_FLAG_INVALID_START_NUM | DVAR_FLAG_INVALID_START_CHAR | \
    DVAR_FLAG_INVALID_HAS_SPACE | DVAR_FLAG_INVALID_HAS_DOT | DVAR_FLAG_INVALID_HAS_SPECIAL | \
@@ -570,7 +562,8 @@ typedef enum eDriver_Flags {
   DRIVER_FLAG_RECOMPILE = (1 << 3),
   /** The names are cached so they don't need have python unicode versions created each time */
   DRIVER_FLAG_RENAMEVAR = (1 << 4),
-  // DRIVER_FLAG_UNUSED_5 = (1 << 5),
+  /* Set if the driver cannot run because it uses Python which isn't allowed to execute. */
+  DRIVER_FLAG_PYTHON_BLOCKED = (1 << 5),
   /** Include 'self' in the drivers namespace. */
   DRIVER_FLAG_USE_SELF = (1 << 6),
 } eDriver_Flags;
@@ -1113,25 +1106,29 @@ typedef struct AnimOverride {
 typedef struct AnimData {
   /**
    * Active action - acts as the 'tweaking track' for the NLA.
-   * Either use BKE_animdata_set_action() to set this, or call
+   *
+   * Legacy Actions: Either use BKE_animdata_set_action() to set this, or call
    * #BKE_animdata_action_ensure_idroot() after setting.
+   *
+   * Layered Actions: never set this directly, use one of the assignment
+   * functions in ANIM_action.hh instead.
    */
   bAction *action;
 
   /**
-   * Identifier for which ActionBinding of the above Animation is actually animating this
+   * Identifier for which ActionSlot of the above Animation is actually animating this
    * data-block.
    *
    * Do not set this directly, use one of the assignment functions in ANIM_action.hh instead.
    */
-  int32_t binding_handle;
+  int32_t slot_handle;
   /**
-   * Binding name, primarily used for mapping to the right binding when assigning
-   * another Animation data-block. Should be the same type as #ActionBinding::name.
+   * Slot name, primarily used for mapping to the right slot when assigning
+   * another Action. Should be the same type as #ActionSlot::name.
    *
-   * \see #ActionBinding::name
+   * \see #ActionSlot::name
    */
-  char binding_name[66]; /* MAX_ID_NAME */
+  char slot_name[66]; /* MAX_ID_NAME */
   uint8_t _pad0[2];
 
   /**
@@ -1182,8 +1179,8 @@ typedef struct AnimData {
 
 #ifdef __cplusplus
 /* Some static assertions that things that should have the same type actually do. */
-static_assert(std::is_same_v<decltype(ActionBinding::handle), decltype(AnimData::binding_handle)>);
-static_assert(std::is_same_v<decltype(ActionBinding::name), decltype(AnimData::binding_name)>);
+static_assert(std::is_same_v<decltype(ActionSlot::handle), decltype(AnimData::slot_handle)>);
+static_assert(std::is_same_v<decltype(ActionSlot::name), decltype(AnimData::slot_name)>);
 #endif
 
 /* Animation Data settings (mostly for NLA) */

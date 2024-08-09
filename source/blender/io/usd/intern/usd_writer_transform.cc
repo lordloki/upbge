@@ -37,7 +37,7 @@ pxr::UsdGeomXformable USDTransformWriter::create_xformable() const
     xform = pxr::UsdGeomXform::Define(usd_export_context_.stage, usd_export_context_.usd_path);
   }
 
-  return xform;
+  return pxr::UsdGeomXformable(xform.GetPrim());
 }
 
 bool USDTransformWriter::should_apply_root_xform(const HierarchyContext &context) const
@@ -98,8 +98,8 @@ void USDTransformWriter::do_write(HierarchyContext &context)
     mul_m4_m4m4(parent_relative_matrix, context.parent_matrix_inv_world, context.matrix_world);
   }
 
-  /* USD Xforms are by default set with an identity transform; only write if necessary. */
-  if (!compare_m4m4(parent_relative_matrix, UNIT_M4, 0.000000001f)) {
+  /* USD Xforms are by default the identity transform; only write if necessary when static. */
+  if (is_animated_ || !compare_m4m4(parent_relative_matrix, UNIT_M4, 0.000000001f)) {
     set_xform_ops(parent_relative_matrix, xform);
   }
 
@@ -123,7 +123,7 @@ bool USDTransformWriter::check_is_animated(const HierarchyContext &context) cons
   return BKE_object_moves_in_time(context.object, context.animation_check_include_parent);
 }
 
-void USDTransformWriter::set_xform_ops(float xf_matrix[4][4], pxr::UsdGeomXformable &xf)
+void USDTransformWriter::set_xform_ops(float xf_matrix[4][4], const pxr::UsdGeomXformable &xf)
 {
   if (!xf) {
     return;
@@ -131,7 +131,7 @@ void USDTransformWriter::set_xform_ops(float xf_matrix[4][4], pxr::UsdGeomXforma
 
   eUSDXformOpMode xfOpMode = usd_export_context_.export_params.xform_op_mode;
 
-  if (xformOps_.size() == 0) {
+  if (xformOps_.is_empty()) {
     switch (xfOpMode) {
       case USD_XFORM_OP_TRS:
         xformOps_.append(xf.AddTranslateOp());

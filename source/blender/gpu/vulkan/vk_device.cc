@@ -40,6 +40,14 @@ void VKDevice::deinit()
     return;
   }
 
+  {
+    std::scoped_lock mutex(resources.mutex);
+    for (render_graph::VKRenderGraph *render_graph : render_graphs_) {
+      delete render_graph;
+    }
+    render_graphs_.clear();
+  }
+
   dummy_buffer_.free();
   samplers_.free();
   destroy_discarded_resources();
@@ -342,6 +350,24 @@ std::string VKDevice::driver_version() const
 /** \name Resource management
  * \{ */
 
+render_graph::VKRenderGraph &VKDevice::render_graph()
+{
+  std::scoped_lock mutex(resources.mutex);
+  pthread_t current_thread_id = pthread_self();
+
+  for (render_graph::VKRenderGraph *render_graph : render_graphs_) {
+    if (pthread_equal(render_graph->thread_id, current_thread_id)) {
+      return *render_graph;
+    }
+  }
+
+  render_graph::VKRenderGraph *render_graph = new render_graph::VKRenderGraph(
+      std::make_unique<render_graph::VKCommandBufferWrapper>(), resources);
+  render_graph->thread_id = current_thread_id;
+  render_graphs_.append(render_graph);
+  return *render_graph;
+}
+
 void VKDevice::context_register(VKContext &context)
 {
   contexts_.append(std::reference_wrapper(context));
@@ -416,6 +442,28 @@ void VKDevice::memory_statistics_get(int *r_total_mem_kb, int *r_free_mem_kb) co
 
   *r_total_mem_kb = int(total_mem / 1024);
   *r_free_mem_kb = int((total_mem - used_mem) / 1024);
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Debugging/statistics
+ * \{ */
+
+void VKDevice::debug_print()
+{
+  std::ostream &os = std::cout;
+
+  os << "Pipelines\n";
+  os << " Graphics: " << pipelines.graphic_pipelines_.size() << "\n";
+  os << " Compute: " << pipelines.compute_pipelines_.size() << "\n";
+  os << "Descriptor sets\n";
+  os << " VkDescriptorSetLayouts: " << descriptor_set_layouts_.size() << "\n";
+  os << "Discarded resources\n";
+  os << " VkImageView: " << discarded_image_views_.size() << "\n";
+  os << " VkImage: " << discarded_images_.size() << "\n";
+  os << " VkBuffer: " << discarded_buffers_.size() << "\n";
+  os << "\n";
 }
 
 /** \} */

@@ -656,7 +656,7 @@ static void grease_pencil_primitive_update_view(bContext *C, PrimitiveToolOperat
 /* Invoke handler: Initialize the operator. */
 static int grease_pencil_primitive_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
-  int return_value = ed::greasepencil::grease_pencil_draw_operator_invoke(C, op);
+  int return_value = ed::greasepencil::grease_pencil_draw_operator_invoke(C, op, false);
   if (return_value != OPERATOR_RUNNING_MODAL) {
     return return_value;
   }
@@ -717,6 +717,9 @@ static int grease_pencil_primitive_invoke(bContext *C, wmOperator *op, const wmE
 
   Paint *paint = &vc.scene->toolsettings->gp_paint->paint;
   ptd.brush = BKE_paint_brush(paint);
+  if (ptd.brush->gpencil_settings == nullptr) {
+    BKE_brush_init_gpencil_settings(ptd.brush);
+  }
   ptd.settings = ptd.brush->gpencil_settings;
 
   BKE_curvemapping_init(ptd.settings->curve_sensitivity);

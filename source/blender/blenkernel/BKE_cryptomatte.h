@@ -25,7 +25,11 @@ struct Scene;
 struct CryptomatteSession *BKE_cryptomatte_init(void);
 struct CryptomatteSession *BKE_cryptomatte_init_from_render_result(
     const struct RenderResult *render_result);
-struct CryptomatteSession *BKE_cryptomatte_init_from_scene(const struct Scene *scene);
+/* Initializes a cryptomatte session from the view layers of the given scene. If build_meta_data is
+ * true, the object and material IDs in the view layer will be hashed and added to the Cryptomatte
+ * layers, allowing hash-name lookups. */
+struct CryptomatteSession *BKE_cryptomatte_init_from_scene(const struct Scene *scene,
+                                                           bool build_meta_data);
 struct CryptomatteSession *BKE_cryptomatte_init_from_view_layer(
     const struct ViewLayer *view_layer);
 void BKE_cryptomatte_free(struct CryptomatteSession *session);
@@ -55,8 +59,7 @@ void BKE_cryptomatte_matte_id_to_entries(struct NodeCryptomatte *node_storage,
                                          const char *matte_id);
 
 void BKE_cryptomatte_store_metadata(const struct CryptomatteSession *session,
-                                    struct RenderResult *render_result,
-                                    const ViewLayer *view_layer);
+                                    struct RenderResult *render_result);
 
 #ifdef __cplusplus
 }

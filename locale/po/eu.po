@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 4.2.0 Beta (b'37e2a27bdddc')\n"
+"Project-Id-Version: Blender 4.3.0 Alpha (b'e981389bddb1')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-06-24 08:56+0000\n"
+"POT-Creation-Date: 2024-08-05 09:10+0000\n"
 "PO-Revision-Date: 2024-04-29 13:54+0000\n"
 "Last-Translator: Anonymous <noreply@weblate.org>\n"
 "Language-Team: Basque <https://translate.blender.org/projects/blender-ui/ui/eu/>\n"
@@ -167,10 +167,6 @@ msgid "Expanded"
 msgstr "Hedatua"
 
 
-msgid "Action"
-msgstr "Akzioa"
-
-
 msgid "Replace"
 msgstr "Ordezkatu"
 
@@ -181,6 +177,14 @@ msgstr "Gehitu"
 
 msgid "Multiply"
 msgstr "Biderkatu"
+
+
+msgid "Active"
+msgstr "Aktibo"
+
+
+msgid "Action"
+msgstr "Akzioa"
 
 
 msgid "Heads"
@@ -295,10 +299,6 @@ msgid "Parent"
 msgstr "Gurasoa"
 
 
-msgid "Active"
-msgstr "Aktibo"
-
-
 msgid "Material"
 msgstr "Materiala"
 
@@ -321,6 +321,14 @@ msgstr "Kurba"
 
 msgid "Look"
 msgstr "Ikusi"
+
+
+msgid "Temperature"
+msgstr "Tenperatura"
+
+
+msgid "White Point"
+msgstr "Puntu Zuria"
 
 
 msgid "Disable"
@@ -411,10 +419,6 @@ msgid "Delete"
 msgstr "Ezabatu"
 
 
-msgid "UV"
-msgstr "UV"
-
-
 msgid "Onion Skinning"
 msgstr "Tipula-azapa"
 
@@ -429,20 +433,6 @@ msgstr "Leihoa"
 
 msgid "Tools"
 msgstr "Tresnak"
-
-
-msgid "Speed Factor"
-msgstr "Azelerazio-faktorea"
-
-
-msgctxt "Curve"
-msgid "Curve"
-msgstr "Kurba"
-
-
-msgctxt "Curve"
-msgid "Sphere"
-msgstr "Esfera"
 
 
 msgid "Sound"
@@ -574,12 +564,25 @@ msgid "Min Angle"
 msgstr "Angelu Minimoa"
 
 
+msgctxt "Curve"
+msgid "Sphere"
+msgstr "Esfera"
+
+
 msgid "Show/Hide"
 msgstr "Erakutsi/Ezkutatu"
 
 
+msgid "UV"
+msgstr "UV"
+
+
 msgid "Show/Hide Faces"
 msgstr "Aurpegiak erakutsi/ezkutatu"
+
+
+msgid "Import"
+msgstr "Inportatu"
 
 
 msgid "Physics"
@@ -598,10 +601,6 @@ msgid "External Data"
 msgstr "Kanpo "
 
 
-msgid "Import"
-msgstr "Inportatu"
-
-
 msgid "Help"
 msgstr "Laguntza"
 
@@ -612,6 +611,15 @@ msgstr "Loturak"
 
 msgid "New"
 msgstr "Berria"
+
+
+msgid "Speed Factor"
+msgstr "Azelerazio-faktorea"
+
+
+msgctxt "Curve"
+msgid "Curve"
+msgstr "Kurba"
 
 
 msgctxt "Curve"
@@ -1394,10 +1402,6 @@ msgid "Black Point"
 msgstr "Puntu Beltza"
 
 
-msgid "White Point"
-msgstr "Puntu Zuria"
-
-
 msgctxt "Operator"
 msgid "Invert Channels"
 msgstr "Kanalak alderantzikatu"
@@ -1499,6 +1503,11 @@ msgstr "Ezkutatu"
 msgctxt "Operator"
 msgid "Join"
 msgstr "Elkartu"
+
+
+msgctxt "Operator"
+msgid "New"
+msgstr "Berria"
 
 
 msgid "Child"
@@ -1729,10 +1738,6 @@ msgid "Language"
 msgstr "Hizkuntza"
 
 
-msgid "Temperature"
-msgstr "Tenperatura"
-
-
 msgctxt "Sequence"
 msgid "Image"
 msgstr "Irudia"
@@ -1856,11 +1861,6 @@ msgstr "Animazioa"
 msgctxt "Operator"
 msgid "Report a Bug"
 msgstr "Akats baten berri eman"
-
-
-msgctxt "Operator"
-msgid "New"
-msgstr "Berria"
 
 
 msgid "3D View"
@@ -2167,6 +2167,14 @@ msgid "Sphere"
 msgstr "Esfera"
 
 
+msgid "ON"
+msgstr "GAITUTA"
+
+
+msgid "OFF"
+msgstr "DESGAITUTA"
+
+
 msgid "normal"
 msgstr "Normala"
 
@@ -2333,14 +2341,6 @@ msgstr "'%s': ez da ezer adierazi"
 
 msgid "dbl-"
 msgstr "dbl-"
-
-
-msgid "ON"
-msgstr "GAITUTA"
-
-
-msgid "OFF"
-msgstr "DESGAITUTA"
 
 
 msgid "unsupported format"

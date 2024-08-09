@@ -279,7 +279,7 @@ static void do_version_layers_to_collections(Main *bmain, Scene *scene)
           Collection *collection = BKE_collection_add(bmain, collection_master, name);
           collection->id.lib = scene->id.lib;
           if (ID_IS_LINKED(collection)) {
-            collection->id.tag |= LIB_TAG_INDIRECT;
+            collection->id.tag |= ID_TAG_INDIRECT;
           }
           collections[layer] = collection;
 
@@ -2583,7 +2583,6 @@ void do_versions_after_linking_280(FileData *fd, Main *bmain)
         brush->gpencil_tool = brush->gpencil_settings->brush_type;
       }
     }
-    BKE_paint_toolslots_init_from_main(bmain);
   }
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 280, 38)) {
@@ -2862,13 +2861,9 @@ void do_versions_after_linking_280(FileData *fd, Main *bmain)
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 282, 2)) {
     /* Init all Vertex/Sculpt and Weight Paint brushes. */
-    Brush *brush;
     Material *ma;
     /* Pen Soft brush. */
-    brush = (Brush *)do_versions_rename_id(bmain, ID_BR, "Draw Soft", "Pencil Soft");
-    if (brush) {
-      brush->gpencil_settings->icon_id = GP_BRUSH_ICON_PEN;
-    }
+    do_versions_rename_id(bmain, ID_BR, "Draw Soft", "Pencil Soft");
     do_versions_rename_id(bmain, ID_BR, "Draw Pencil", "Pencil");
     do_versions_rename_id(bmain, ID_BR, "Draw Pen", "Pen");
     do_versions_rename_id(bmain, ID_BR, "Draw Ink", "Ink Pen");
@@ -2896,9 +2891,6 @@ void do_versions_after_linking_280(FileData *fd, Main *bmain)
       do_versions_rename_id(bmain, ID_MA, "Black Dots", "Dots Stroke");
     }
 
-    brush = static_cast<Brush *>(
-        BLI_findstring(&bmain->brushes, "Pencil", offsetof(ID, name) + 2));
-
     LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
       ToolSettings *ts = scene->toolsettings;
 
@@ -2908,13 +2900,9 @@ void do_versions_after_linking_280(FileData *fd, Main *bmain)
       BKE_paint_ensure_from_paintmode(bmain, scene, PaintMode::SculptGPencil);
       BKE_paint_ensure_from_paintmode(bmain, scene, PaintMode::WeightGPencil);
 
-      /* Set default Draw brush. */
-      if (brush != nullptr) {
-        Paint *paint = &ts->gp_paint->paint;
-        BKE_paint_brush_set(paint, brush);
-        /* Enable cursor by default. */
-        paint->flags |= PAINT_SHOW_BRUSH;
-      }
+      /* Enable cursor by default. */
+      Paint *paint = &ts->gp_paint->paint;
+      paint->flags |= PAINT_SHOW_BRUSH;
     }
   }
 
@@ -5446,7 +5434,7 @@ void blo_do_versions_280(FileData *fd, Library * /*lib*/, Main *bmain)
     FOREACH_MAIN_ID_BEGIN (bmain, id) {
       bNodeTree *ntree = blender::bke::ntreeFromID(id);
       if (ntree) {
-        ntree->id.flag |= LIB_EMBEDDED_DATA;
+        ntree->id.flag |= ID_FLAG_EMBEDDED_DATA;
       }
     }
     FOREACH_MAIN_ID_END;
@@ -5463,7 +5451,7 @@ void blo_do_versions_280(FileData *fd, Library * /*lib*/, Main *bmain)
       /* Older files do not have a master collection, which is then added through
        * `BKE_collection_master_add()`, so everything is fine. */
       if (scene->master_collection != nullptr) {
-        scene->master_collection->id.flag |= LIB_EMBEDDED_DATA;
+        scene->master_collection->id.flag |= ID_FLAG_EMBEDDED_DATA;
       }
     }
   }

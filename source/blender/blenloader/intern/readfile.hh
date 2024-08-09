@@ -43,16 +43,20 @@ enum eFileDataFlag {
   FD_FLAGS_POINTSIZE_DIFFERS = 1 << 2,
   FD_FLAGS_FILE_OK = 1 << 3,
   FD_FLAGS_IS_MEMFILE = 1 << 4,
-  /* XXX Unused in practice (checked once but never set). */
-  FD_FLAGS_NOT_MY_LIBMAP = 1 << 5,
 };
-ENUM_OPERATORS(eFileDataFlag, FD_FLAGS_NOT_MY_LIBMAP)
+ENUM_OPERATORS(eFileDataFlag, FD_FLAGS_IS_MEMFILE)
 
 /* Disallow since it's 32bit on ms-windows. */
 #ifdef __GNUC__
 #  pragma GCC poison off_t
 #endif
 
+/**
+ * General data used during a blend-file reading.
+ *
+ * Note that this data (and its accesses) are absolutely not thread-safe currently. It should never
+ * be accessed concurrently.
+ */
 struct FileData {
   /** Linked list of BHeadN's. */
   ListBase bhead_list;
@@ -138,6 +142,9 @@ struct FileData {
   IDNameLib_Map *new_idmap_uid;
 
   BlendFileReadReport *reports;
+
+  /** Opaque handle to the storage system used for non-static allocation strings. */
+  void *storage_handle;
 };
 
 #define SIZEOFBLENDERHEADER 12

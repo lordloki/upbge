@@ -42,9 +42,10 @@ struct NodeLinkData {
   float dim_factor;
   float thickness;
   float4 dash_params;
+  bool32_t has_back_link;
   float aspect;
   float arrowSize;
-  float2 _pad;
+  float _pad;
 };
 BLI_STATIC_ASSERT_ALIGN(NodeLinkData, 16)
 
@@ -108,6 +109,7 @@ enum eGPUSeqFlags : uint32_t {
   GPU_SEQ_FLAG_SELECTED_RH = (1u << 12u),
   GPU_SEQ_FLAG_DRAW_LH = (1u << 13u),
   GPU_SEQ_FLAG_DRAW_RH = (1u << 14u),
+  GPU_SEQ_FLAG_OVERLAP = (1u << 15u),
 
   GPU_SEQ_FLAG_ANY_HANDLE = GPU_SEQ_FLAG_SELECTED_LH | GPU_SEQ_FLAG_SELECTED_RH |
                             GPU_SEQ_FLAG_DRAW_LH | GPU_SEQ_FLAG_DRAW_RH
@@ -118,7 +120,7 @@ struct SeqStripDrawData {
   /* Horizontal strip positions (1.0 is one frame). */
   float left_handle, right_handle;  /* Left and right strip sides. */
   float content_start, content_end; /* Start and end of actual content (only relevant for strips
-                                       that have holdout regions). */
+                                     * that have holdout regions). */
   float handle_width;
   /* Vertical strip positions (1.0 is one channel). */
   float bottom;
@@ -138,8 +140,6 @@ BLI_STATIC_ASSERT(sizeof(SeqStripDrawData) * GPU_SEQ_STRIP_DRAW_DATA_LEN <= 1638
 
 /* VSE global data for timeline rendering. */
 struct SeqContextDrawData {
-  float pixelx, pixely; /* Size of one pixel in timeline coordinate space. */
-  float inv_pixelx, inv_pixely;
   float round_radius;
   float pixelsize;
   uint col_back;

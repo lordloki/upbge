@@ -41,11 +41,13 @@
 #include "BLI_math_vector.h"
 #include "BLI_string_utf8.h"
 
+#ifndef WITH_HEADLESS
+#  include "nanosvgrast.h"
+
+#  include "svg_icons.h"
+#endif /* WITH_HEADLESS */
+
 #include "BLI_strict_flags.h" /* Keep last. */
-
-#include "nanosvgrast.h"
-
-#include "svg_icons.h"
 
 /**
  * Convert glyph coverage amounts to lightness values. Uses a LUT that perceptually improves
@@ -82,7 +84,7 @@ static float from_16dot16(FT_Fixed value)
 
 static GlyphCacheBLF *blf_glyph_cache_find(FontBLF *font)
 {
-  for (std::unique_ptr<GlyphCacheBLF> &gc : font->cache) {
+  for (const std::unique_ptr<GlyphCacheBLF> &gc : font->cache) {
     if (gc->size == font->size && (gc->bold == ((font->flags & BLF_BOLD) != 0)) &&
         (gc->italic == ((font->flags & BLF_ITALIC) != 0)) &&
         (gc->char_weight == font->char_weight) && (gc->char_slant == font->char_slant) &&
@@ -336,6 +338,7 @@ static GlyphBLF *blf_glyph_cache_add_glyph(
   return result;
 }
 
+#ifndef WITH_HEADLESS
 static GlyphBLF *blf_glyph_cache_add_blank(GlyphCacheBLF *gc, uint charcode)
 {
   /* Add an empty GlyphBLF to the cache and return it. With
@@ -348,7 +351,7 @@ static GlyphBLF *blf_glyph_cache_add_blank(GlyphCacheBLF *gc, uint charcode)
   return result;
 }
 
-static GlyphBLF *blf_glyph_cache_add_svg(GlyphCacheBLF *gc, uint charcode)
+static GlyphBLF *blf_glyph_cache_add_svg(GlyphCacheBLF *gc, uint charcode, bool color)
 {
   const char *svg_source = blf_get_icon_svg(int(charcode) - BLF_ICON_OFFSET);
   /* NanoSVG alters the source file while parsing. */
@@ -372,18 +375,25 @@ static GlyphBLF *blf_glyph_cache_add_svg(GlyphCacheBLF *gc, uint charcode)
   }
 
   const float scale = (gc->size / 1600.0f);
-  const float full = 1600.0f * scale;
-  const int dest_h = int(image->height * scale);
-  const int dest_w = int(image->width * scale);
-  const int render_size = dest_w * dest_h * 4;
-  blender::Array<uchar> render_bmp(render_size);
+  const int dest_h = int(ceil(image->height * scale));
+  const int dest_w = int(ceil(image->width * scale));
+  blender::Array<uchar> render_bmp(dest_w * dest_h * 4);
 
-  nsvgRasterize(rast, image, 0, 0, scale, render_bmp.data(), dest_w, dest_h, dest_w * 4);
+  /* Icon content has 100 units of padding around them. If
+   * it has a subpixel width, shift by the fractional part. */
+  const float tx = fmod((1600.0f - image->width) * scale / 2.0f, 1.0f);
+  const float ty = fmod((1600.0f - image->height) * scale / 2.0f, 1.0f);
+
+  nsvgRasterize(rast, image, tx, -ty, scale, render_bmp.data(), dest_w, dest_h, dest_w * 4);
   nsvgDeleteRasterizer(rast);
-  nsvgDelete(image);
 
-  const int offset_x = int(floor((full - float(dest_w)) / 2.0f));
-  const int offset_y = int(ceil((full + float(dest_h)) / 2.0f));
+  /* Bitmaps vary in size, so calculate the offsets needed when drawn. */
+  const int offset_x = std::max(int(round((gc->size - (image->width * scale) - tx) / 2.0f)),
+                                int(-100.0f * scale));
+  const int offset_y = std::max(int(ceil((gc->size + float(dest_h) - ty) / 2.0f)),
+                                dest_h - int(100.0f * scale));
+
+  nsvgDelete(image);
 
   std::unique_ptr<GlyphBLF> g = std::make_unique<GlyphBLF>();
   g->c = charcode;
@@ -401,18 +411,23 @@ static GlyphBLF *blf_glyph_cache_add_svg(GlyphCacheBLF *gc, uint charcode)
   g->dims[0] = dest_w;
   g->dims[1] = dest_h;
   g->pitch = dest_w;
-  g->num_channels = 1;
+  g->num_channels = color ? 4 : 1;
 
   const int buffer_size = g->dims[0] * g->dims[1] * g->num_channels;
   g->bitmap = static_cast<uchar *>(MEM_mallocN(size_t(buffer_size), "glyph bitmap"));
 
-  /* Convert from RGBA to coverage map. */
-  for (int64_t y = 0; y < int64_t(g->dims[1]); y++) {
-    for (int64_t x = 0; x < int64_t(g->dims[0]); x++) {
-      int64_t offs_in = (y * int64_t(dest_w) * 4) + (x * 4);
-      int64_t offs_out = (y * int64_t(g->dims[0]) + x);
-      /* Just using the alpha since this is monochrome. */
-      g->bitmap[offs_out] = render_bmp[int64_t(offs_in + 3)];
+  if (color) {
+    memcpy(g->bitmap, render_bmp.data(), size_t(buffer_size));
+  }
+  else {
+    /* Convert from RGBA to coverage map. */
+    for (int64_t y = 0; y < int64_t(g->dims[1]); y++) {
+      for (int64_t x = 0; x < int64_t(g->dims[0]); x++) {
+        int64_t offs_in = (y * int64_t(dest_w) * 4) + (x * 4);
+        int64_t offs_out = (y * int64_t(g->dims[0]) + x);
+        /* Just using the alpha since this is monochrome. */
+        g->bitmap[offs_out] = render_bmp[int64_t(offs_in + 3)];
+      }
     }
   }
 
@@ -421,6 +436,7 @@ static GlyphBLF *blf_glyph_cache_add_svg(GlyphCacheBLF *gc, uint charcode)
   gc->glyphs.add(key, std::move(g));
   return result;
 }
+#endif /* WITH_HEADLESS */
 
 /** \} */
 
@@ -1375,14 +1391,16 @@ GlyphBLF *blf_glyph_ensure(FontBLF *font, GlyphCacheBLF *gc, const uint charcode
   return g;
 }
 
-GlyphBLF *blf_glyph_ensure_icon(GlyphCacheBLF *gc, const uint icon_id)
+#ifndef WITH_HEADLESS
+GlyphBLF *blf_glyph_ensure_icon(GlyphCacheBLF *gc, const uint icon_id, bool color)
 {
   GlyphBLF *g = blf_glyph_cache_find_glyph(gc, icon_id + BLF_ICON_OFFSET, 0);
   if (g) {
     return g;
   }
-  return blf_glyph_cache_add_svg(gc, icon_id + BLF_ICON_OFFSET);
+  return blf_glyph_cache_add_svg(gc, icon_id + BLF_ICON_OFFSET, color);
 }
+#endif /* WITH_HEADLESS */
 
 #ifdef BLF_SUBPIXEL_AA
 GlyphBLF *blf_glyph_ensure_subpixel(FontBLF *font, GlyphCacheBLF *gc, GlyphBLF *g, int32_t pen_x)

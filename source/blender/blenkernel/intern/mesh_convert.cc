@@ -475,7 +475,7 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh, ListBase *nurblist, const int 
         VertLink *vl;
 
         /* create new 'nurb' within the curve */
-        nu = MEM_new<Nurb>("MeshNurb", blender::dna::shallow_zero_initialize());
+        nu = static_cast<Nurb *>(MEM_callocN(sizeof(Nurb), __func__));
 
         nu->pntsu = faces_num;
         nu->pntsv = 1;
@@ -1051,7 +1051,7 @@ static void move_shapekey_layers_to_keyblocks(const Mesh &mesh,
 void BKE_mesh_nomain_to_mesh(Mesh *mesh_src, Mesh *mesh_dst, Object *ob)
 {
   using namespace blender::bke;
-  BLI_assert(mesh_src->id.tag & LIB_TAG_NO_MAIN);
+  BLI_assert(mesh_src->id.tag & ID_TAG_NO_MAIN);
   if (ob) {
     BLI_assert(mesh_dst == ob->data);
   }
@@ -1109,7 +1109,7 @@ void BKE_mesh_nomain_to_mesh(Mesh *mesh_src, Mesh *mesh_dst, Object *ob)
 
 void BKE_mesh_nomain_to_meshkey(Mesh *mesh_src, Mesh *mesh_dst, KeyBlock *kb)
 {
-  BLI_assert(mesh_src->id.tag & LIB_TAG_NO_MAIN);
+  BLI_assert(mesh_src->id.tag & ID_TAG_NO_MAIN);
 
   const int totvert = mesh_src->verts_num;
 

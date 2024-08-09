@@ -590,6 +590,13 @@ std::string GLShader::resources_declare(const ShaderCreateInfo &info) const
   for (const ShaderCreateInfo::Resource &res : info.batch_resources_) {
     print_resource_alias(ss, res);
   }
+  ss << "\n/* Geometry Resources. */\n";
+  for (const ShaderCreateInfo::Resource &res : info.geometry_resources_) {
+    print_resource(ss, res, info.auto_resource_location_);
+  }
+  for (const ShaderCreateInfo::Resource &res : info.geometry_resources_) {
+    print_resource_alias(ss, res);
+  }
   ss << "\n/* Push Constants. */\n";
   for (const ShaderCreateInfo::PushConst &uniform : info.push_constants_) {
     ss << "uniform " << to_string(uniform.type) << " " << uniform.name;
@@ -970,7 +977,7 @@ std::string GLShader::workaround_geometry_shader_source_create(
     ss << "  gpu_pos[2] = gl_in[2].gl_Position;\n";
   }
   for (auto i : IndexRange(3)) {
-    for (StageInterfaceInfo *iface : info_modified.vertex_out_interfaces_) {
+    for (const StageInterfaceInfo *iface : info_modified.vertex_out_interfaces_) {
       for (auto &inout : iface->inouts) {
         ss << "  " << iface->instance_name << "_out." << inout.name;
         ss << " = " << iface->instance_name << "_in[" << i << "]." << inout.name << ";\n";
@@ -1942,6 +1949,20 @@ SpecializationBatchHandle GLShaderCompiler::precompile_specializations(
   return handle;
 }
 
+GLShader::GLProgram *GLShaderCompiler::SpecializationWork::program_get()
+{
+  for (const SpecializationConstant &constant : constants) {
+    const ShaderInput *input = shader->interface->constant_get(constant.name.c_str());
+    BLI_assert_msg(input != nullptr, "The specialization constant doesn't exists");
+    shader->constants.values[input->location].u = constant.value.u;
+  }
+  shader->constants.is_dirty = true;
+  if (shader->program_cache_.contains(shader->constants.values)) {
+    return &shader->program_cache_.lookup(shader->constants.values);
+  }
+  return nullptr;
+}
+
 void GLShaderCompiler::prepare_next_specialization_batch()
 {
   BLI_assert(current_specialization_batch.is_ready && !specialization_queue.is_empty());
@@ -1956,24 +1977,20 @@ void GLShaderCompiler::prepare_next_specialization_batch()
 
   for (auto &specialization : next.specializations) {
     GLShader *sh = static_cast<GLShader *>(unwrap(specialization.shader));
-    for (const SpecializationConstant &constant : specialization.constants) {
-      const ShaderInput *input = sh->interface->constant_get(constant.name.c_str());
-      BLI_assert_msg(input != nullptr, "The specialization constant doesn't exists");
-      sh->constants.values[input->location].u = constant.value.u;
-    }
-    sh->constants.is_dirty = true;
-    if (sh->program_cache_.contains(sh->constants.values)) {
-      /* Already compiled. */
-      continue;
-    }
     items.append({});
     SpecializationWork &item = items.last();
     item.shader = sh;
+    item.constants = specialization.constants;
+
+    if (item.program_get()) {
+      /* Already compiled. */
+      items.pop_last();
+      continue;
+    }
 
     /** WORKAROUND: Set async_compilation to true, so only the sources are generated. */
     sh->async_compilation_ = true;
     sh->program_get();
-    item.program = sh->program_active_;
     sh->async_compilation_ = false;
 
     item.sources = sh->get_sources();
@@ -2007,8 +2024,9 @@ bool GLShaderCompiler::specialization_batch_is_ready(SpecializationBatchHandle &
     }
 
     if (!item.do_async_compilation) {
-      glDeleteProgram(item.program->program_id);
-      item.program->program_id = 0;
+      GLShader::GLProgram *program = item.program_get();
+      glDeleteProgram(program->program_id);
+      program->program_id = 0;
       item.shader->constants.is_dirty = true;
       item.is_ready = true;
       continue;
@@ -2020,7 +2038,7 @@ bool GLShaderCompiler::specialization_batch_is_ready(SpecializationBatchHandle &
     }
     else if (item.worker->is_ready()) {
       /* Retrieve the binary compiled by the worker. */
-      if (item.worker->load_program_binary(item.program->program_id)) {
+      if (item.worker->load_program_binary(item.program_get()->program_id)) {
         item.is_ready = true;
       }
       else {

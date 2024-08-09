@@ -4,10 +4,20 @@
 
 #pragma once
 
+#include "BLI_color.hh"
+#include "BLI_task.hh"
+
 #include "DNA_scene_types.h"
+
 #include "ED_grease_pencil.hh"
 
+#include "IMB_imbuf_types.hh"
+
 #include "paint_intern.hh"
+
+#ifdef WITH_POTRACE
+#  include "potracelib.h"
+#endif
 
 namespace blender::bke::greasepencil {
 class Drawing;
@@ -24,9 +34,8 @@ struct InputSample {
   float pressure;
 };
 
-class GreasePencilStrokeOperation {
+class GreasePencilStrokeOperation : public PaintModeData {
  public:
-  virtual ~GreasePencilStrokeOperation() = default;
   virtual void on_stroke_begin(const bContext &C, const InputSample &start_sample) = 0;
   virtual void on_stroke_extended(const bContext &C, const InputSample &extension_sample) = 0;
   virtual void on_stroke_done(const bContext &C) = 0;
@@ -71,7 +80,6 @@ struct GreasePencilStrokeParams {
   int layer_index;
   int frame_number;
   float multi_frame_falloff;
-  const ed::greasepencil::DrawingPlacement &placement;
   bke::greasepencil::Drawing &drawing;
 
   /* NOTE: accessing region in worker threads will return null,
@@ -83,7 +91,6 @@ struct GreasePencilStrokeParams {
                                                int layer_index,
                                                int frame_number,
                                                float multi_frame_falloff,
-                                               const ed::greasepencil::DrawingPlacement &placement,
                                                bke::greasepencil::Drawing &drawing);
 };
 
@@ -110,6 +117,7 @@ class GreasePencilStrokeOperationCommon : public GreasePencilStrokeOperation {
   /** Previous mouse position for computing the direction. */
   float2 prev_mouse_position;
 
+  GreasePencilStrokeOperationCommon() {}
   GreasePencilStrokeOperationCommon(const BrushStrokeMode stroke_mode) : stroke_mode(stroke_mode)
   {
   }
@@ -122,10 +130,13 @@ class GreasePencilStrokeOperationCommon : public GreasePencilStrokeOperation {
 
   void foreach_editable_drawing(
       const bContext &C, FunctionRef<bool(const GreasePencilStrokeParams &params)> fn) const;
+  void foreach_editable_drawing(const bContext &C,
+                                FunctionRef<bool(const GreasePencilStrokeParams &params,
+                                                 const DrawingPlacement &placement)> fn) const;
 };
 
 std::unique_ptr<GreasePencilStrokeOperation> new_paint_operation();
-std::unique_ptr<GreasePencilStrokeOperation> new_erase_operation();
+std::unique_ptr<GreasePencilStrokeOperation> new_erase_operation(bool temp_eraser);
 std::unique_ptr<GreasePencilStrokeOperation> new_tint_operation();
 std::unique_ptr<GreasePencilStrokeOperation> new_weight_paint_draw_operation(
     const BrushStrokeMode &brush_mode);

@@ -27,7 +27,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -1087,6 +1087,9 @@ static void displace_links(bNodeTree *ntree, const bNode *node, bNodeLink *inser
 static void node_displace_existing_links(bNodeLinkDrag &nldrag, bNodeTree &ntree)
 {
   bNodeLink &link = nldrag.links.first();
+  if (!link.fromsock || !link.tosock) {
+    return;
+  }
   if (nldrag.start_socket->is_input()) {
     displace_links(&ntree, link.fromnode, &link);
   }
@@ -1212,7 +1215,9 @@ static void add_dragged_links_to_tree(bContext &C, bNodeLinkDrag &nldrag)
     }
 
     /* Before actually adding the link let nodes perform special link insertion handling. */
-    bNodeLink *new_link = MEM_new<bNodeLink>(__func__, link);
+
+    bNodeLink *new_link = static_cast<bNodeLink *>(MEM_mallocN(sizeof(bNodeLink), __func__));
+    *new_link = link;
     if (link.fromnode->typeinfo->insert_link) {
       if (!link.fromnode->typeinfo->insert_link(&ntree, link.fromnode, new_link)) {
         MEM_freeN(new_link);

@@ -207,7 +207,7 @@ class Instance {
   /* Render. */
 
   void render_sync();
-  void render_frame(RenderLayer *render_layer, const char *view_name);
+  void render_frame(RenderEngine *engine, RenderLayer *render_layer, const char *view_name);
   void store_metadata(RenderResult *render_result);
 
   /* Viewport. */
@@ -316,6 +316,11 @@ class Instance {
     }
 
     return flags;
+  }
+
+  int get_recalc_flags(const ::World &world)
+  {
+    return world.last_update > depsgraph_last_update_ ? int(ID_RECALC_SHADING) : 0;
   }
 
  private:

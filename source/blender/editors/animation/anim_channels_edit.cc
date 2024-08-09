@@ -43,6 +43,8 @@
 #include "BKE_screen.hh"
 #include "BKE_workspace.hh"
 
+#include "ANIM_action.hh"
+
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
 
@@ -196,6 +198,7 @@ static bool get_channel_bounds(bAnimContext *ac,
     case ALE_ACT:
     case ALE_GROUP:
     case ALE_ACTION_LAYERED:
+    case ALE_ACTION_SLOT:
     case ALE_GREASE_PENCIL_DATA:
     case ALE_GREASE_PENCIL_GROUP:
       return false;
@@ -309,6 +312,7 @@ void ANIM_set_active_channel(bAnimContext *ac,
       case ANIMTYPE_SUMMARY:
       case ANIMTYPE_SCENE:
       case ANIMTYPE_OBJECT:
+      case ANIMTYPE_ACTION_SLOT:
       case ANIMTYPE_NLACONTROLS:
       case ANIMTYPE_FILLDRIVERS:
       case ANIMTYPE_DSNTREE:
@@ -344,6 +348,11 @@ void ANIM_set_active_channel(bAnimContext *ac,
         nlt->flag |= NLATRACK_ACTIVE;
         break;
       }
+      case ANIMTYPE_ACTION_SLOT:
+        /* ANIMTYPE_ACTION_SLOT is not supported by this function (because the to-be-activated
+         * bAnimListElement is not passed here, only sub-fields of it), just call
+         * Action::slot_active_set() directly. */
+        break;
       case ANIMTYPE_FILLACTD:        /* Action Expander */
       case ANIMTYPE_FILLACT_LAYERED: /* Animation Expander */
       case ANIMTYPE_DSMAT:           /* Datablock AnimData Expanders */
@@ -397,6 +406,8 @@ void ANIM_set_active_channel(bAnimContext *ac,
 
 bool ANIM_is_active_channel(bAnimListElem *ale)
 {
+  using namespace blender;
+
   switch (ale->type) {
     case ANIMTYPE_FILLACTD:        /* Action Expander */
     case ANIMTYPE_FILLACT_LAYERED: /* Animation Expander */
@@ -441,6 +452,10 @@ bool ANIM_is_active_channel(bAnimListElem *ale)
       GreasePencil *grease_pencil = reinterpret_cast<GreasePencil *>(ale->id);
       return grease_pencil->is_layer_active(
           static_cast<blender::bke::greasepencil::Layer *>(ale->data));
+    }
+    case ANIMTYPE_ACTION_SLOT: {
+      animrig::Slot *slot = reinterpret_cast<animrig::Slot *>(ale->data);
+      return slot->is_active();
     }
       /* These channel types do not have active flags. */
     case ANIMTYPE_NONE:
@@ -549,7 +564,13 @@ static eAnimChannels_SetFlag anim_channels_selection_flag_for_toggle(const ListB
           return ACHANNEL_SETFLAG_CLEAR;
         }
         break;
-
+      case ANIMTYPE_ACTION_SLOT: {
+        using namespace blender::animrig;
+        if (static_cast<Slot *>(ale->data)->is_selected()) {
+          return ACHANNEL_SETFLAG_CLEAR;
+        }
+        break;
+      }
       case ANIMTYPE_FILLACTD:        /* Action Expander */
       case ANIMTYPE_FILLACT_LAYERED: /* Animation Expander */
       case ANIMTYPE_DSMAT:           /* Datablock AnimData Expanders */
@@ -609,10 +630,41 @@ static eAnimChannels_SetFlag anim_channels_selection_flag_for_toggle(const ListB
   return ACHANNEL_SETFLAG_ADD;
 }
 
+/**
+ * Update the selection state of `selectable_thing` based on `selectmode`.
+ *
+ * This is basically the C++ variant of the macro `ACHANNEL_SET_FLAG(thing, sel, selection_flag)`,
+ * except that this function doesn't require that the selectable thing has a member variable
+ * `flag`. Instead, it requires that it has two functions to query & set its selection state.
+ *
+ * \param selectable_thing: something with functions `set_selected(bool)` and `bool is_selected()`.
+ * \param selectmode: the selection operation to perform.
+ */
+template<typename T>
+static void templated_selection_state_update(T &selectable_thing,
+                                             const eAnimChannels_SetFlag selectmode)
+{
+  switch (selectmode) {
+    case ACHANNEL_SETFLAG_CLEAR:
+      selectable_thing.set_selected(false);
+      break;
+    case ACHANNEL_SETFLAG_ADD:
+    case ACHANNEL_SETFLAG_EXTEND_RANGE:
+      selectable_thing.set_selected(true);
+      break;
+    case ACHANNEL_SETFLAG_INVERT:
+    case ACHANNEL_SETFLAG_TOGGLE:
+      selectable_thing.set_selected(!selectable_thing.is_selected());
+      break;
+  }
+}
+
 static void anim_channels_select_set(bAnimContext *ac,
                                      const ListBase anim_data,
                                      eAnimChannels_SetFlag sel)
 {
+  using namespace blender;
+
   /* Boolean to keep active channel status during range selection. */
   const bool change_active = (sel != ACHANNEL_SETFLAG_EXTEND_RANGE);
 
@@ -677,6 +729,11 @@ static void anim_channels_select_set(bAnimContext *ac,
 
         ACHANNEL_SET_FLAG(nlt, sel, NLATRACK_SELECTED);
         nlt->flag &= ~NLATRACK_ACTIVE;
+        break;
+      }
+      case ANIMTYPE_ACTION_SLOT: {
+        animrig::Slot *slot = static_cast<animrig::Slot *>(ale->data);
+        templated_selection_state_update(*slot, sel);
         break;
       }
       case ANIMTYPE_FILLACTD:        /* Action Expander */
@@ -1557,7 +1614,7 @@ static void split_groups_action_temp(bAction *act, bActionGroup *tgrp)
 
   /* Initialize memory for temp-group */
   memset(tgrp, 0, sizeof(bActionGroup));
-  tgrp->flag |= (AGRP_EXPANDED | AGRP_TEMP);
+  tgrp->flag |= (AGRP_EXPANDED | AGRP_TEMP | AGRP_EXPANDED_G);
   STRNCPY(tgrp->name, "#TempGroup");
 
   /* Move any action-channels not already moved, to the temp group */
@@ -2327,6 +2384,7 @@ static int animchannels_delete_exec(bContext *C, wmOperator * /*op*/)
       case ANIMTYPE_GROUP:
       case ANIMTYPE_NLACONTROLS:
       case ANIMTYPE_FILLACT_LAYERED:
+      case ANIMTYPE_ACTION_SLOT:
       case ANIMTYPE_FILLACTD:
       case ANIMTYPE_FILLDRIVERS:
       case ANIMTYPE_DSMAT:
@@ -3090,10 +3148,6 @@ static void box_select_anim_channels(bAnimContext *ac, rcti *rect, short selectm
   /* filter data */
   filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE | ANIMFILTER_LIST_CHANNELS);
 
-  if (!ANIM_animdata_can_have_greasepencil(eAnimCont_Types(ac->datatype))) {
-    filter |= ANIMFILTER_FCURVESONLY;
-  }
-
   ANIM_animdata_filter(
       ac, &anim_data, eAnimFilter_Flags(filter), ac->data, eAnimCont_Types(ac->datatype));
 
@@ -3143,6 +3197,12 @@ static void box_select_anim_channels(bAnimContext *ac, rcti *rect, short selectm
            * currently adds complications when doing other stuff
            */
           ACHANNEL_SET_FLAG(nlt, selectmode, NLATRACK_SELECTED);
+          break;
+        }
+        case ANIMTYPE_ACTION_SLOT: {
+          using namespace blender::animrig;
+          Slot *slot = static_cast<Slot *>(ale->data);
+          templated_selection_state_update(*slot, eAnimChannels_SetFlag(selectmode));
           break;
         }
         case ANIMTYPE_NONE:
@@ -3752,6 +3812,43 @@ static int click_select_channel_fcurve(bAnimContext *ac,
 
   return (ND_ANIMCHAN | NA_SELECTED);
 }
+static int click_select_channel_action_slot(bAnimContext *ac,
+                                            bAnimListElem *ale,
+                                            short /* eEditKeyframes_Select or -1 */ selectmode)
+{
+  using namespace blender;
+
+  BLI_assert_msg(GS(ale->fcurve_owner_id->name) == ID_AC,
+                 "fcurve_owner_id of an Action Slot should be an Action");
+  animrig::Action *action = reinterpret_cast<animrig::Action *>(ale->fcurve_owner_id);
+  animrig::Slot *slot = static_cast<animrig::Slot *>(ale->data);
+
+  if (selectmode == SELECT_INVERT) {
+    selectmode = slot->is_selected() ? SELECT_SUBTRACT : SELECT_ADD;
+  }
+
+  switch (selectmode) {
+    case SELECT_REPLACE:
+      ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_CLEAR);
+      ATTR_FALLTHROUGH;
+    case SELECT_ADD:
+      slot->set_selected(true);
+      action->slot_active_set(slot->handle);
+      break;
+    case SELECT_SUBTRACT:
+      slot->set_selected(false);
+      break;
+    case SELECT_EXTEND_RANGE:
+      ANIM_anim_channels_select_set(ac, ACHANNEL_SETFLAG_EXTEND_RANGE);
+      animchannel_select_range(ac, ale);
+      break;
+    case SELECT_INVERT:
+      BLI_assert_unreachable();
+      break;
+  }
+
+  return (ND_ANIMCHAN | NA_SELECTED);
+}
 
 static int click_select_channel_shapekey(bAnimContext *ac,
                                          bAnimListElem *ale,
@@ -4023,6 +4120,9 @@ static int mouse_anim_channels(bContext *C,
     case ANIMTYPE_FCURVE:
     case ANIMTYPE_NLACURVE:
       notifierFlags |= click_select_channel_fcurve(ac, ale, selectmode, filter);
+      break;
+    case ANIMTYPE_ACTION_SLOT:
+      notifierFlags |= click_select_channel_action_slot(ac, ale, selectmode);
       break;
     case ANIMTYPE_SHAPEKEY:
       notifierFlags |= click_select_channel_shapekey(ac, ale, selectmode);

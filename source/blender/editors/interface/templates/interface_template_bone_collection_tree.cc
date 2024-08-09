@@ -17,7 +17,7 @@
 #include "UI_tree_view.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_armature.hh"
 #include "ED_undo.hh"
@@ -445,7 +445,7 @@ eWM_DragDataType BoneCollectionDragController::get_drag_type() const
 
 void *BoneCollectionDragController::create_drag_data() const
 {
-  ArmatureBoneCollection *drag_data = MEM_new<ArmatureBoneCollection>(__func__);
+  ArmatureBoneCollection *drag_data = MEM_cnew<ArmatureBoneCollection>(__func__);
   *drag_data = drag_arm_bcoll_;
   return drag_data;
 }

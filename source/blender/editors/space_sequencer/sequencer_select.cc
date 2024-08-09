@@ -192,35 +192,35 @@ static void select_active_side_range(const Scene *scene,
   }
 }
 
-/* Used for mouse selection in SEQUENCER_OT_select */
-static void select_linked_time(const Scene *scene, ListBase *seqbase, Sequence *seq_link)
+/* Used alongside `select_linked_time` helper function in SEQUENCER_OT_select. */
+static void select_linked_time_seq(const Scene *scene,
+                                   const Sequence *seq_source,
+                                   const eSeqHandle handle_clicked)
 {
-  LISTBASE_FOREACH (Sequence *, seq, seqbase) {
-    if (seq_link->machine != seq->machine) {
-      int left_match = (SEQ_time_left_handle_frame_get(scene, seq) == seq_link->startdisp) ? 1 : 0;
-      int right_match = (SEQ_time_right_handle_frame_get(scene, seq) == seq_link->enddisp) ? 1 : 0;
+  ListBase *seqbase = SEQ_active_seqbase_get(scene->ed);
+  int source_left = SEQ_time_left_handle_frame_get(scene, seq_source);
+  int source_right = SEQ_time_right_handle_frame_get(scene, seq_source);
+
+  LISTBASE_FOREACH (Sequence *, seq_dest, seqbase) {
+    if (seq_source->machine != seq_dest->machine) {
+      const bool left_match = (SEQ_time_left_handle_frame_get(scene, seq_dest) == source_left);
+      const bool right_match = (SEQ_time_right_handle_frame_get(scene, seq_dest) == source_right);
 
       if (left_match && right_match) {
-        /* Direct match, copy the selection settings. */
-        seq->flag &= ~(SELECT | SEQ_LEFTSEL | SEQ_RIGHTSEL);
-        seq->flag |= seq_link->flag & (SELECT | SEQ_LEFTSEL | SEQ_RIGHTSEL);
-
-        recurs_sel_seq(seq);
+        /* Direct match, copy all selection settings. */
+        seq_dest->flag &= ~(SELECT | SEQ_LEFTSEL | SEQ_RIGHTSEL);
+        seq_dest->flag |= seq_source->flag & (SELECT | SEQ_LEFTSEL | SEQ_RIGHTSEL);
+        recurs_sel_seq(seq_dest);
       }
-      else if (seq_link->flag & SELECT && (left_match || right_match)) {
-
-        /* Clear for reselection. */
-        seq->flag &= ~(SEQ_LEFTSEL | SEQ_RIGHTSEL);
-
-        if (left_match && seq_link->flag & SEQ_LEFTSEL) {
-          seq->flag |= SELECT | SEQ_LEFTSEL;
-        }
-
-        if (right_match && seq_link->flag & SEQ_RIGHTSEL) {
-          seq->flag |= SELECT | SEQ_RIGHTSEL;
-        }
-
-        recurs_sel_seq(seq);
+      else if (left_match && handle_clicked == SEQ_HANDLE_LEFT) {
+        seq_dest->flag &= ~(SELECT | SEQ_LEFTSEL);
+        seq_dest->flag |= seq_source->flag & (SELECT | SEQ_LEFTSEL);
+        recurs_sel_seq(seq_dest);
+      }
+      else if (right_match && handle_clicked == SEQ_HANDLE_RIGHT) {
+        seq_dest->flag &= ~(SELECT | SEQ_RIGHTSEL);
+        seq_dest->flag |= seq_source->flag & (SELECT | SEQ_RIGHTSEL);
+        recurs_sel_seq(seq_dest);
       }
     }
   }
@@ -466,7 +466,8 @@ static int sequencer_de_select_all_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  if (sequencer_retiming_mode_is_active(C) && retiming_keys_are_visible(CTX_wm_space_seq(C))) {
+  if (sequencer_retiming_mode_is_active(C) && retiming_keys_can_be_displayed(CTX_wm_space_seq(C)))
+  {
     return sequencer_retiming_select_all_exec(C, op);
   }
 
@@ -921,6 +922,25 @@ static void sequencer_select_strip_impl(const Editing *ed,
   }
 }
 
+static void select_linked_time(const Scene *scene,
+                               const StripSelection &selection,
+                               const bool extend,
+                               const bool deselect,
+                               const bool toggle)
+{
+  Editing *ed = SEQ_editing_get(scene);
+
+  sequencer_select_strip_impl(ed, selection.seq1, selection.handle, extend, deselect, toggle);
+  select_linked_time_seq(scene, selection.seq1, selection.handle);
+
+  if (selection.seq2 != nullptr) {
+    eSeqHandle seq2_handle_clicked = (selection.handle == SEQ_HANDLE_LEFT) ? SEQ_HANDLE_RIGHT :
+                                                                             SEQ_HANDLE_LEFT;
+    sequencer_select_strip_impl(ed, selection.seq2, seq2_handle_clicked, extend, deselect, toggle);
+    select_linked_time_seq(scene, selection.seq2, seq2_handle_clicked);
+  }
+}
+
 /* Similar to `sequence_handle_size_get_clamped()` but allows for larger clickable area. */
 static float clickable_handle_size_get(const Scene *scene, const Sequence *seq, const View2D *v2d)
 {
@@ -1021,8 +1041,8 @@ static blender::Vector<Sequence *> mouseover_strips_sorted_get(const Scene *scen
 
   BLI_assert(strips.size() <= 2);
 
-  /* Ensure, that `seq1` is left strip and `seq2` right strip. */
-  if (strips.size() == 2 && strip_to_frame_distance(scene, v2d, strips[0], mouse_co[0]) <
+  /* Ensure that `strips[0]` is the strip closest to the mouse cursor. */
+  if (strips.size() == 2 && strip_to_frame_distance(scene, v2d, strips[0], mouse_co[0]) >
                                 strip_to_frame_distance(scene, v2d, strips[1], mouse_co[0]))
   {
     std::swap(strips[0], strips[1]);
@@ -1110,12 +1130,6 @@ StripSelection ED_sequencer_pick_strip_and_handle(const Scene *scene,
   return selection;
 }
 
-static bool use_retiming_mode(const bContext *C, const Sequence *seq_key_test)
-{
-  return seq_key_test && SEQ_retiming_data_is_editable(seq_key_test) &&
-         !sequencer_retiming_mode_is_active(C) && retiming_keys_are_visible(CTX_wm_space_seq(C));
-}
-
 int sequencer_select_exec(bContext *C, wmOperator *op)
 {
   const View2D *v2d = UI_view2d_fromcontext(C);
@@ -1137,8 +1151,34 @@ int sequencer_select_exec(bContext *C, wmOperator *op)
     }
   }
 
-  if (sequencer_retiming_mode_is_active(C) && retiming_keys_are_visible(CTX_wm_space_seq(C))) {
-    return sequencer_retiming_key_select_exec(C, op);
+  bool was_retiming = sequencer_retiming_mode_is_active(C);
+
+  MouseCoords mouse_co(v2d, RNA_int_get(op->ptr, "mouse_x"), RNA_int_get(op->ptr, "mouse_y"));
+
+  /* Check to see if the mouse cursor intersects with the retiming box; if so, `seq_key_owner` is
+   * set. If the cursor intersects with a retiming key, `key` will be set too. */
+  Sequence *seq_key_owner = nullptr;
+  SeqRetimingKey *key = retiming_mouseover_key_get(C, mouse_co.region, &seq_key_owner);
+
+  /* If no key was found, the mouse cursor may still intersect with a "fake key" that has not been
+   * realized yet. */
+  if (seq_key_owner != nullptr && key == nullptr) {
+    key = try_to_realize_fake_keys(C, seq_key_owner, mouse_co.region);
+  }
+
+  if (key != nullptr && retiming_keys_can_be_displayed(CTX_wm_space_seq(C)) &&
+      SEQ_retiming_data_is_editable(seq_key_owner))
+  {
+    if (!was_retiming) {
+      ED_sequencer_deselect_all(scene);
+    }
+    return sequencer_retiming_key_select_exec(C, op, key, seq_key_owner);
+  }
+
+  /* We should only reach here if no retiming selection is happening. */
+  if (was_retiming) {
+    SEQ_retiming_selection_clear(ed);
+    WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
   }
 
   bool extend = RNA_boolean_get(op->ptr, "extend");
@@ -1146,8 +1186,6 @@ int sequencer_select_exec(bContext *C, wmOperator *op)
   bool deselect_all = RNA_boolean_get(op->ptr, "deselect_all");
   bool toggle = RNA_boolean_get(op->ptr, "toggle");
   bool center = RNA_boolean_get(op->ptr, "center");
-
-  MouseCoords mouse_co(v2d, RNA_int_get(op->ptr, "mouse_x"), RNA_int_get(op->ptr, "mouse_y"));
 
   StripSelection selection;
   if (region->regiontype == RGN_TYPE_PREVIEW) {
@@ -1159,25 +1197,14 @@ int sequencer_select_exec(bContext *C, wmOperator *op)
 
   /* NOTE: `side_of_frame` and `linked_time` functionality is designed to be shared on one
    * keymap, therefore both properties can be true at the same time. */
-  Sequence *seq_key_test = nullptr;
-  SeqRetimingKey *key = retiming_mousover_key_get(C, mouse_co.region, &seq_key_test);
-
-  /* NOTE: `side_of_frame` and `linked_time` functionality is designed to be shared on one
-   * keymap, therefore both properties can be true at the same time. */
   if (selection.seq1 && RNA_boolean_get(op->ptr, "linked_time")) {
-    if (use_retiming_mode(C, seq_key_test)) {
-      return sequencer_retiming_select_linked_time(C, op);
+    if (!extend && !toggle) {
+      ED_sequencer_deselect_all(scene);
     }
-    else {
-      if (!extend && !toggle) {
-        ED_sequencer_deselect_all(scene);
-      }
-      sequencer_select_strip_impl(ed, selection.seq1, selection.handle, extend, deselect, toggle);
-      select_linked_time(scene, ed->seqbasep, selection.seq1);
-      sequencer_select_do_updates(C, scene);
-      sequencer_select_set_active(scene, selection.seq1);
-      return OPERATOR_FINISHED;
-    }
+    select_linked_time(scene, selection, extend, deselect, toggle);
+    sequencer_select_do_updates(C, scene);
+    sequencer_select_set_active(scene, selection.seq1);
+    return OPERATOR_FINISHED;
   }
 
   /* Select left, right or overlapping the current frame. */
@@ -1218,30 +1245,11 @@ int sequencer_select_exec(bContext *C, wmOperator *op)
     return OPERATOR_RUNNING_MODAL;
   }
 
-  if (use_retiming_mode(C, seq_key_test)) {
-
-    /* Realize "fake" key, if it is clicked on. */
-    if (key == nullptr && seq_key_test != nullptr) {
-      key = try_to_realize_virtual_keys(C, seq_key_test, mouse_co.region);
-    }
-
-    bool retiming_key_clicked = (key != nullptr);
-
-    if (seq_key_test && retiming_key_clicked) {
-      WM_event_add_notifier(C, NC_SCENE | ND_SEQUENCER, scene);
-      ED_sequencer_deselect_all(scene);
-      SEQ_retiming_selection_clear(ed);
-      SEQ_retiming_selection_append(key);
-      return OPERATOR_CANCELLED | OPERATOR_PASS_THROUGH;
-    }
-  }
-
   bool changed = false;
 
   /* Deselect everything */
   if (deselect_all ||
-      (selection.seq1 && (extend == false && deselect == false && toggle == false) &&
-       !already_selected))
+      (selection.seq1 && (extend == false && deselect == false && toggle == false)))
   {
     changed |= ED_sequencer_deselect_all(scene);
   }
@@ -1317,8 +1325,12 @@ void SEQUENCER_OT_select(wmOperatorType *ot)
                          "Select handles next to the active strip");
   RNA_def_property_flag(prop, PROP_SKIP_SAVE);
 
-  prop = RNA_def_boolean(
-      ot->srna, "linked_time", false, "Linked Time", "Select other strips at the same time");
+  prop = RNA_def_boolean(ot->srna,
+                         "linked_time",
+                         false,
+                         "Linked Time",
+                         "Select other strips or handles at the same time, or all retiming keys "
+                         "after the current in retiming mode");
   RNA_def_property_flag(prop, PROP_SKIP_SAVE);
 
   prop = RNA_def_boolean(
@@ -1350,7 +1362,8 @@ static int sequencer_select_handle_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED | OPERATOR_PASS_THROUGH;
   }
 
-  if (sequencer_retiming_mode_is_active(C) && retiming_keys_are_visible(CTX_wm_space_seq(C))) {
+  if (sequencer_retiming_mode_is_active(C) && retiming_keys_can_be_displayed(CTX_wm_space_seq(C)))
+  {
     return OPERATOR_CANCELLED | OPERATOR_PASS_THROUGH;
   }
 
@@ -1363,8 +1376,8 @@ static int sequencer_select_handle_exec(bContext *C, wmOperator *op)
 
   /* Ignore clicks on retiming keys. */
   Sequence *seq_key_test = nullptr;
-  retiming_mousover_key_get(C, mouse_co.region, &seq_key_test);
-  if (use_retiming_mode(C, seq_key_test) && seq_key_test != nullptr) {
+  SeqRetimingKey *key = retiming_mouseover_key_get(C, mouse_co.region, &seq_key_test);
+  if (key != nullptr) {
     return OPERATOR_CANCELLED | OPERATOR_PASS_THROUGH;
   }
 
@@ -2003,7 +2016,8 @@ static int sequencer_box_select_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  if (sequencer_retiming_mode_is_active(C) && retiming_keys_are_visible(CTX_wm_space_seq(C))) {
+  if (sequencer_retiming_mode_is_active(C) && retiming_keys_can_be_displayed(CTX_wm_space_seq(C)))
+  {
     return sequencer_retiming_box_select_exec(C, op);
   }
 

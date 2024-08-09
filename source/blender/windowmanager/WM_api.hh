@@ -275,8 +275,9 @@ bool WM_window_pixels_read_sample(bContext *C, wmWindow *win, const int pos[2], 
  *
  * \note macOS retina opens window in size X, but it has up to 2 x more pixels.
  */
-int WM_window_pixels_x(const wmWindow *win);
-int WM_window_pixels_y(const wmWindow *win);
+int WM_window_native_pixel_x(const wmWindow *win);
+int WM_window_native_pixel_y(const wmWindow *win);
+void WM_window_native_pixel_coords(const wmWindow *win, int *x, int *y);
 /**
  * Get boundaries usable by all window contents, including global areas.
  */
@@ -306,7 +307,7 @@ Scene *WM_window_get_active_scene(const wmWindow *win) ATTR_NONNULL() ATTR_WARN_
 /**
  * \warning Only call outside of area/region loops.
  */
-void WM_window_set_active_scene(Main *bmain, bContext *C, wmWindow *win, Scene *scene_new)
+void WM_window_set_active_scene(Main *bmain, bContext *C, wmWindow *win, Scene *scene)
     ATTR_NONNULL();
 WorkSpace *WM_window_get_active_workspace(const wmWindow *win)
     ATTR_NONNULL() ATTR_WARN_UNUSED_RESULT;
@@ -374,7 +375,7 @@ void WM_window_set_dpi(const wmWindow *win);
  */
 void WM_window_title(wmWindowManager *wm, wmWindow *win, const char *title = nullptr);
 
-bool WM_stereo3d_enabled(wmWindow *win, bool only_fullscreen_test);
+bool WM_stereo3d_enabled(wmWindow *win, bool skip_stereo3d_check);
 
 /* `wm_files.cc`. */
 
@@ -749,7 +750,8 @@ int WM_operator_props_popup_confirm_ex(bContext *C,
                                        wmOperator *op,
                                        const wmEvent *event,
                                        std::optional<std::string> title = std::nullopt,
-                                       std::optional<std::string> confirm_text = std::nullopt);
+                                       std::optional<std::string> confirm_text = std::nullopt,
+                                       bool cancel_default = false);
 
 /**
  * Same as #WM_operator_props_popup but call the operator first,
@@ -763,7 +765,8 @@ int WM_operator_props_dialog_popup(bContext *C,
                                    wmOperator *op,
                                    int width,
                                    std::optional<std::string> title = std::nullopt,
-                                   std::optional<std::string> confirm_text = std::nullopt);
+                                   std::optional<std::string> confirm_text = std::nullopt,
+                                   bool cancel_default = false);
 
 int WM_operator_redo_popup(bContext *C, wmOperator *op);
 int WM_operator_ui_popup(bContext *C, wmOperator *op, int width);
@@ -897,7 +900,7 @@ void WM_operator_properties_sanitize(PointerRNA *ptr, bool no_context);
  */
 bool WM_operator_properties_default(PointerRNA *ptr, bool do_update);
 /**
- * Remove all props without #PROP_SKIP_SAVE.
+ * Remove all props without #PROP_SKIP_SAVE or #PROP_SKIP_PRESET.
  */
 void WM_operator_properties_reset(wmOperator *op);
 void WM_operator_properties_create(PointerRNA *ptr, const char *opstring);
@@ -1865,7 +1868,7 @@ bool WM_event_consecutive_gesture_test_break(const wmWindow *win, const wmEvent 
 
 int WM_event_drag_threshold(const wmEvent *event);
 bool WM_event_drag_test(const wmEvent *event, const int prev_xy[2]);
-bool WM_event_drag_test_with_delta(const wmEvent *event, const int delta[2]);
+bool WM_event_drag_test_with_delta(const wmEvent *event, const int drag_delta[2]);
 void WM_event_drag_start_mval(const wmEvent *event, const ARegion *region, int r_mval[2]);
 void WM_event_drag_start_mval_fl(const wmEvent *event, const ARegion *region, float r_mval[2]);
 void WM_event_drag_start_xy(const wmEvent *event, int r_xy[2]);

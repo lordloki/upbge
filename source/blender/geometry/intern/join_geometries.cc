@@ -194,12 +194,15 @@ GeometrySet join_geometries(const Span<GeometrySet> geometries,
                             const bke::AnonymousAttributePropagationInfo &propagation_info)
 {
   GeometrySet result;
-  static const Array<GeometryComponent::Type> supported_types({GeometryComponent::Type::Mesh,
-                                                               GeometryComponent::Type::PointCloud,
-                                                               GeometryComponent::Type::Instance,
-                                                               GeometryComponent::Type::Volume,
-                                                               GeometryComponent::Type::Curve,
-                                                               GeometryComponent::Type::Edit});
+  result.name = geometries.is_empty() ? "" : geometries[0].name;
+  static const Array<GeometryComponent::Type> supported_types(
+      {GeometryComponent::Type::Mesh,
+       GeometryComponent::Type::PointCloud,
+       GeometryComponent::Type::Instance,
+       GeometryComponent::Type::Volume,
+       GeometryComponent::Type::Curve,
+       GeometryComponent::Type::GreasePencil,
+       GeometryComponent::Type::Edit});
   for (const GeometryComponent::Type type : supported_types) {
     join_component_type(type, geometries, propagation_info, result);
   }

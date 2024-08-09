@@ -63,7 +63,7 @@
 #include "DNA_object_types.h"
 #include "WM_types.hh"
 
-#include "rna_access_internal.h"
+#include "rna_access_internal.hh"
 #include "rna_internal.hh"
 
 static CLG_LogRef LOG = {"rna.access"};
@@ -458,7 +458,7 @@ static PropertyRNA *arraytypemap[IDP_NUMTYPES] = {
     nullptr,
     &rna_PropertyGroupItem_double_array,
     nullptr,
-    (PropertyRNA *)&rna_PropertyGroupItem_bool_array,
+    &rna_PropertyGroupItem_bool_array,
 };
 
 void rna_property_rna_or_id_get(PropertyRNA *prop,
@@ -2367,6 +2367,9 @@ static void rna_property_update(
     }
 
     WM_main_add_notifier(NC_WINDOW, nullptr);
+    if (ptr->owner_id) {
+      WM_main_add_notifier(NC_ID | NA_EDITED, nullptr);
+    }
     /* Not nice as well, but the only way to make sure material preview
      * is updated with custom nodes.
      */
@@ -3504,6 +3507,36 @@ float RNA_property_float_get_default_index(PointerRNA *ptr, PropertyRNA *prop, i
   MEM_freeN(tmparray);
 
   return value;
+}
+
+std::string RNA_property_string_get(PointerRNA *ptr, PropertyRNA *prop)
+{
+  StringPropertyRNA *sprop = reinterpret_cast<StringPropertyRNA *>(prop);
+  IDProperty *idprop;
+
+  BLI_assert(RNA_property_type(prop) == PROP_STRING);
+
+  if ((idprop = rna_idproperty_check(&prop, ptr))) {
+    /* NOTE: `std::string` does support NULL char in its data. */
+    return std::string{IDP_String(idprop), size_t(idprop->len)};
+  }
+
+  if (!sprop->get && !sprop->get_ex) {
+    return std::string{sprop->defaultvalue};
+  }
+
+  size_t length = size_t(RNA_property_string_length(ptr, prop));
+  std::string string_ret{};
+  string_ret.reserve(length + 1);
+
+  if (sprop->get) {
+    sprop->get(ptr, string_ret.data());
+  }
+  else { /* if (sprop->get_ex) */
+    sprop->get_ex(ptr, prop, string_ret.data());
+  }
+
+  return string_ret;
 }
 
 void RNA_property_string_get(PointerRNA *ptr, PropertyRNA *prop, char *value)
@@ -6718,7 +6751,7 @@ bool RNA_path_resolved_create(PointerRNA *ptr,
   return false;
 }
 
-static char rna_struct_state_owner[64];
+static char rna_struct_state_owner[128];
 void RNA_struct_state_owner_set(const char *name)
 {
   if (name) {

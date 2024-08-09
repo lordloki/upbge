@@ -16,7 +16,7 @@ void VKShaderInterface::init(const shader::ShaderCreateInfo &info)
 {
   static char PUSH_CONSTANTS_FALLBACK_NAME[] = "push_constants_fallback";
   static size_t PUSH_CONSTANTS_FALLBACK_NAME_LEN = strlen(PUSH_CONSTANTS_FALLBACK_NAME);
-  static char SUBPASS_FALLBACK_NAME[] = "gpu_sybpass_img_0";
+  static char SUBPASS_FALLBACK_NAME[] = "gpu_subpass_img_0";
   static size_t SUBPASS_FALLBACK_NAME_LEN = strlen(SUBPASS_FALLBACK_NAME);
 
   using namespace blender::gpu::shader;
@@ -30,6 +30,7 @@ void VKShaderInterface::init(const shader::ShaderCreateInfo &info)
   Vector<ShaderCreateInfo::Resource> all_resources;
   all_resources.extend(info.pass_resources_);
   all_resources.extend(info.batch_resources_);
+  all_resources.extend(info.geometry_resources_);
 
   for (ShaderCreateInfo::Resource &res : all_resources) {
     switch (res.bind_type) {
@@ -46,7 +47,7 @@ void VKShaderInterface::init(const shader::ShaderCreateInfo &info)
     }
   }
 
-  /* Subpass inputs are read as samplers.
+  /* Sub-pass inputs are read as samplers.
    * In future this can change depending on extensions that will be supported. */
   uniform_len_ += info.subpass_inputs_.size();
 
@@ -113,7 +114,7 @@ void VKShaderInterface::init(const shader::ShaderCreateInfo &info)
     }
     else if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
       copy_input_name(input, res.image.name, name_buffer_, name_buffer_offset);
-      input->location = input->binding = res.slot + image_offset;
+      input->location = input->binding = res.slot + BIND_SPACE_IMAGE_OFFSET;
       input++;
     }
   }
@@ -133,6 +134,15 @@ void VKShaderInterface::init(const shader::ShaderCreateInfo &info)
       copy_input_name(input, res.storagebuf.name, name_buffer_, name_buffer_offset);
       input->location = input->binding = res.slot;
       input++;
+    }
+  }
+
+  for (const ShaderCreateInfo::Resource &res : info.geometry_resources_) {
+    if (res.bind_type == ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER) {
+      ssbo_attr_mask_ |= (1 << res.slot);
+    }
+    else {
+      BLI_assert_msg(0, "Resource type is not supported for Geometry frequency");
     }
   }
 
@@ -395,7 +405,8 @@ const ShaderInput *VKShaderInterface::shader_input_get(
       /* Not really nice, but the binding namespace between OpenGL and Vulkan don't match. To fix
        * this we need to check if one of both cases return a binding.
        */
-      return texture_get((binding >= image_offset) ? binding : binding + image_offset);
+      return texture_get((binding >= BIND_SPACE_IMAGE_OFFSET) ? binding :
+                                                                binding + BIND_SPACE_IMAGE_OFFSET);
     case shader::ShaderCreateInfo::Resource::BindType::SAMPLER:
       return texture_get(binding);
     case shader::ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER:

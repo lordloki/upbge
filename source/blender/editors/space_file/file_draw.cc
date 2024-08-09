@@ -47,7 +47,7 @@
 #include "DNA_windowmanager_types.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_fileselect.hh"
 #include "ED_screen.hh"
@@ -127,7 +127,7 @@ static FileTooltipData *file_tooltip_data_create(const SpaceFile *sfile, const F
   return data;
 }
 
-static void file_draw_tooltip_custom_func(bContext * /*C*/, uiTooltipData *tip, void *argN)
+static void file_draw_tooltip_custom_func(bContext & /*C*/, uiTooltipData &tip, void *argN)
 {
   FileTooltipData *file_data = static_cast<FileTooltipData *>(argN);
   const SpaceFile *sfile = file_data->sfile;
@@ -643,14 +643,15 @@ static void file_draw_preview(const FileList *files,
     /* Don't show outer document image if loading - too flashy. */
     if (is_icon) {
       /* Draw large folder or document icon. */
-      const int icon = (file->typeflag & FILE_TYPE_DIR) ? ICON_FILE_FOLDER_LARGE : ICON_FILE_LARGE;
+      const int icon_large = (file->typeflag & FILE_TYPE_DIR) ? ICON_FILE_FOLDER_LARGE :
+                                                                ICON_FILE_LARGE;
       uchar icon_col[4];
       rgba_float_to_uchar(icon_col, document_img_col);
       float icon_x = float(xco) + (file->typeflag & FILE_TYPE_DIR ? 0.0f : ex * -0.142f);
       float icon_y = float(yco) + (file->typeflag & FILE_TYPE_DIR ? ex * -0.11f : 0.0f);
       UI_icon_draw_ex(icon_x,
                       icon_y,
-                      icon,
+                      icon_large,
                       icon_aspect / 4.0f / UI_SCALE_FAC,
                       document_img_col[3],
                       0.0f,
@@ -707,23 +708,12 @@ static void file_draw_preview(const FileList *files,
 
   if (is_link || is_offline) {
     /* Icon at bottom to indicate it is a shortcut, link, alias, or offline. */
-    float icon_x, icon_y;
-    icon_x = xco + (2.0f * UI_SCALE_FAC);
-    icon_y = yco + (2.0f * UI_SCALE_FAC);
     const int arrow = is_link ? ICON_LOOP_FORWARDS : ICON_INTERNET;
     if (!is_icon) {
       /* At very bottom-left if preview style. */
-      const uchar dark[4] = {0, 0, 0, 255};
       const uchar light[4] = {255, 255, 255, 255};
-      UI_icon_draw_ex(icon_x + 1,
-                      icon_y - 1,
-                      arrow,
-                      1.0f / UI_SCALE_FAC,
-                      0.2f,
-                      0.0f,
-                      dark,
-                      false,
-                      UI_NO_ICON_OVERLAY_TEXT);
+      const float icon_x = float(xco) + (2.0f * UI_SCALE_FAC);
+      const float icon_y = float(yco) + (2.0f * UI_SCALE_FAC);
       UI_icon_draw_ex(icon_x,
                       icon_y,
                       arrow,
@@ -731,15 +721,15 @@ static void file_draw_preview(const FileList *files,
                       0.6f,
                       0.0f,
                       light,
-                      false,
+                      true,
                       UI_NO_ICON_OVERLAY_TEXT);
     }
     else {
       /* Link to folder or non-previewed file. */
       uchar icon_color[4];
       UI_GetThemeColor4ubv(TH_BACK, icon_color);
-      icon_x = xco + ((file->typeflag & FILE_TYPE_DIR) ? 0.14f : 0.23f) * scaledx;
-      icon_y = yco + ((file->typeflag & FILE_TYPE_DIR) ? 0.24f : 0.14f) * scaledy;
+      const float icon_x = xco + ((file->typeflag & FILE_TYPE_DIR) ? 0.14f : 0.23f) * scaledx;
+      const float icon_y = yco + ((file->typeflag & FILE_TYPE_DIR) ? 0.24f : 0.14f) * scaledy;
       UI_icon_draw_ex(icon_x,
                       icon_y,
                       arrow,
@@ -755,20 +745,9 @@ static void file_draw_preview(const FileList *files,
            ((!is_icon && !(file->typeflag & FILE_TYPE_FTFONT)) || is_loading))
   {
     /* Smaller, fainter icon at bottom-left for preview image thumbnail, but not for fonts. */
-    float icon_x, icon_y;
-    const uchar dark[4] = {0, 0, 0, 255};
     const uchar light[4] = {255, 255, 255, 255};
-    icon_x = xco + (2.0f * UI_SCALE_FAC);
-    icon_y = yco + (2.0f * UI_SCALE_FAC);
-    UI_icon_draw_ex(icon_x + 1,
-                    icon_y - 1,
-                    icon,
-                    1.0f / UI_SCALE_FAC,
-                    0.2f,
-                    0.0f,
-                    dark,
-                    false,
-                    UI_NO_ICON_OVERLAY_TEXT);
+    const float icon_x = float(tile_draw_rect->xmin) + (3.0f * UI_SCALE_FAC);
+    const float icon_y = float(tile_draw_rect->ymin) + (17.0f * UI_SCALE_FAC);
     UI_icon_draw_ex(icon_x,
                     icon_y,
                     icon,
@@ -776,7 +755,7 @@ static void file_draw_preview(const FileList *files,
                     0.6f,
                     0.0f,
                     light,
-                    false,
+                    true,
                     UI_NO_ICON_OVERLAY_TEXT);
   }
 
@@ -786,8 +765,8 @@ static void file_draw_preview(const FileList *files,
      * current file (from current #Main in fact). */
     float icon_x, icon_y;
     const uchar light[4] = {255, 255, 255, 255};
-    icon_x = xco + ex - UI_UNIT_X;
-    icon_y = yco + ey - UI_UNIT_Y;
+    icon_x = float(tile_draw_rect->xmax) - (16.0f * UI_SCALE_FAC);
+    icon_y = float(tile_draw_rect->ymax) - (20.0f * UI_SCALE_FAC);
     UI_icon_draw_ex(icon_x,
                     icon_y,
                     ICON_CURRENT_FILE,
@@ -795,7 +774,7 @@ static void file_draw_preview(const FileList *files,
                     0.6f,
                     0.0f,
                     light,
-                    false,
+                    true,
                     UI_NO_ICON_OVERLAY_TEXT);
   }
 
@@ -1407,10 +1386,10 @@ void file_draw_list(const bContext *C, ARegion *region)
 
     const bool is_filtered = params->filter_search[0] != '\0';
 
-    uchar text_col[4];
-    UI_GetThemeColor4ubv(TH_TEXT, text_col);
+    uchar text_col_mod[4];
+    copy_v4_v4_uchar(text_col_mod, text_col);
     if (!is_filtered) {
-      text_col[3] /= 2;
+      text_col_mod[3] /= 2;
     }
 
     const char *message = [&]() {
@@ -1427,7 +1406,7 @@ void file_draw_list(const bContext *C, ARegion *region)
                              tile_draw_rect.xmin + UI_UNIT_X,
                              tile_draw_rect.ymax - UI_UNIT_Y,
                              message,
-                             text_col);
+                             text_col_mod);
   }
 
   BLF_batch_draw_end();

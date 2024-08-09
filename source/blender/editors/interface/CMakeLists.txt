@@ -4,8 +4,8 @@
 
 set(INC
   .
-  ../include
   ../asset
+  ../include
   ../../asset_system
   ../../blenkernel
   ../../blenloader
@@ -21,7 +21,7 @@ set(INC
   ../../windowmanager
   ../../../../intern/ghost
   ../../bmesh
-  # RNA_prototypes.h
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -126,9 +126,13 @@ if(WITH_INPUT_IME)
   add_definitions(-DWITH_INPUT_IME)
 endif()
 
+if(WITH_EXPERIMENTAL_FEATURES)
+  add_definitions(-DWITH_ANIM_BAKLAVA)
+endif()
+
 blender_add_lib(bf_editor_interface "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_editor_interface bf_rna)
 
 if(WITH_GTESTS)

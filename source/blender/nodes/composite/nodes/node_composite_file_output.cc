@@ -24,6 +24,7 @@
 #include "DNA_scene_types.h"
 
 #include "BKE_context.hh"
+#include "BKE_cryptomatte.hh"
 #include "BKE_image.h"
 #include "BKE_image_format.h"
 #include "BKE_main.hh"
@@ -31,7 +32,7 @@
 #include "BKE_scene.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
@@ -164,6 +165,8 @@ bNodeSocket *ntreeCompositOutputFileAddSocket(bNodeTree *ntree,
   else {
     BKE_image_format_init(&sockdata->format, false);
   }
+  BKE_image_format_update_color_space_for_type(&sockdata->format);
+
   /* use node data format by default */
   sockdata->use_node_format = true;
   sockdata->save_as_render = true;
@@ -219,6 +222,7 @@ static void init_output_file(const bContext *C, PointerRNA *ptr)
   bNodeTree *ntree = (bNodeTree *)ptr->owner_id;
   bNode *node = (bNode *)ptr->data;
   NodeImageMultiFile *nimf = MEM_cnew<NodeImageMultiFile>(__func__);
+  nimf->save_as_render = true;
   ImageFormatData *format = nullptr;
   node->storage = nimf;
 
@@ -237,6 +241,7 @@ static void init_output_file(const bContext *C, PointerRNA *ptr)
   else {
     BKE_image_format_init(&nimf->format, false);
   }
+  BKE_image_format_update_color_space_for_type(&nimf->format);
 
   /* add one socket by default */
   ntreeCompositOutputFileAddSocket(ntree, node, "Image", format);
@@ -308,16 +313,6 @@ static void update_output_file(bNodeTree *ntree, bNode *node)
   }
 }
 
-static void node_gather_link_searches(GatherLinkSearchOpParams &params)
-{
-  if (params.in_out() == SOCK_IN) {
-    params.add_item(IFACE_("Image"), [](LinkSearchOpParams &params) {
-      bNode &node = params.add_node("CompositorNodeOutputFile");
-      params.update_and_connect_available_socket(node, "Image");
-    });
-  }
-}
-
 static void node_composit_buts_file_output(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   PointerRNA imfptr = RNA_pointer_get(ptr, "format");
@@ -339,11 +334,27 @@ static void node_composit_buts_file_output_ex(uiLayout *layout, bContext *C, Poi
   PointerRNA active_input_ptr, op_ptr;
   uiLayout *row, *col;
   const bool multilayer = RNA_enum_get(&imfptr, "file_format") == R_IMF_IMTYPE_MULTILAYER;
-  const bool is_exr = RNA_enum_get(&imfptr, "file_format") == R_IMF_IMTYPE_OPENEXR;
   const bool is_multiview = (scene->r.scemode & R_MULTIVIEW) != 0;
 
   node_composit_buts_file_output(layout, C, ptr);
-  uiTemplateImageSettings(layout, &imfptr, true);
+
+  {
+    uiLayout *column = uiLayoutColumn(layout, true);
+    uiLayoutSetPropSep(column, true);
+    uiLayoutSetPropDecorate(column, false);
+    uiItemR(column, ptr, "save_as_render", UI_ITEM_R_SPLIT_EMPTY_NAME, nullptr, ICON_NONE);
+  }
+  const bool save_as_render = RNA_boolean_get(ptr, "save_as_render");
+  uiTemplateImageSettings(layout, &imfptr, save_as_render);
+
+  if (!save_as_render) {
+    uiLayout *col = uiLayoutColumn(layout, true);
+    uiLayoutSetPropSep(col, true);
+    uiLayoutSetPropDecorate(col, false);
+
+    PointerRNA linear_settings_ptr = RNA_pointer_get(&imfptr, "linear_colorspace_settings");
+    uiItemR(col, &linear_settings_ptr, "name", UI_ITEM_NONE, IFACE_("Color Space"), ICON_NONE);
+  }
 
   /* disable stereo output for multilayer, too much work for something that no one will use */
   /* if someone asks for that we can implement it */
@@ -451,23 +462,35 @@ static void node_composit_buts_file_output_ex(uiLayout *layout, bContext *C, Poi
               nullptr,
               ICON_NONE);
 
-      const bool is_socket_exr = RNA_enum_get(&imfptr, "file_format") == R_IMF_IMTYPE_OPENEXR;
       const bool use_node_format = RNA_boolean_get(&active_input_ptr, "use_node_format");
 
-      if ((!is_exr && use_node_format) || (!is_socket_exr && !use_node_format)) {
-        uiItemR(col,
-                &active_input_ptr,
-                "save_as_render",
-                UI_ITEM_R_SPLIT_EMPTY_NAME,
-                nullptr,
-                ICON_NONE);
-      }
-
       if (!use_node_format) {
+        {
+          uiLayout *column = uiLayoutColumn(layout, true);
+          uiLayoutSetPropSep(column, true);
+          uiLayoutSetPropDecorate(column, false);
+          uiItemR(column,
+                  &active_input_ptr,
+                  "save_as_render",
+                  UI_ITEM_R_SPLIT_EMPTY_NAME,
+                  nullptr,
+                  ICON_NONE);
+        }
+
         const bool use_color_management = RNA_boolean_get(&active_input_ptr, "save_as_render");
 
         col = uiLayoutColumn(layout, false);
         uiTemplateImageSettings(col, &imfptr, use_color_management);
+
+        if (!use_color_management) {
+          uiLayout *col = uiLayoutColumn(layout, true);
+          uiLayoutSetPropSep(col, true);
+          uiLayoutSetPropDecorate(col, false);
+
+          PointerRNA linear_settings_ptr = RNA_pointer_get(&imfptr, "linear_colorspace_settings");
+          uiItemR(
+              col, &linear_settings_ptr, "name", UI_ITEM_NONE, IFACE_("Color Space"), ICON_NONE);
+        }
 
         if (is_multiview) {
           col = uiLayoutColumn(layout, false);
@@ -525,10 +548,12 @@ class FileOutputOperation : public NodeOperation {
        * be stored in views. An exception to this is stereo images, which needs to have the same
        * structure as non-EXR images. */
       const auto &format = socket.use_node_format ? node_storage(bnode()).format : socket.format;
+      const bool save_as_render = socket.use_node_format ? node_storage(bnode()).save_as_render :
+                                                           socket.save_as_render;
       const bool is_exr = format.imtype == R_IMF_IMTYPE_OPENEXR;
       const int views_count = BKE_scene_multiview_num_views_get(&context().get_render_data());
       if (is_exr && !(format.views_format == R_IMF_VIEWS_STEREO_3D && views_count == 2)) {
-        execute_single_layer_multi_view_exr(result, format, base_path);
+        execute_single_layer_multi_view_exr(result, format, base_path, socket.layer);
         continue;
       }
 
@@ -537,9 +562,11 @@ class FileOutputOperation : public NodeOperation {
 
       const int2 size = result.domain().size;
       FileOutput &file_output = context().render_context()->get_file_output(
-          image_path, format, size, socket.save_as_render);
+          image_path, format, size, save_as_render);
 
       add_view_for_result(file_output, result, context().get_view_name().data());
+
+      add_meta_data_for_result(file_output, result, socket.layer);
     }
   }
 
@@ -549,7 +576,8 @@ class FileOutputOperation : public NodeOperation {
 
   void execute_single_layer_multi_view_exr(const Result &result,
                                            const ImageFormatData &format,
-                                           const char *base_path)
+                                           const char *base_path,
+                                           const char *layer_name)
   {
     const bool has_views = format.views_format != R_IMF_VIEWS_INDIVIDUAL;
 
@@ -568,6 +596,8 @@ class FileOutputOperation : public NodeOperation {
     const char *view_name = has_views ? context().get_view_name().data() : "";
     file_output.add_view(view_name);
     add_pass_for_result(file_output, result, "", view_name);
+
+    add_meta_data_for_result(file_output, result, layer_name);
   }
 
   /* -----------------------
@@ -604,6 +634,8 @@ class FileOutputOperation : public NodeOperation {
 
       const char *pass_name = (static_cast<NodeImageMultiFileSocket *>(input->storage))->layer;
       add_pass_for_result(file_output, input_result, pass_name, pass_view);
+
+      add_meta_data_for_result(file_output, input_result, pass_name);
     }
   }
 
@@ -622,10 +654,23 @@ class FileOutputOperation : public NodeOperation {
     const int2 size = result.domain().size;
     switch (result.type()) {
       case ResultType::Color:
-        file_output.add_pass(pass_name, view_name, "RGBA", buffer);
+        /* Use lowercase rgba for Cryptomatte layers because the EXR internal compression rules
+         * specify that all uppercase RGBA channels will be compressed, and Cryptomatte should not
+         * be compressed. */
+        if (result.meta_data.is_cryptomatte_layer()) {
+          file_output.add_pass(pass_name, view_name, "rgba", buffer);
+        }
+        else {
+          file_output.add_pass(pass_name, view_name, "RGBA", buffer);
+        }
         break;
       case ResultType::Vector:
-        file_output.add_pass(pass_name, view_name, "XYZ", float4_to_float3_image(size, buffer));
+        if (result.meta_data.is_4d_vector) {
+          file_output.add_pass(pass_name, view_name, "XYZW", buffer);
+        }
+        else {
+          file_output.add_pass(pass_name, view_name, "XYZ", float4_to_float3_image(size, buffer));
+        }
         break;
       case ResultType::Float:
         file_output.add_pass(pass_name, view_name, "V", buffer);
@@ -684,6 +729,37 @@ class FileOutputOperation : public NodeOperation {
 
     MEM_freeN(float4_image);
     return float3_image;
+  }
+
+  /* Add Cryptomatte meta data to the file if they exist for the given result of the given layer
+   * name. We do not write any other meta data for now. */
+  void add_meta_data_for_result(FileOutput &file_output, const Result &result, const char *name)
+  {
+    StringRef cryptomatte_layer_name = bke::cryptomatte::BKE_cryptomatte_extract_layer_name(name);
+
+    if (result.meta_data.is_cryptomatte_layer()) {
+      file_output.add_meta_data(
+          bke::cryptomatte::BKE_cryptomatte_meta_data_key(cryptomatte_layer_name, "name"),
+          cryptomatte_layer_name);
+    }
+
+    if (!result.meta_data.cryptomatte.manifest.empty()) {
+      file_output.add_meta_data(
+          bke::cryptomatte::BKE_cryptomatte_meta_data_key(cryptomatte_layer_name, "manifest"),
+          result.meta_data.cryptomatte.manifest);
+    }
+
+    if (!result.meta_data.cryptomatte.hash.empty()) {
+      file_output.add_meta_data(
+          bke::cryptomatte::BKE_cryptomatte_meta_data_key(cryptomatte_layer_name, "hash"),
+          result.meta_data.cryptomatte.hash);
+    }
+
+    if (!result.meta_data.cryptomatte.conversion.empty()) {
+      file_output.add_meta_data(
+          bke::cryptomatte::BKE_cryptomatte_meta_data_key(cryptomatte_layer_name, "conversion"),
+          result.meta_data.cryptomatte.conversion);
+    }
   }
 
   /* Get the base path of the image to be saved, based on the base path of the node. The base name
@@ -784,7 +860,6 @@ void register_node_type_cmp_output_file()
   blender::bke::node_type_storage(
       &ntype, "NodeImageMultiFile", file_ns::free_output_file, file_ns::copy_output_file);
   ntype.updatefunc = file_ns::update_output_file;
-  ntype.gather_link_search_ops = file_ns::node_gather_link_searches;
   ntype.get_compositor_operation = file_ns::get_compositor_operation;
 
   blender::bke::nodeRegisterType(&ntype);

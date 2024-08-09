@@ -15,6 +15,7 @@
 #include "BKE_instances.hh"
 
 #include "spreadsheet_column_values.hh"
+#include "spreadsheet_data_source_geometry.hh"
 #include "spreadsheet_layout.hh"
 
 #include "DNA_collection_types.h"
@@ -203,61 +204,21 @@ class SpreadsheetLayoutDrawer : public SpreadsheetDrawer {
     }
     else if (data.type().is<bke::InstanceReference>()) {
       const bke::InstanceReference value = data.get<bke::InstanceReference>(real_index);
-      switch (value.type()) {
-        case bke::InstanceReference::Type::Object: {
-          const Object &object = value.object();
-          uiDefIconTextBut(params.block,
-                           UI_BTYPE_LABEL,
-                           0,
-                           ICON_OBJECT_DATA,
-                           object.id.name + 2,
-                           params.xmin,
-                           params.ymin,
-                           params.width,
-                           params.height,
-                           nullptr,
-                           0,
-                           0,
-                           nullptr);
-          break;
-        }
-        case bke::InstanceReference::Type::Collection: {
-          Collection &collection = value.collection();
-          uiDefIconTextBut(params.block,
-                           UI_BTYPE_LABEL,
-                           0,
-                           ICON_OUTLINER_COLLECTION,
-                           collection.id.name + 2,
-                           params.xmin,
-                           params.ymin,
-                           params.width,
-                           params.height,
-                           nullptr,
-                           0,
-                           0,
-                           nullptr);
-          break;
-        }
-        case bke::InstanceReference::Type::GeometrySet: {
-          uiDefIconTextBut(params.block,
-                           UI_BTYPE_LABEL,
-                           0,
-                           ICON_MESH_DATA,
-                           "Geometry",
-                           params.xmin,
-                           params.ymin,
-                           params.width,
-                           params.height,
-                           nullptr,
-                           0,
-                           0,
-                           nullptr);
-          break;
-        }
-        case bke::InstanceReference::Type::None: {
-          break;
-        }
-      }
+      const StringRefNull name = value.name().is_empty() ? "Geometry" : value.name();
+      const int icon = get_instance_reference_icon(value);
+      uiDefIconTextBut(params.block,
+                       UI_BTYPE_LABEL,
+                       0,
+                       icon,
+                       name.c_str(),
+                       params.xmin,
+                       params.ymin,
+                       params.width,
+                       params.height,
+                       nullptr,
+                       0,
+                       0,
+                       nullptr);
     }
     else if (data.type().is<std::string>()) {
       uiDefIconTextBut(params.block,
@@ -405,7 +366,7 @@ class SpreadsheetLayoutDrawer : public SpreadsheetDrawer {
           ss << value[3];
           return ss.str();
         },
-        MEM_new<float4x4>(__func__, value),
+        MEM_cnew<float4x4>(__func__, value),
         MEM_freeN);
   }
 

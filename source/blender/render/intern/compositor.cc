@@ -13,6 +13,7 @@
 
 #include "DNA_ID.h"
 
+#include "BKE_cryptomatte.hh"
 #include "BKE_global.hh"
 #include "BKE_image.h"
 #include "BKE_node.hh"
@@ -192,9 +193,19 @@ class Context : public realtime_compositor::Context {
     return *input_data_.node_tree;
   }
 
+  bool use_gpu() const override
+  {
+    return this->get_render_data().compositor_device == SCE_COMPOSITOR_DEVICE_GPU;
+  }
+
   bool use_file_output() const override
   {
     return this->render_context() != nullptr;
+  }
+
+  bool should_compute_node_previews() const override
+  {
+    return this->render_context() == nullptr;
   }
 
   bool use_composite_output() const override
@@ -326,7 +337,7 @@ class Context : public realtime_compositor::Context {
     return input_texture;
   }
 
-  StringRef get_view_name() override
+  StringRef get_view_name() const override
   {
     return input_data_.view_name;
   }
@@ -366,6 +377,86 @@ class Context : public realtime_compositor::Context {
     IDRecalcFlag recalc_flag = IDRecalcFlag(draw_data->recalc);
     draw_data->recalc = IDRecalcFlag(0);
     return recalc_flag;
+  }
+
+  void populate_meta_data_for_pass(const Scene *scene,
+                                   int view_layer_id,
+                                   const char *pass_name,
+                                   realtime_compositor::MetaData &meta_data) const override
+  {
+    ViewLayer *view_layer = static_cast<ViewLayer *>(
+        BLI_findlink(&scene->view_layers, view_layer_id));
+    if (!view_layer) {
+      return;
+    }
+
+    Render *render = RE_GetSceneRender(scene);
+    if (!render) {
+      return;
+    }
+
+    RenderResult *render_result = RE_AcquireResultRead(render);
+    if (!render_result || !render_result->stamp_data) {
+      RE_ReleaseResult(render);
+      return;
+    }
+
+    /* We assume the given pass is a Cryptomatte pass and retrieve its layer name. If it wasn't a
+     * Cryptomatte pass, the checks below will fail anyways. */
+    StringRef cryptomatte_layer_name = bke::cryptomatte::BKE_cryptomatte_extract_layer_name(
+        std::string(view_layer->name) + "." + pass_name);
+
+    struct StampCallbackData {
+      std::string cryptomatte_layer_name;
+      realtime_compositor::MetaData *meta_data;
+    };
+
+    /* Go over the stamp data and add any Cryptomatte related meta data. */
+    StampCallbackData callback_data = {cryptomatte_layer_name, &meta_data};
+    BKE_stamp_info_callback(
+        &callback_data,
+        render_result->stamp_data,
+        [](void *user_data, const char *key, char *value, int /* value_length */) {
+          StampCallbackData *data = static_cast<StampCallbackData *>(user_data);
+
+          const std::string manifest_key = bke::cryptomatte::BKE_cryptomatte_meta_data_key(
+              data->cryptomatte_layer_name, "manifest");
+          if (key == manifest_key) {
+            data->meta_data->cryptomatte.manifest = value;
+          }
+
+          const std::string hash_key = bke::cryptomatte::BKE_cryptomatte_meta_data_key(
+              data->cryptomatte_layer_name, "hash");
+          if (key == hash_key) {
+            data->meta_data->cryptomatte.hash = value;
+          }
+
+          const std::string conversion_key = bke::cryptomatte::BKE_cryptomatte_meta_data_key(
+              data->cryptomatte_layer_name, "conversion");
+          if (key == conversion_key) {
+            data->meta_data->cryptomatte.conversion = value;
+          }
+        },
+        false);
+
+    RenderLayer *render_layer = RE_GetRenderLayer(render_result, view_layer->name);
+    if (!render_layer) {
+      RE_ReleaseResult(render);
+      return;
+    }
+
+    RenderPass *render_pass = RE_pass_find_by_name(
+        render_layer, pass_name, this->get_view_name().data());
+    if (!render_pass) {
+      RE_ReleaseResult(render);
+      return;
+    }
+
+    if (StringRef(render_pass->chan_id) == "XYZW") {
+      meta_data.is_4d_vector = true;
+    }
+
+    RE_ReleaseResult(render);
   }
 
   void output_to_render_result()
@@ -501,45 +592,52 @@ class RealtimeCompositor {
 
   ~RealtimeCompositor()
   {
-    /* Free resources with GPU context enabled. Cleanup may happen from the
-     * main thread, and we must use the main context there. */
-    if (BLI_thread_is_main()) {
-      DRW_gpu_context_enable();
-    }
-    else {
-      DRW_render_context_enable(&render_);
+    const bool use_gpu = context_->use_gpu();
+    if (use_gpu) {
+      /* Free resources with GPU context enabled. Cleanup may happen from the
+       * main thread, and we must use the main context there. */
+      if (BLI_thread_is_main()) {
+        DRW_gpu_context_enable();
+      }
+      else {
+        DRW_render_context_enable(&render_);
+      }
     }
 
     context_.reset();
     texture_pool_.reset();
 
-    if (BLI_thread_is_main()) {
-      DRW_gpu_context_disable();
-    }
-    else {
-      DRW_render_context_disable(&render_);
+    if (use_gpu) {
+      if (BLI_thread_is_main()) {
+        DRW_gpu_context_disable();
+      }
+      else {
+        DRW_render_context_disable(&render_);
+      }
     }
   }
 
   /* Evaluate the compositor and output to the scene render result. */
   void execute(const ContextInputData &input_data)
   {
-    /* For main thread rendering in background mode, blocking rendering, or when we do not have a
-     * render system GPU context, use the DRW context directly, while for threaded rendering when
-     * we have a render system GPU context, use the render's system GPU context to avoid blocking
-     * with the global DST. */
-    void *re_system_gpu_context = RE_system_gpu_context_get(&render_);
-    if (BLI_thread_is_main() || re_system_gpu_context == nullptr) {
-      DRW_gpu_context_enable();
-    }
-    else {
+    if (context_->use_gpu()) {
+      /* For main thread rendering in background mode, blocking rendering, or when we do not have a
+       * render system GPU context, use the DRW context directly, while for threaded rendering when
+       * we have a render system GPU context, use the render's system GPU context to avoid blocking
+       * with the global DST. */
       void *re_system_gpu_context = RE_system_gpu_context_get(&render_);
-      WM_system_gpu_context_activate(re_system_gpu_context);
+      if (BLI_thread_is_main() || re_system_gpu_context == nullptr) {
+        DRW_gpu_context_enable();
+      }
+      else {
+        void *re_system_gpu_context = RE_system_gpu_context_get(&render_);
+        WM_system_gpu_context_activate(re_system_gpu_context);
 
-      void *re_blender_gpu_context = RE_blender_gpu_context_ensure(&render_);
+        void *re_blender_gpu_context = RE_blender_gpu_context_ensure(&render_);
 
-      GPU_render_begin();
-      GPU_context_active_set(static_cast<GPUContext *>(re_blender_gpu_context));
+        GPU_render_begin();
+        GPU_context_active_set(static_cast<GPUContext *>(re_blender_gpu_context));
+      }
     }
 
     context_->update_input_data(input_data);
@@ -555,14 +653,17 @@ class RealtimeCompositor {
     context_->viewer_output_to_viewer_image();
     texture_pool_->free_unused_and_reset();
 
-    if (BLI_thread_is_main() || re_system_gpu_context == nullptr) {
-      DRW_gpu_context_disable();
-    }
-    else {
-      GPU_render_end();
-      GPU_context_active_set(nullptr);
+    if (context_->use_gpu()) {
       void *re_system_gpu_context = RE_system_gpu_context_get(&render_);
-      WM_system_gpu_context_release(re_system_gpu_context);
+      if (BLI_thread_is_main() || re_system_gpu_context == nullptr) {
+        DRW_gpu_context_disable();
+      }
+      else {
+        GPU_render_end();
+        GPU_context_active_set(nullptr);
+        void *re_system_gpu_context = RE_system_gpu_context_get(&render_);
+        WM_system_gpu_context_release(re_system_gpu_context);
+      }
     }
   }
 };
@@ -576,25 +677,25 @@ void Render::compositor_execute(const Scene &scene,
                                 blender::realtime_compositor::RenderContext *render_context,
                                 blender::realtime_compositor::Profiler *profiler)
 {
-  std::unique_lock lock(gpu_compositor_mutex);
+  std::unique_lock lock(this->compositor_mutex);
 
   blender::render::ContextInputData input_data(
       scene, render_data, node_tree, view_name, render_context, profiler);
 
-  if (gpu_compositor == nullptr) {
-    gpu_compositor = new blender::render::RealtimeCompositor(*this, input_data);
+  if (this->compositor == nullptr) {
+    this->compositor = new blender::render::RealtimeCompositor(*this, input_data);
   }
 
-  gpu_compositor->execute(input_data);
+  this->compositor->execute(input_data);
 }
 
 void Render::compositor_free()
 {
-  std::unique_lock lock(gpu_compositor_mutex);
+  std::unique_lock lock(this->compositor_mutex);
 
-  if (gpu_compositor != nullptr) {
-    delete gpu_compositor;
-    gpu_compositor = nullptr;
+  if (this->compositor != nullptr) {
+    delete this->compositor;
+    this->compositor = nullptr;
   }
 }
 

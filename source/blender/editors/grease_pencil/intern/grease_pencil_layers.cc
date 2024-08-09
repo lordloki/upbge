@@ -755,7 +755,7 @@ const EnumPropertyItem enum_layergroup_color_items[] = {
     {LAYERGROUP_COLOR_06, "COLOR6", ICON_LAYERGROUP_COLOR_06, "Color tag 6", ""},
     {LAYERGROUP_COLOR_07, "COLOR7", ICON_LAYERGROUP_COLOR_07, "Color tag 7", ""},
     {LAYERGROUP_COLOR_08, "COLOR8", ICON_LAYERGROUP_COLOR_08, "Color tag 8", ""},
-    {0, NULL, 0, NULL, NULL},
+    {0, nullptr, 0, nullptr, nullptr},
 };
 
 static int grease_pencil_layer_group_color_tag_exec(bContext *C, wmOperator *op)
@@ -783,6 +783,8 @@ static void GREASE_PENCIL_OT_layer_group_color_tag(wmOperatorType *ot)
 
   ot->exec = grease_pencil_layer_group_color_tag_exec;
   ot->poll = active_grease_pencil_poll;
+
+  ot->flag = OPTYPE_UNDO;
 
   ot->prop = RNA_def_enum(ot->srna, "color_tag", enum_layergroup_color_items, 0, "color tag", "");
 }

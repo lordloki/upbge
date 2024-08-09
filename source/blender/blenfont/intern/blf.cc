@@ -335,6 +335,28 @@ void BLF_character_weight(int fontid, int weight)
   }
 }
 
+int BLF_default_weight(int fontid)
+{
+  FontBLF *font = blf_get(fontid);
+  if (font) {
+    return font->metrics.weight;
+  }
+  return 400;
+}
+
+bool BLF_has_variable_weight(int fontid)
+{
+  const FontBLF *font = blf_get(fontid);
+  if (font && font->variations) {
+    for (int i = 0; i < int(font->variations->num_axis); i++) {
+      if (font->variations->axis[i].tag == BLF_VARIATION_AXIS_WEIGHT) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void BLF_aspect(int fontid, float x, float y, float z)
 {
   FontBLF *font = blf_get(fontid);
@@ -587,25 +609,38 @@ int BLF_draw_mono(int fontid, const char *str, const size_t str_len, int cwidth,
   return columns;
 }
 
-void BLF_draw_svg_icon(
-    uint icon_id, float x, float y, float size, float color[4], float outline_alpha)
+void BLF_draw_svg_icon(uint icon_id,
+                       float x,
+                       float y,
+                       float size,
+                       float color[4],
+                       float outline_alpha,
+                       bool multicolor)
 {
+#ifndef WITH_HEADLESS
   FontBLF *font = global_font[0];
   if (font) {
     /* Avoid bgl usage to corrupt BLF drawing. */
     GPU_bgl_end();
     blf_draw_gpu__start(font);
-    blf_draw_svg_icon(font, icon_id, x, y, size, color, outline_alpha);
+    blf_draw_svg_icon(font, icon_id, x, y, size, color, outline_alpha, multicolor);
     blf_draw_gpu__end(font);
   }
+#else
+  UNUSED_VARS(icon_id, x, y, size, color, outline_alpha, multicolor);
+#endif /* WITH_HEADLESS */
 }
 
 blender::Array<uchar> BLF_svg_icon_bitmap(uint icon_id, float size, int *r_width, int *r_height)
 {
+#ifndef WITH_HEADLESS
   FontBLF *font = global_font[0];
   if (font) {
     return blf_svg_icon_bitmap(font, icon_id, size, r_width, r_height);
   }
+#else
+  UNUSED_VARS(icon_id, size, r_width, r_height);
+#endif /* WITH_HEADLESS */
   return {};
 }
 

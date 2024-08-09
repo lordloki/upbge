@@ -109,12 +109,12 @@ set(OPENIMAGEIO_EXTRA_ARGS
 )
 
 if(WIN32)
-  # We don't want the SOABI tags in the final filename since it gets the debug 
+  # We don't want the SOABI tags in the final filename since it gets the debug
   # tags wrong and the final .pyd won't be found by python, pybind11 will try to
   # get the tags and dump them into PYTHON_MODULE_EXTENSION every time the current
   # python interperter doesn't match the old one, overwriting our preference.
   # To side step this behavior we set PYBIND11_PYTHON_EXECUTABLE_LAST so it'll
-  # leave the PYTHON_MODULE_EXTENSION value we set alone. 
+  # leave the PYTHON_MODULE_EXTENSION value we set alone.
   LIST(APPEND OPENIMAGEIO_EXTRA_ARGS -DPYBIND11_PYTHON_EXECUTABLE_LAST=${PYTHON_BINARY})
   if(BUILD_MODE STREQUAL Release)
      LIST(APPEND OPENIMAGEIO_EXTRA_ARGS -DPYTHON_MODULE_EXTENSION=.pyd)
@@ -228,4 +228,15 @@ if(WIN32)
       DEPENDEES install
     )
   endif()
+else()
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "idiff")
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "maketx")
+  harvest_rpath_bin(external_openimageio openimageio/bin openimageio/bin "oiiotool")
+  harvest(external_openimageio openimageio/include openimageio/include "*")
+  harvest_rpath_lib(external_openimageio openimageio/lib openimageio/lib "*${SHAREDLIBEXT}*")
+  harvest_rpath_python(external_openimageio
+    openimageio/lib/python${PYTHON_SHORT_VERSION}
+    python/lib/python${PYTHON_SHORT_VERSION}
+    "*"
+  )
 endif()

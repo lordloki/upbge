@@ -316,6 +316,7 @@ void node_deselect_all_output_sockets(bNodeTree &node_tree, const bool deselect_
 
 void node_select_paired(bNodeTree &node_tree)
 {
+  node_tree.ensure_topology_cache();
   for (const bke::bNodeZoneType *zone_type : bke::all_zone_types()) {
     for (bNode *input_node : node_tree.nodes_by_type(zone_type->input_idname)) {
       if (bNode *output_node = zone_type->get_corresponding_output(node_tree, *input_node)) {
@@ -695,6 +696,7 @@ static bool node_mouse_select(bContext *C,
   }
 
   WM_event_add_notifier(C, NC_NODE | NA_SELECTED, nullptr);
+  WM_event_add_notifier(C, NC_NODE | ND_NODE_GIZMO, nullptr);
 
   return true;
 }
@@ -1126,6 +1128,7 @@ static int node_select_all_exec(bContext *C, wmOperator *op)
   tree_draw_order_update(node_tree);
 
   WM_event_add_notifier(C, NC_NODE | NA_SELECTED, nullptr);
+  WM_event_add_notifier(C, NC_NODE | ND_NODE_GIZMO, nullptr);
   return OPERATOR_FINISHED;
 }
 

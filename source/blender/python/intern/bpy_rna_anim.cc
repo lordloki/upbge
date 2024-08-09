@@ -36,7 +36,7 @@
 #include "RNA_access.hh"
 #include "RNA_enum_types.hh"
 #include "RNA_path.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -551,8 +551,12 @@ PyObject *pyrna_struct_keyframe_delete(BPy_StructRNA *self, PyObject *args, PyOb
     }
   }
   else {
+    RNAPath rna_path = {path_full, std::nullopt, index};
+    if (index < 0) {
+      rna_path.index = std::nullopt;
+    }
     result = (blender::animrig::delete_keyframe(
-                  G.main, &reports, self->ptr.owner_id, nullptr, path_full, index, cfra) != 0);
+                  G.main, &reports, self->ptr.owner_id, rna_path, cfra) != 0);
   }
 
   MEM_freeN((void *)path_full);

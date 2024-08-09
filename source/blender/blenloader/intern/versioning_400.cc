@@ -17,6 +17,7 @@
 #include "DNA_anim_types.h"
 #include "DNA_brush_types.h"
 #include "DNA_camera_types.h"
+#include "DNA_collection_types.h"
 #include "DNA_constraint_types.h"
 #include "DNA_curve_types.h"
 #include "DNA_defaults.h"
@@ -28,6 +29,7 @@
 #include "DNA_movieclip_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_sequence_types.h"
+#include "DNA_workspace_types.h"
 #include "DNA_world_types.h"
 
 #include "DNA_defaults.h"
@@ -50,24 +52,31 @@
 #include "BKE_animsys.h"
 #include "BKE_armature.hh"
 #include "BKE_attribute.hh"
+#include "BKE_collection.hh"
 #include "BKE_colortools.hh"
+#include "BKE_context.hh"
 #include "BKE_curve.hh"
 #include "BKE_customdata.hh"
 #include "BKE_effect.h"
+#include "BKE_file_handler.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_idprop.hh"
+#include "BKE_image_format.h"
 #include "BKE_main.hh"
 #include "BKE_material.h"
 #include "BKE_mesh_legacy_convert.hh"
 #include "BKE_nla.h"
 #include "BKE_node_runtime.hh"
+#include "BKE_paint.hh"
 #include "BKE_scene.hh"
 #include "BKE_tracking.h"
 
 #include "IMB_imbuf_enums.h"
 
 #include "SEQ_iterator.hh"
+#include "SEQ_retiming.hh"
 #include "SEQ_sequencer.hh"
+#include "SEQ_time.hh"
 
 #include "ANIM_armature_iter.hh"
 #include "ANIM_bone_collections.hh"
@@ -353,12 +362,50 @@ static void versioning_eevee_material_shadow_none(Material *material)
   bNodeTree *ntree = material->nodetree;
 
   bNode *output_node = version_eevee_output_node_get(ntree, SH_NODE_OUTPUT_MATERIAL);
+  bNode *old_output_node = version_eevee_output_node_get(ntree, SH_NODE_OUTPUT_MATERIAL);
   if (output_node == nullptr) {
     return;
   }
 
-  bNodeSocket *out_sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, "Surface");
+  bNodeSocket *existing_out_sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, "Surface");
+  bNodeSocket *volume_sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, "Volume");
+  if (existing_out_sock->link == nullptr && volume_sock->link) {
+    /* Don't apply versioning to a material that only has a volumetric input as this makes the
+     * object surface opaque to the camera, hiding the volume inside. */
+    return;
+  }
 
+  if (output_node->custom1 == SHD_OUTPUT_ALL) {
+    /* We do not want to affect Cycles. So we split the output into two specific outputs. */
+    output_node->custom1 = SHD_OUTPUT_CYCLES;
+
+    bNode *new_output = blender::bke::nodeAddNode(nullptr, ntree, "ShaderNodeOutputMaterial");
+    new_output->custom1 = SHD_OUTPUT_EEVEE;
+    new_output->parent = output_node->parent;
+    new_output->locx = output_node->locx;
+    new_output->locy = output_node->locy - output_node->height - 120;
+
+    auto copy_link = [&](const char *socket_name) {
+      bNodeSocket *sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, socket_name);
+      if (sock && sock->link) {
+        bNodeLink *link = sock->link;
+        bNodeSocket *to_sock = blender::bke::nodeFindSocket(new_output, SOCK_IN, socket_name);
+        blender::bke::nodeAddLink(ntree, link->fromnode, link->fromsock, new_output, to_sock);
+      }
+    };
+
+    /* Don't copy surface as that is handled later */
+    copy_link("Volume");
+    copy_link("Displacement");
+    copy_link("Thickness");
+
+    output_node = new_output;
+  }
+
+  bNodeSocket *out_sock = blender::bke::nodeFindSocket(output_node, SOCK_IN, "Surface");
+  bNodeSocket *old_out_sock = blender::bke::nodeFindSocket(old_output_node, SOCK_IN, "Surface");
+
+  /* Add mix node for mixing between original material, and transparent BSDF for shadows */
   bNode *mix_node = blender::bke::nodeAddNode(nullptr, ntree, "ShaderNodeMixShader");
   STRNCPY(mix_node->label, "Disable Shadow");
   mix_node->flag |= NODE_HIDDEN;
@@ -369,13 +416,16 @@ static void versioning_eevee_material_shadow_none(Material *material)
   bNodeSocket *mix_in_1 = static_cast<bNodeSocket *>(BLI_findlink(&mix_node->inputs, 1));
   bNodeSocket *mix_in_2 = static_cast<bNodeSocket *>(BLI_findlink(&mix_node->inputs, 2));
   bNodeSocket *mix_out = static_cast<bNodeSocket *>(BLI_findlink(&mix_node->outputs, 0));
-  if (out_sock->link != nullptr) {
+  if (old_out_sock->link != nullptr) {
     blender::bke::nodeAddLink(
-        ntree, out_sock->link->fromnode, out_sock->link->fromsock, mix_node, mix_in_1);
-    blender::bke::nodeRemLink(ntree, out_sock->link);
+        ntree, old_out_sock->link->fromnode, old_out_sock->link->fromsock, mix_node, mix_in_1);
+    if (out_sock->link != nullptr) {
+      blender::bke::nodeRemLink(ntree, out_sock->link);
+    }
   }
   blender::bke::nodeAddLink(ntree, mix_node, mix_out, output_node, out_sock);
 
+  /* Add light path node to control shadow visibility */
   bNode *lp_node = blender::bke::nodeAddNode(nullptr, ntree, "ShaderNodeLightPath");
   lp_node->flag |= NODE_HIDDEN;
   lp_node->parent = output_node->parent;
@@ -390,6 +440,7 @@ static void versioning_eevee_material_shadow_none(Material *material)
     }
   }
 
+  /* Add transparent BSDF to make shadows transparent. */
   bNode *bsdf_node = blender::bke::nodeAddNode(nullptr, ntree, "ShaderNodeBsdfTransparent");
   bsdf_node->flag |= NODE_HIDDEN;
   bsdf_node->parent = output_node->parent;
@@ -771,6 +822,29 @@ static void version_nla_tweakmode_incomplete(Main *bmain)
   }
 }
 
+static bool versioning_convert_strip_speed_factor(Sequence *seq, void *user_data)
+{
+  const Scene *scene = static_cast<Scene *>(user_data);
+  const float speed_factor = seq->speed_factor;
+
+  if (speed_factor == 1.0f || !SEQ_retiming_is_allowed(seq) || SEQ_retiming_keys_count(seq) > 0) {
+    return true;
+  }
+
+  SEQ_retiming_data_ensure(seq);
+  SeqRetimingKey *last_key = &SEQ_retiming_keys_get(seq)[1];
+
+  last_key->strip_frame_index = (seq->len) / speed_factor;
+
+  if (seq->type == SEQ_TYPE_SOUND_RAM) {
+    const int prev_length = seq->len - seq->startofs - seq->endofs;
+    const float left_handle = SEQ_time_left_handle_frame_get(scene, seq);
+    SEQ_time_right_handle_frame_set(scene, seq, left_handle + prev_length);
+  }
+
+  return true;
+}
+
 void do_versions_after_linking_400(FileData *fd, Main *bmain)
 {
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 9)) {
@@ -849,6 +923,15 @@ void do_versions_after_linking_400(FileData *fd, Main *bmain)
       }
     }
     FOREACH_NODETREE_END;
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 27)) {
+    LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
+      Editing *ed = SEQ_editing_get(scene);
+      if (ed != nullptr) {
+        SEQ_for_each_callback(&ed->seqbase, versioning_convert_strip_speed_factor, scene);
+      }
+    }
   }
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 34)) {
@@ -959,6 +1042,11 @@ void do_versions_after_linking_400(FileData *fd, Main *bmain)
         STRNCPY(scene->r.engine, RE_engine_id_BLENDER_EEVEE_NEXT);
       }
     }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 6)) {
+    /* Shift animation data to accommodate the new Diffuse Roughness input. */
+    version_node_socket_index_animdata(bmain, NTREE_SHADER, SH_NODE_BSDF_PRINCIPLED, 7, 1, 30);
   }
 
   /**
@@ -2373,7 +2461,7 @@ static void enable_geometry_nodes_is_modifier(Main &bmain)
         return true;
       }
       if (!group->geometry_node_asset_traits) {
-        group->geometry_node_asset_traits = MEM_new<GeometryNodeAssetTraits>(__func__);
+        group->geometry_node_asset_traits = MEM_cnew<GeometryNodeAssetTraits>(__func__);
       }
       group->geometry_node_asset_traits->flag |= GEO_NODE_ASSET_MODIFIER;
       return false;
@@ -2532,6 +2620,40 @@ static bool seq_filter_bilinear_to_auto(Sequence *seq, void * /*user_data*/)
   return true;
 }
 
+static void update_paint_modes_for_brush_assets(Main &bmain)
+{
+  /* Replace paint brushes with a reference to the default brush asset for that mode. */
+  LISTBASE_FOREACH (Scene *, scene, &bmain.scenes) {
+    BKE_paint_brushes_set_default_references(scene->toolsettings);
+  }
+
+  /* Replace persistent tool references with the new single builtin brush tool. */
+  LISTBASE_FOREACH (WorkSpace *, workspace, &bmain.workspaces) {
+    LISTBASE_FOREACH (bToolRef *, tref, &workspace->tools) {
+      if (tref->space_type != SPACE_VIEW3D) {
+        continue;
+      }
+      if (!ELEM(tref->mode,
+                CTX_MODE_SCULPT,
+                CTX_MODE_PAINT_VERTEX,
+                CTX_MODE_PAINT_WEIGHT,
+                CTX_MODE_PAINT_TEXTURE,
+                CTX_MODE_PAINT_GPENCIL_LEGACY,
+                CTX_MODE_PAINT_GREASE_PENCIL,
+                CTX_MODE_SCULPT_GPENCIL_LEGACY,
+                CTX_MODE_SCULPT_GREASE_PENCIL,
+                CTX_MODE_WEIGHT_GPENCIL_LEGACY,
+                CTX_MODE_WEIGHT_GREASE_PENCIL,
+                CTX_MODE_VERTEX_GPENCIL_LEGACY,
+                CTX_MODE_SCULPT_CURVES))
+      {
+        continue;
+      }
+      STRNCPY(tref->idname, "builtin.brush");
+    }
+  }
+}
+
 static void image_settings_avi_to_ffmpeg(Scene *scene)
 {
   if (ELEM(scene->r.im_format.imtype, R_IMF_IMTYPE_AVIRAW, R_IMF_IMTYPE_AVIJPEG)) {
@@ -2648,6 +2770,31 @@ static void add_image_editor_asset_shelf(Main &bmain)
   }
 }
 
+/**
+ * It was possible that curve attributes were initialized to 0 even if that is not allowed for some
+ * attributes.
+ */
+static void fix_built_in_curve_attribute_defaults(Main *bmain)
+{
+  LISTBASE_FOREACH (Curves *, curves, &bmain->hair_curves) {
+    const int curves_num = curves->geometry.curve_num;
+    if (int *resolutions = static_cast<int *>(CustomData_get_layer_named_for_write(
+            &curves->geometry.curve_data, CD_PROP_INT32, "resolution", curves_num)))
+    {
+      for (int &resolution : blender::MutableSpan{resolutions, curves_num}) {
+        resolution = std::max(resolution, 1);
+      }
+    }
+    if (int8_t *nurb_orders = static_cast<int8_t *>(CustomData_get_layer_named_for_write(
+            &curves->geometry.curve_data, CD_PROP_INT8, "nurbs_order", curves_num)))
+    {
+      for (int8_t &nurbs_order : blender::MutableSpan{nurb_orders, curves_num}) {
+        nurbs_order = std::max<int8_t>(nurbs_order, 1);
+      }
+    }
+  }
+}
+
 void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
 {
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 1)) {
@@ -2690,9 +2837,7 @@ void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
   }
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 7)) {
-    LISTBASE_FOREACH (Mesh *, mesh, &bmain->meshes) {
-      version_mesh_crease_generic(*bmain);
-    }
+    version_mesh_crease_generic(*bmain);
   }
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 400, 8)) {
@@ -4022,7 +4167,7 @@ void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
         IDProperty *clight = version_cycles_properties_from_ID(&light->id);
         if (clight) {
           bool value = version_cycles_property_boolean(
-              clight, "use_shadow", default_light->mode & LA_SHADOW);
+              clight, "cast_shadow", default_light->mode & LA_SHADOW);
           SET_FLAG_FROM_TEST(light->mode, value, LA_SHADOW);
         }
       }
@@ -4215,6 +4360,23 @@ void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
     }
   }
 
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 402, 64)) {
+    Scene *scene = static_cast<Scene *>(bmain->scenes.first);
+    bool is_eevee_legacy = scene && STR_ELEM(scene->r.engine, RE_engine_id_BLENDER_EEVEE);
+    if (is_eevee_legacy) {
+      /* Re-apply versioning made for EEVEE-Next in 4.1 before it got delayed. */
+      LISTBASE_FOREACH (Material *, material, &bmain->materials) {
+        bool transparent_shadows = material->blend_shadow != MA_BS_SOLID;
+        SET_FLAG_FROM_TEST(material->blend_flag, transparent_shadows, MA_BL_TRANSPARENT_SHADOW);
+      }
+      LISTBASE_FOREACH (Material *, mat, &bmain->materials) {
+        mat->surface_render_method = (mat->blend_method == MA_BM_BLEND) ?
+                                         MA_SURFACE_METHOD_FORWARD :
+                                         MA_SURFACE_METHOD_DEFERRED;
+      }
+    }
+  }
+
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 3)) {
     LISTBASE_FOREACH (Brush *, brush, &bmain->brushes) {
       if (BrushGpencilSettings *settings = brush->gpencil_settings) {
@@ -4227,6 +4389,165 @@ void blo_do_versions_400(FileData *fd, Library * /*lib*/, Main *bmain)
         settings->simplify_px = settings->simplify_f /
                                 blender::bke::greasepencil::LEGACY_RADIUS_CONVERSION_FACTOR * 0.1f;
       }
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 4)) {
+    LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
+      scene->view_settings.temperature = 6500.0f;
+      scene->view_settings.tint = 10.0f;
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 7)) {
+    LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
+      SequencerToolSettings *sequencer_tool_settings = SEQ_tool_settings_ensure(scene);
+      sequencer_tool_settings->snap_mode |= SEQ_SNAP_TO_PREVIEW_BORDERS |
+                                            SEQ_SNAP_TO_PREVIEW_CENTER |
+                                            SEQ_SNAP_TO_STRIPS_PREVIEW;
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 8)) {
+    update_paint_modes_for_brush_assets(*bmain);
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 9)) {
+    fix_built_in_curve_attribute_defaults(bmain);
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 10)) {
+    /* Initialize Color Balance node white point settings. */
+    FOREACH_NODETREE_BEGIN (bmain, ntree, id) {
+      if (ntree->type != NTREE_CUSTOM) {
+        LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
+          if (node->type == CMP_NODE_COLORBALANCE) {
+            NodeColorBalance *n = static_cast<NodeColorBalance *>(node->storage);
+            n->input_temperature = n->output_temperature = 6500.0f;
+            n->input_tint = n->output_tint = 10.0f;
+          }
+        }
+      }
+    }
+    FOREACH_NODETREE_END;
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 11)) {
+    LISTBASE_FOREACH (Curves *, curves, &bmain->hair_curves) {
+      curves->geometry.attributes_active_index = curves->attributes_active_index_legacy;
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 13)) {
+    Camera default_cam = *DNA_struct_default_get(Camera);
+    LISTBASE_FOREACH (Camera *, camera, &bmain->cameras) {
+      camera->central_cylindrical_range_u_min = default_cam.central_cylindrical_range_u_min;
+      camera->central_cylindrical_range_u_max = default_cam.central_cylindrical_range_u_max;
+      camera->central_cylindrical_range_v_min = default_cam.central_cylindrical_range_v_min;
+      camera->central_cylindrical_range_v_max = default_cam.central_cylindrical_range_v_max;
+      camera->central_cylindrical_radius = default_cam.central_cylindrical_radius;
+    }
+  }
+
+  /* The File Output node now uses the linear color space setting of its stored image formats. So
+   * we need to ensure the color space value is initialized to some sane default based on the image
+   * type. Furthermore, the node now gained a new Save As Render option that is global to the node,
+   * which will be used if Use Node Format is enabled for each input, so we potentially need to
+   * disable Use Node Format in case inputs had different Save As render options. */
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 14)) {
+    FOREACH_NODETREE_BEGIN (bmain, ntree, id) {
+      if (ntree->type != NTREE_COMPOSIT) {
+        continue;
+      }
+
+      LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
+        if (node->type != CMP_NODE_OUTPUT_FILE) {
+          continue;
+        }
+
+        /* Initialize node format color space if it is not set. */
+        NodeImageMultiFile *storage = static_cast<NodeImageMultiFile *>(node->storage);
+        if (storage->format.linear_colorspace_settings.name[0] == '\0') {
+          BKE_image_format_update_color_space_for_type(&storage->format);
+        }
+
+        if (BLI_listbase_is_empty(&node->inputs)) {
+          continue;
+        }
+
+        /* Initialize input formats color space if it is not set. */
+        LISTBASE_FOREACH (const bNodeSocket *, input, &node->inputs) {
+          NodeImageMultiFileSocket *input_storage = static_cast<NodeImageMultiFileSocket *>(
+              input->storage);
+          if (input_storage->format.linear_colorspace_settings.name[0] == '\0') {
+            BKE_image_format_update_color_space_for_type(&input_storage->format);
+          }
+        }
+
+        /* EXR images don't use Save As Render. */
+        if (ELEM(storage->format.imtype, R_IMF_IMTYPE_OPENEXR, R_IMF_IMTYPE_MULTILAYER)) {
+          continue;
+        }
+
+        /* Find out if all inputs have the same Save As Render option. */
+        const bNodeSocket *first_input = static_cast<bNodeSocket *>(node->inputs.first);
+        const NodeImageMultiFileSocket *first_input_storage =
+            static_cast<NodeImageMultiFileSocket *>(first_input->storage);
+        const bool first_save_as_render = first_input_storage->save_as_render;
+        bool all_inputs_have_same_save_as_render = true;
+        LISTBASE_FOREACH (const bNodeSocket *, input, &node->inputs) {
+          const NodeImageMultiFileSocket *input_storage = static_cast<NodeImageMultiFileSocket *>(
+              input->storage);
+          if (bool(input_storage->save_as_render) != first_save_as_render) {
+            all_inputs_have_same_save_as_render = false;
+            break;
+          }
+        }
+
+        /* All inputs have the same save as render option, so we set the node Save As Render option
+         * to that value, and we leave inputs as is. */
+        if (all_inputs_have_same_save_as_render) {
+          storage->save_as_render = first_save_as_render;
+          continue;
+        }
+
+        /* For inputs that have Use Node Format enabled, we need to disabled it because otherwise
+         * they will use the node's Save As Render option. It follows that we need to copy the
+         * node's format to the input format. */
+        LISTBASE_FOREACH (const bNodeSocket *, input, &node->inputs) {
+          NodeImageMultiFileSocket *input_storage = static_cast<NodeImageMultiFileSocket *>(
+              input->storage);
+
+          if (!input_storage->use_node_format) {
+            continue;
+          }
+
+          input_storage->use_node_format = false;
+          input_storage->format = storage->format;
+        }
+      }
+    }
+    FOREACH_NODETREE_END;
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 15)) {
+    using namespace blender;
+
+    LISTBASE_FOREACH (Collection *, collection, &bmain->collections) {
+      const ListBase *exporters = &collection->exporters;
+      LISTBASE_FOREACH (CollectionExport *, data, exporters) {
+        /* The name field should be empty at this point. */
+        BLI_assert(data->name[0] == '\0');
+
+        bke::FileHandlerType *fh = bke::file_handler_find(data->fh_idname);
+        BKE_collection_exporter_name_set(exporters, data, fh ? fh->label : DATA_("Undefined"));
+      }
+    }
+  }
+
+  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 403, 16)) {
+    LISTBASE_FOREACH (Scene *, scene, &bmain->scenes) {
+      scene->eevee.flag |= SCE_EEVEE_FAST_GI_ENABLED;
     }
   }
 

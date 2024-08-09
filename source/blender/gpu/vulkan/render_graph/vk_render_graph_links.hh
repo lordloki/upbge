@@ -51,7 +51,15 @@ struct VKRenderGraphLink {
    */
   VkImageAspectFlags vk_image_aspect = VK_IMAGE_ASPECT_NONE;
 
-  void debug_print(std::stringstream &ss, const VKResourceStateTracker &resources) const;
+  /**
+   * The layers to bind.
+   *
+   * Used when layer_tracking will be enabled to transit the layout of these layers only.
+   */
+  uint32_t layer_base = 0;
+  uint32_t layer_count = VK_REMAINING_ARRAY_LAYERS;
+
+  void debug_print(std::ostream &ss, const VKResourceStateTracker &resources) const;
 };
 
 /**

@@ -26,6 +26,7 @@
 #include "BLI_index_mask_fwd.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_shared_cache.hh"
+#include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
 #include "BLI_virtual_array_fwd.hh"
 
@@ -86,6 +87,16 @@ class InstanceReference {
   GeometrySet &geometry_set();
   const GeometrySet &geometry_set() const;
 
+  /**
+   * Converts the instance reference to a geometry set, even if it was an object or collection
+   * before.
+   *
+   * \note Uses out-parameter to be able to use #GeometrySet forward declaration.
+   */
+  void to_geometry_set(GeometrySet &r_geometry_set) const;
+
+  StringRefNull name() const;
+
   bool owns_direct_data() const;
   void ensure_owns_direct_data();
 
@@ -103,6 +114,11 @@ class Instances {
   int instances_num_ = 0;
 
   CustomData attributes_;
+
+  /**
+   * Caches how often each reference is used.
+   */
+  mutable SharedCache<Array<int>> reference_user_counts_;
 
   /* These almost unique ids are generated based on the `id` attribute, which might not contain
    * unique ids at all. They are *almost* unique, because under certain very unlikely
@@ -175,6 +191,11 @@ class Instances {
    */
   Span<int> almost_unique_ids() const;
 
+  /**
+   * Get cached user counts for every reference.
+   */
+  Span<int> reference_user_counts() const;
+
   bke::AttributeAccessor attributes() const;
   bke::MutableAttributeAccessor attributes_for_write();
 
@@ -189,6 +210,7 @@ class Instances {
 
   void tag_reference_handles_changed()
   {
+    reference_user_counts_.tag_dirty();
     almost_unique_ids_cache_.tag_dirty();
   }
 };
@@ -212,14 +234,6 @@ inline InstanceReference::InstanceReference(Object &object) : type_(Type::Object
 inline InstanceReference::InstanceReference(Collection &collection)
     : type_(Type::Collection), data_(&collection)
 {
-}
-
-inline InstanceReference::InstanceReference(const InstanceReference &other)
-    : type_(other.type_), data_(other.data_)
-{
-  if (other.geometry_set_) {
-    geometry_set_ = std::make_unique<GeometrySet>(*other.geometry_set_);
-  }
 }
 
 inline InstanceReference::InstanceReference(InstanceReference &&other)

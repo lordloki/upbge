@@ -26,7 +26,7 @@
 #include "../generic/python_compat.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "bpy_rna.h"
 
@@ -341,7 +341,7 @@ static PyObject *bpy_rna_context_temp_override_exit(BPyContextTempOverride *self
     }
   }
 
-  /* Account for for the window to be freed on file-read,
+  /* Account for the window to be freed on file-read,
    * in this case the window should not be restored, see: #92818.
    * Also account for other windowing members to be removed on exit,
    * in this case the context is cleared. */
@@ -570,7 +570,7 @@ static PyObject *bpy_context_temp_override_extract_known_args(const char *const 
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_context_temp_override_doc,
-    ".. method:: temp_override(window, area, region, **keywords)\n"
+    ".. method:: temp_override(*, window=None, area=None, region=None, **keywords)\n"
     "\n"
     "   Context manager to temporarily override members in the context.\n"
     "\n"

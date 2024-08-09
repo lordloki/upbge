@@ -18,6 +18,8 @@
 
 #define RNA_MAGIC ((int)~0)
 
+enum class AttributeOwnerType;
+
 struct FreestyleSettings;
 struct ID;
 struct IDOverrideLibrary;
@@ -156,9 +158,8 @@ void RNA_def_curve(BlenderRNA *brna);
 void RNA_def_depsgraph(BlenderRNA *brna);
 void RNA_def_dynamic_paint(BlenderRNA *brna);
 void RNA_def_fcurve(BlenderRNA *brna);
-void RNA_def_gpencil(BlenderRNA *brna);
+void RNA_def_annotations(BlenderRNA *brna);
 void RNA_def_grease_pencil(BlenderRNA *brna);
-void RNA_def_greasepencil_modifier(BlenderRNA *brna);
 void RNA_def_shader_fx(BlenderRNA *brna);
 void RNA_def_curves(BlenderRNA *brna);
 void RNA_def_image(BlenderRNA *brna);
@@ -229,7 +230,7 @@ void RNA_api_sensor(StructRNA *srna);
 
 /* Common Define functions */
 
-void rna_def_attributes_common(StructRNA *srna);
+void rna_def_attributes_common(StructRNA *srna, AttributeOwnerType type);
 
 void rna_AttributeGroup_iterator_begin(CollectionPropertyIterator *iter, PointerRNA *ptr);
 void rna_AttributeGroup_iterator_next(CollectionPropertyIterator *iter);
@@ -427,6 +428,7 @@ void RNA_api_bone(StructRNA *srna);
 void RNA_api_bonecollection(StructRNA *srna);
 void RNA_api_camera(StructRNA *srna);
 void RNA_api_curve(StructRNA *srna);
+void RNA_api_curves(StructRNA *srna);
 void RNA_api_curve_nurb(StructRNA *srna);
 void RNA_api_fcurves(StructRNA *srna);
 void RNA_api_drivers(StructRNA *srna);
@@ -437,6 +439,11 @@ void RNA_api_operator(StructRNA *srna);
 void RNA_api_macro(StructRNA *srna);
 void RNA_api_gizmo(StructRNA *srna);
 void RNA_api_gizmogroup(StructRNA *srna);
+void RNA_api_grease_pencil_drawing(StructRNA *srna);
+void RNA_api_grease_pencil_frames(StructRNA *srna);
+void RNA_api_grease_pencil_layer(StructRNA *srna);
+void RNA_api_grease_pencil_layers(StructRNA *srna);
+void RNA_api_grease_pencil_layer_groups(StructRNA *srna);
 void RNA_api_keyconfig(StructRNA *srna);
 void RNA_api_keyconfigs(StructRNA *srna);
 void RNA_api_keyingset(StructRNA *srna);
@@ -498,7 +505,7 @@ void RNA_def_main_armatures(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_actions(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_particles(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_palettes(BlenderRNA *brna, PropertyRNA *cprop);
-void RNA_def_main_gpencil_legacy(BlenderRNA *brna, PropertyRNA *cprop);
+void RNA_def_main_annotations(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_grease_pencil(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_movieclips(BlenderRNA *brna, PropertyRNA *cprop);
 void RNA_def_main_masks(BlenderRNA *brna, PropertyRNA *cprop);

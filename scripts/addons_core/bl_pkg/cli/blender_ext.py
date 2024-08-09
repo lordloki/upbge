@@ -78,7 +78,26 @@ REPO_LOCAL_PRIVATE_DIR = ".blender_ext"
 
 URL_KNOWN_PREFIX = ("http://", "https://", "file://")
 
-MESSAGE_TYPES = {'STATUS', 'PROGRESS', 'WARN', 'ERROR', 'PATH', 'DONE'}
+MESSAGE_TYPES = {
+    # Status report about what is being done.
+    'STATUS',
+    # A special kind of message used to denote progress & can be used to show a progress bar.
+    'PROGRESS',
+    # A problem was detected the user should be aware of which does not prevent the action from completing.
+    # In Blender these are reported as warnings,
+    # this means they are shown in the status-bar as well as being available in the "Info" editor,
+    # unlike `ERROR` & `FATAL_ERROR` which present a blocking popup.
+    'WARN',
+    # Failure to complete all actions, some may have succeeded.
+    'ERROR',
+    # An error causing the operation not to complete as expected.
+    # Where possible, failure states should be detected and exit before performing any destructive operation.
+    'FATAL_ERROR',
+    # TODO: check on refactoring this type away as it's use could be avoided entirely.
+    'PATH',
+    # Must always be the last message.
+    'DONE',
+}
 
 RE_MANIFEST_SEMVER = re.compile(
     r'^'
@@ -122,6 +141,60 @@ ${body}
 </html>
 '''
 
+
+# -----------------------------------------------------------------------------
+# Workarounds
+
+def _worlaround_win32_ssl_cert_failure() -> None:
+    # Applies workaround by `pukkandan` on GITHUB at run-time:
+    # See: https://github.com/python/cpython/pull/91740
+    import ssl
+
+    class SSLContext_DUMMY(ssl.SSLContext):
+        def _load_windows_store_certs(self, storename: str, purpose: ssl.Purpose) -> bytearray:
+            # WIN32 only.
+            enum_certificates = getattr(ssl, "enum_certificates", None)
+            assert callable(enum_certificates)
+            certs = bytearray()
+            try:
+                for cert, encoding, trust in enum_certificates(storename):
+                    try:
+                        self.load_verify_locations(cadata=cert)
+                    except ssl.SSLError:
+                        # warnings.warn("Bad certificate in Windows certificate store")
+                        pass
+                    else:
+                        # CA certs are never PKCS#7 encoded
+                        if encoding == "x509_asn":
+                            if trust is True or purpose.oid in trust:
+                                certs.extend(cert)
+            except PermissionError:
+                # warnings.warn("unable to enumerate Windows certificate store")
+                pass
+            # NOTE(@ideasman42): Python never uses this return value internally.
+            # Keep it for consistency.
+            return certs
+
+    ssl.SSLContext._load_windows_store_certs = SSLContext_DUMMY._load_windows_store_certs  # type: ignore
+
+
+# -----------------------------------------------------------------------------
+# Argument Overrides
+
+class _ArgsDefaultOverride:
+    __slots__ = (
+        "build_valid_tags",
+    )
+
+    def __init__(self) -> None:
+        self.build_valid_tags = ""
+
+
+# Support overriding this value so Blender can default to a different tags file.
+ARG_DEFAULTS_OVERRIDE = _ArgsDefaultOverride()
+del _ArgsDefaultOverride
+
+
 # Standard out may be communicating with a parent process,
 # arbitrary prints are NOT acceptable.
 
@@ -133,6 +206,10 @@ def print(*args: Any, **kw: Dict[str, Any]) -> None:
 # # Useful for testing.
 # def print(*args: Any, **kw: Dict[str, Any]):
 #     __builtins__["print"](*args, **kw, file=open('/tmp/output.txt', 'a'))
+
+
+def any_as_none(_arg: Any) -> None:
+    pass
 
 
 def debug_stack_trace_to_file() -> None:
@@ -150,47 +227,35 @@ def debug_stack_trace_to_file() -> None:
             ))
 
 
-def message_done(msg_fn: MessageFn) -> bool:
-    """
-    Print a non-fatal warning.
-    """
-    return msg_fn("DONE", "")
+class MessageLogger:
+    __slots__ = (
+        "msg_fn",
+    )
 
+    def __init__(self, msg_fn: MessageFn) -> None:
+        self.msg_fn = msg_fn
 
-def message_warn(msg_fn: MessageFn, s: str) -> bool:
-    """
-    Print a non-fatal warning.
-    """
-    return msg_fn("WARN", s)
+    def done(self) -> bool:
+        return self.msg_fn("DONE", "")
 
+    def warn(self, s: str) -> bool:
+        return self.msg_fn("WARN", s)
 
-def message_error(msg_fn: MessageFn, s: str) -> bool:
-    """
-    Print a fatal error.
-    """
-    return msg_fn("ERROR", s)
+    def error(self, s: str) -> bool:
+        return self.msg_fn("ERROR", s)
 
+    def fatal_error(self, s: str) -> bool:
+        return self.msg_fn("FATAL_ERROR", s)
 
-def message_status(msg_fn: MessageFn, s: str) -> bool:
-    """
-    Print a status message.
-    """
-    return msg_fn("STATUS", s)
+    def status(self, s: str) -> bool:
+        return self.msg_fn("STATUS", s)
 
+    def path(self, s: str) -> bool:
+        return self.msg_fn("PATH", s)
 
-def message_path(msg_fn: MessageFn, s: str) -> bool:
-    """
-    Print a path.
-    """
-    return msg_fn("PATH", s)
-
-
-def message_progress(msg_fn: MessageFn, s: str, progress: int, progress_range: int, unit: str) -> bool:
-    """
-    Print a progress update.
-    """
-    assert unit == 'BYTE'
-    return msg_fn("PROGRESS", (s, unit, progress, progress_range))
+    def progress(self, s: str, progress: int, progress_range: int, unit: str) -> bool:
+        assert unit == 'BYTE'
+        return self.msg_fn("PROGRESS", (s, unit, progress, progress_range))
 
 
 def force_exit_ok_enable() -> None:
@@ -203,6 +268,13 @@ def force_exit_ok_enable() -> None:
 
 # -----------------------------------------------------------------------------
 # Generic Functions
+
+def execfile(filepath: str) -> Dict[str, Any]:
+    global_namespace = {"__file__": filepath, "__name__": "__main__"}
+    with open(filepath, "rb") as fh:
+        # pylint: disable-next=exec-used
+        exec(compile(fh.read(), filepath, 'exec'), global_namespace)
+    return global_namespace
 
 
 def size_as_fmt_string(num: float, *, precision: int = 1) -> str:
@@ -256,7 +328,7 @@ class CleanupPathsContext:
 
 class PkgRepoData(NamedTuple):
     version: str
-    blocklist: List[str]
+    blocklist: List[Dict[str, Any]]
     data: List[Dict[str, Any]]
 
 
@@ -352,6 +424,12 @@ class PkgManifest_Archive(NamedTuple):
     archive_url: str
 
 
+class PkgServerRepoConfig(NamedTuple):
+    """Server configuration (for generating repositories)."""
+    schema_version: str
+    blocklist: List[Dict[str, Any]]
+
+
 # -----------------------------------------------------------------------------
 # Generic Functions
 
@@ -365,7 +443,24 @@ def path_to_url(path: str) -> str:
 def path_from_url(path: str) -> str:
     from urllib.parse import urlparse, unquote
     p = urlparse(path)
-    return os.path.join(p.netloc, unquote(p.path))
+    path_unquote = unquote(p.path)
+    if sys.platform == "win32":
+        # MS-Windows needs special handling for drive letters.
+        # `file:///C:/test` is converted to `/C:/test` which must skip the leading slash.
+        if (p.netloc == "") and re.match("/[A-Za-z]:", path_unquote):
+            result = path_unquote[1:]
+        else:
+            # Handle UNC paths: `\\HOST\share\path` as a URL on MS-Windows.
+            # - MS-Edge: `file://HOST/share/path` where `netloc="HOST"`, `path="/share/path"`.
+            # - Firefox: `file://///HOST/share/path`  where `netloc=""`, `path="///share/path"`.
+            if p.netloc:
+                result = "//{:s}/{:s}".format(p.netloc, path_unquote.lstrip("/"))
+            else:
+                result = "//{:s}".format(path_unquote.lstrip("/"))
+    else:
+        result = os.path.join(p.netloc, path_unquote)
+
+    return result
 
 
 def random_acii_lines(*, seed: Union[int, str], width: int) -> Generator[str, None, None]:
@@ -388,16 +483,30 @@ def random_acii_lines(*, seed: Union[int, str], width: int) -> Generator[str, No
         yield "".join(chars_list[:width])
 
 
-def sha256_from_file(filepath: str, block_size: int = 1 << 20, hash_prefix: bool = False) -> Tuple[int, str]:
+def sha256_from_file_or_error(
+        filepath: str,
+        block_size: int = 1 << 20,
+        hash_prefix: bool = False,
+) -> Union[Tuple[int, str], str]:
     """
     Returns an arbitrary sized unique ASCII string based on the file contents.
     (exact hashing method may change).
     """
-    with open(filepath, 'rb') as fh:
+    try:
+        # pylint: disable-next=consider-using-with
+        fh_context = open(filepath, 'rb')
+    except Exception as ex:
+        return "error opening file: {:s}".format(str(ex))
+
+    with contextlib.closing(fh_context) as fh:
         size = 0
         sha256 = hashlib.new('sha256')
         while True:
-            data = fh.read(block_size)
+            try:
+                data = fh.read(block_size)
+            except Exception as ex:
+                return "error reading file: {:s}".format(str(ex))
+
             if not data:
                 break
             sha256.update(data)
@@ -439,6 +548,74 @@ def scandir_recursive(
         filter_fn: Callable[[str, bool], bool],
 ) -> Generator[Tuple[str, str], None, None]:
     yield from scandir_recursive_impl(path, path, filter_fn=filter_fn)
+
+
+def rmtree_with_fallback_or_error(
+        path: str,
+        *,
+        remove_file: bool = True,
+        remove_link: bool = True,
+) -> Optional[str]:
+    """
+    Remove a directory, with optional fallbacks to removing files & links.
+    Use this when a directory is expected, but there is the possibility
+    that there is a file or symbolic-link which should be removed instead.
+
+    Intended to be used for user managed files,
+    where removal is required and we can't be certain of the kind of file.
+
+    On failure, a string will be returned containing the first error.
+    """
+
+    # Note that `shutil.rmtree` has link detection that doesn't match `os.path.islink` exactly,
+    # so use it's callback that raises a link error and remove the link in that case.
+    errors = []
+
+    # *DEPRECATED* 2024/07/01 Remove when 3.11 is dropped.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=lambda *args: errors.append(args))
+    else:
+        # Ignore as the deprecated logic is only used for older Python versions.
+        # pylint: disable-next=deprecated-argument
+        shutil.rmtree(path, onerror=lambda *args: errors.append((args[0], args[1], args[2][1])))
+
+    # Happy path (for practically all cases).
+    if not errors:
+        return None
+
+    is_file = False
+    is_link = False
+
+    for err_type, _err_path, ex in errors:
+        if isinstance(ex, NotADirectoryError):
+            if err_type is os.rmdir:
+                is_file = True
+        if isinstance(ex, OSError):
+            if err_type is os.path.islink:
+                is_link = True
+
+    do_unlink = False
+    if is_file:
+        if remove_file:
+            do_unlink = True
+    if is_link:
+        if remove_link:
+            do_unlink = True
+
+    if do_unlink:
+        # Replace errors with the failure state of `os.unlink`.
+        errors.clear()
+        try:
+            os.unlink(path)
+        except Exception as ex:
+            errors.append((os.unlink, path, ex))
+
+    if errors:
+        # Other information may be useful but it's too verbose to forward to user messages
+        # and is more for debugging purposes.
+        return str(errors[0][2])
+
+    return None
 
 
 def build_paths_expand_iter(
@@ -511,7 +688,7 @@ def pkg_manifest_from_dict_and_validate_impl(
     for key in PkgManifest._fields:
         val = data.get(key, ...)
         if val is ...:
-            # pylint: disable-next=no-member
+            # pylint: disable-next=no-member,protected-access
             val = PkgManifest._field_defaults.get(key, ...)
         # `pkg_manifest_is_valid_or_error{_all}` will have caught this, assert all the same.
         assert val is not ...
@@ -641,14 +818,12 @@ def pkg_manifest_from_zipfile_and_validate_impl(
     if file_content is None:
         return ["Archive does not contain a manifest"]
 
-    manifest_dict = toml_from_bytes(file_content)
-    assert isinstance(manifest_dict, dict)
+    if isinstance((manifest_dict := toml_from_bytes_or_error(file_content)), str):
+        return ["Archive contains a manifest that could not be parsed {:s}".format(manifest_dict)]
 
+    assert isinstance(manifest_dict, dict)
     pkg_manifest_dict_apply_build_generated_table(manifest_dict)
 
-    # TODO: forward actual error.
-    if manifest_dict is None:
-        return ["Archive does not contain a manifest"]
     return pkg_manifest_from_dict_and_validate_impl(
         manifest_dict,
         from_repo=False,
@@ -691,6 +866,7 @@ def pkg_manifest_from_archive_and_validate(
         strict: bool,
 ) -> Union[PkgManifest, str]:
     try:
+        # pylint: disable-next=consider-using-with
         zip_fh_context = zipfile.ZipFile(filepath, mode="r")
     except Exception as ex:
         return "Error extracting archive \"{:s}\"".format(str(ex))
@@ -701,12 +877,40 @@ def pkg_manifest_from_archive_and_validate(
         return pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir, strict=strict)
 
 
+def pkg_server_repo_config_from_toml_and_validate(
+        filepath: str,
+) -> Union[PkgServerRepoConfig, str]:
+
+    if isinstance(result := toml_from_filepath_or_error(filepath), str):
+        return result
+
+    if not (field_schema_version := result.get("schema_version", "")):
+        return "missing \"schema_version\" field"
+
+    if not (field_blocklist := result.get("blocklist", "")):
+        return "missing \"blocklist\" field"
+
+    for item in field_blocklist:
+        if not isinstance(item, dict):
+            return "blocklist contains non dictionary item, found ({:s})".format(str(type(item)))
+        if not isinstance(value := item.get("id"), str):
+            return "blocklist items must have have a string typed \"id\" entry, found {:s}".format(str(type(value)))
+        if not isinstance(value := item.get("reason"), str):
+            return "blocklist items must have have a string typed \"reason\" entry, found {:s}".format(str(type(value)))
+
+    return PkgServerRepoConfig(
+        schema_version=field_schema_version,
+        blocklist=field_blocklist,
+    )
+
+
 def pkg_is_legacy_addon(filepath: str) -> bool:
     # Python file is legacy.
     if os.path.splitext(filepath)[1].lower() == ".py":
         return True
 
     try:
+        # pylint: disable-next=consider-using-with
         zip_fh_context = zipfile.ZipFile(filepath, mode="r")
     except Exception:
         return False
@@ -726,7 +930,7 @@ def pkg_is_legacy_addon(filepath: str) -> bool:
                 file_content = zip_fh.read(filename)
             except Exception:
                 file_content = None
-            if file_content and file_content.find(b"bl_info"):
+            if file_content and file_content.find(b"bl_info") != -1:
                 return True
 
     return False
@@ -769,6 +973,26 @@ def remote_url_validate_or_error(url: str) -> Optional[str]:
     if url_has_known_prefix(url):
         return None
     return "remote URL doesn't begin with a known prefix: {:s}".format(" ".join(URL_KNOWN_PREFIX))
+
+
+# -----------------------------------------------------------------------------
+# TOML Helpers
+
+def toml_repr_string(text: str) -> str:
+    # Encode a string for literal inclusion as a value in a TOML file (including quotes).
+    import string
+    # NOTE: this could be empty, using literal characters ensures simple strings & paths are readable.
+    literal_chars = set(string.digits + string.ascii_letters + "/_-. ")
+    result = ["\""]
+    for c in text:
+        if c in literal_chars:
+            result.append(c)
+        elif (c_scalar := ord(c)) <= 0xffff:
+            result.append("\\u{:04x}".format(c_scalar))
+        else:
+            result.append("\\U{:08x}".format(c_scalar))
+    result.append("\"")
+    return "".join(result)
 
 
 # -----------------------------------------------------------------------------
@@ -1232,6 +1456,84 @@ def pkg_manifest_validate_terse_description_or_error(value: str) -> Optional[str
 
 
 # -----------------------------------------------------------------------------
+# Manifest Validation (Tags)
+
+
+def pkg_manifest_tags_load_valid_map_from_python(
+        valid_tags_filepath: str,
+) -> Union[str, Dict[str, Set[str]]]:
+    try:
+        data = execfile(valid_tags_filepath)
+    except Exception as ex:
+        return "Python evaluation error ({:s})".format(str(ex))
+
+    result = {}
+    for key, key_extension_type in (("addons", "add-on"), ("themes", "theme")):
+        if (value := data.get(key)) is None:
+            return "missing key \"{:s}\"".format(key)
+        if not isinstance(value, set):
+            return "key \"{:s}\" must be a set, not a {:s}".format(key, str(type(value)))
+        for tag in value:
+            if not isinstance(tag, str):
+                return "key \"{:s}\" must contain strings, found a {:s}".format(key, str(type(tag)))
+
+        result[key_extension_type] = value
+
+    return result
+
+
+def pkg_manifest_tags_load_valid_map_from_json(
+        valid_tags_filepath: str,
+) -> Union[str, Dict[str, Set[str]]]:
+    try:
+        with open(valid_tags_filepath, "rb") as fh:
+            data = json.load(fh)
+    except Exception as ex:
+        return "JSON evaluation error ({:s})".format(str(ex))
+
+    if not isinstance(data, dict):
+        return "JSON must contain a dict not a {:s}".format(str(type(data)))
+
+    result = {}
+    for key in ("add-on", "theme"):
+        if (value := data.get(key)) is None:
+            return "missing key \"{:s}\"".format(key)
+        if not isinstance(value, list):
+            return "key \"{:s}\" must be a list, not a {:s}".format(key, str(type(value)))
+        for tag in value:
+            if not isinstance(tag, str):
+                return "key \"{:s}\" must contain strings, found a {:s}".format(key, str(type(tag)))
+
+        result[key] = set(value)
+
+    return result
+
+
+def pkg_manifest_tags_load_valid_map(
+        valid_tags_filepath: str,
+) -> Union[str, Dict[str, Set[str]]]:
+    # Allow Python data (Blender stores this internally).
+    if valid_tags_filepath.endswith(".py"):
+        return pkg_manifest_tags_load_valid_map_from_python(valid_tags_filepath)
+    return pkg_manifest_tags_load_valid_map_from_json(valid_tags_filepath)
+
+
+def pkg_manifest_tags_valid_or_error(
+        valid_tags_data: Dict[str, Any],
+        manifest_type: str,
+        manifest_tags: List[str],
+) -> Optional[str]:
+    valid_tags = valid_tags_data[manifest_type]
+    for tag in manifest_tags:
+        if tag not in valid_tags:
+            return (
+                "found invalid tag \"{:s}\" not found in:\n"
+                "({:s})"
+            ).format(tag, ", ".join(sorted(valid_tags)))
+    return None
+
+
+# -----------------------------------------------------------------------------
 # Manifest Validation (Generic Callbacks)
 #
 # NOTE: regarding the `strict` argument, this was added because we may want to tighten
@@ -1243,12 +1545,12 @@ def pkg_manifest_validate_terse_description_or_error(value: str) -> Optional[str
 #
 # However manifests from severs that don't adhere to strict rules are not prevented from loading.
 
+# pylint: disable-next=useless-return
 def pkg_manifest_validate_field_nop(
         value: Any,
         strict: bool,
 ) -> Optional[str]:
     _ = strict, value
-    # pylint: disable-next=useless-return
     return None
 
 
@@ -1345,6 +1647,32 @@ def pkg_manifest_validate_field_type(value: str, strict: bool) -> Optional[str]:
     return None
 
 
+def pkg_manifest_validate_field_blender_version(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    if (error := pkg_manifest_validate_field_any_version_primitive(value, strict)) is not None:
+        return error
+
+    if strict:
+        # NOTE: Blender's extension support allows `X`, `X.X`, `X.X.X`,
+        # Blender's own extensions site doesn't, so require this for validation.
+        if value.count(".") != 2:
+            return "expected 3 numbers separated by \".\", found \"{:s}\"".format(value)
+
+    return None
+
+
+def pkg_manifest_validate_field_blender_version_or_empty(
+        value: str,
+        strict: bool,
+) -> Optional[str]:
+    if value:
+        return pkg_manifest_validate_field_blender_version(value, strict)
+
+    return None
+
+
 def pkg_manifest_validate_field_tagline(value: str, strict: bool) -> Optional[str]:
     if strict:
         return pkg_manifest_validate_terse_description_or_error(value)
@@ -1353,6 +1681,33 @@ def pkg_manifest_validate_field_tagline(value: str, strict: bool) -> Optional[st
             return error
 
     return None
+
+
+def pkg_manifest_validate_field_copyright(
+        value: List[str],
+        strict: bool,
+) -> Optional[str]:
+    if strict:
+        for i, copyrignt_text in enumerate(value):
+            if not isinstance(copyrignt_text, str):
+                return "at index {:d} must be a string not a {:s}".format(i, str(type(copyrignt_text)))
+
+            year, name = copyrignt_text.partition(" ")[0::2]
+            year_valid = False
+            if (year_split := year.partition("-"))[1]:
+                if year_split[0].isdigit() and year_split[2].isdigit():
+                    year_valid = True
+            else:
+                if year.isdigit():
+                    year_valid = True
+
+            if not year_valid:
+                return "at index {:d} must be a number or two numbers separated by \"-\"".format(i)
+            if not name.strip():
+                return "at index {:d} name may not be empty".format(i)
+        return None
+    else:
+        return pkg_manifest_validate_field_any_list_of_non_empty_strings(value, strict)
 
 
 def pkg_manifest_validate_field_permissions(
@@ -1464,8 +1819,15 @@ def pkg_manifest_validate_field_wheels(
     filename_spec = "{distribution}-{version}(-{build tag})?-{python tag}-{abi tag}-{platform tag}.whl"
 
     for wheel in value:
+        if "\"" in wheel:
+            return "wheel paths most not contain quotes, found {!r}".format(wheel)
         if "\\" in wheel:
             return "wheel paths must use forward slashes, found {!r}".format(wheel)
+
+        if (error := pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars(
+                wheel, True,
+        )) is not None:
+            return "wheel paths detected: {:s}, found {!r}".format(error, wheel)
 
         wheel_filename = os.path.basename(wheel)
         if not wheel_filename.lower().endswith(".whl"):
@@ -1523,12 +1885,12 @@ pkg_manifest_known_keys_and_types: Tuple[
     ("type", str, pkg_manifest_validate_field_type),
     ("maintainer", str, pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars),
     ("license", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
-    ("blender_version_min", str, pkg_manifest_validate_field_any_version_primitive),
+    ("blender_version_min", str, pkg_manifest_validate_field_blender_version),
 
     # Optional.
-    ("blender_version_max", str, pkg_manifest_validate_field_any_version_primitive_or_empty),
+    ("blender_version_max", str, pkg_manifest_validate_field_blender_version_or_empty),
     ("website", str, pkg_manifest_validate_field_any_non_empty_string_stripped_no_control_chars),
-    ("copyright", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
+    ("copyright", list, pkg_manifest_validate_field_copyright),
     # Type should be `dict` eventually, some existing packages will have a list of strings instead.
     ("permissions", (dict, list), pkg_manifest_validate_field_permissions),
     ("tags", list, pkg_manifest_validate_field_any_non_empty_list_of_non_empty_strings),
@@ -1575,11 +1937,11 @@ def pkg_manifest_is_valid_or_error_impl(
             is_default_value = False
             x_val = data.get(x_key, ...)
             if x_val is ...:
-                # pylint: disable-next=no-member
+                # pylint: disable-next=no-member, protected-access
                 x_val = PkgManifest._field_defaults.get(x_key, ...)
                 if from_repo:
                     if x_val is ...:
-                        # pylint: disable-next=no-member
+                        # pylint: disable-next=no-member, protected-access
                         x_val = PkgManifest_Archive._field_defaults.get(x_key, ...)
                 if x_val is ...:
                     error_list.append("missing \"{:s}\"".format(x_key))
@@ -1663,6 +2025,9 @@ def pkg_manifest_dict_apply_build_generated_table(manifest_dict: Dict[str, Any])
 
     if (platforms := build_generated.get("platforms")) is not None:
         manifest_dict["platforms"] = platforms
+
+    if (wheels := build_generated.get("wheels")) is not None:
+        manifest_dict["wheels"] = wheels
 
 
 # -----------------------------------------------------------------------------
@@ -1752,6 +2117,35 @@ def blender_platform_compatible_with_wheel_platform(platform: str, wheel_platfor
     return platform == platform_blender
 
 
+def blender_platform_compatible_with_wheel_platform_from_filepath(platform: str, wheel_filepath: str) -> bool:
+    wheel_filename = os.path.splitext(os.path.basename(wheel_filepath))[0]
+
+    wheel_filename_split = wheel_filename.split("-")
+    # This should be unreachable because the manifest has been validated, add assert.
+    assert len(wheel_filename_split) >= 5, "Internal error, manifest validation disallows this"
+
+    wheel_platform = wheel_filename_split[-1]
+
+    return blender_platform_compatible_with_wheel_platform(platform, wheel_platform)
+
+
+def paths_filter_wheels_by_platform(
+        wheels: List[str],
+        platform: str,
+) -> List[str]:
+    """
+    All paths are wheels with filenames that follow the wheel spec.
+    Return wheels which are compatible with the ``platform``.
+    """
+    wheels_result: List[str] = []
+
+    for wheel_filepath in wheels:
+        if blender_platform_compatible_with_wheel_platform_from_filepath(platform, wheel_filepath):
+            wheels_result.append(wheel_filepath)
+
+    return wheels_result
+
+
 def build_paths_filter_wheels_by_platform(
         build_paths: List[Tuple[str, str]],
         platform: str,
@@ -1763,17 +2157,7 @@ def build_paths_filter_wheels_by_platform(
     build_paths_for_platform: List[Tuple[str, str]] = []
 
     for item in build_paths:
-        # Both the absolute/relative path can be used to get the filename.
-        # Use the relative since it's likely to be shorter.
-        wheel_filename = os.path.splitext(os.path.basename(item[1]))[0]
-
-        wheel_filename_split = wheel_filename.split("-")
-        # This should be unreachable because the manifest has been validated, add assert.
-        assert len(wheel_filename_split) >= 5, "Internal error, manifest validation disallows this"
-
-        wheel_platform = wheel_filename_split[-1]
-
-        if blender_platform_compatible_with_wheel_platform(platform, wheel_platform):
+        if blender_platform_compatible_with_wheel_platform_from_filepath(platform, item[1]):
             build_paths_for_platform.append(item)
 
     return build_paths_for_platform
@@ -1892,7 +2276,7 @@ def blender_version_parse_or_error(version: str) -> Union[Tuple[int, int, int], 
     # `mypy` can't detect that this is guaranteed to be 3 items.
     return (
         version_tuple if (len(version_tuple) == 3) else
-        (*version_tuple, (0, 0))[:3]     # type: ignore
+        (*version_tuple, 0, 0)[:3]  # type: ignore
     )
 
 
@@ -1943,9 +2327,9 @@ def repo_json_is_valid_or_error(filepath: str) -> Optional[str]:
         if not isinstance(value, list):
             return "Expected \"blocklist\" to be a list, not a {:s}".format(str(type(value)))
         for item in value:
-            if isinstance(item, str):
+            if isinstance(item, dict):
                 continue
-            return "Expected \"blocklist\" to be a list of strings, found {:s}".format(str(type(item)))
+            return "Expected \"blocklist\" to be a list of dictionaries, found {:s}".format(str(type(item)))
 
     if (value := result.get("data")) is None:
         return "Expected a \"data\" key which was not found"
@@ -1987,7 +2371,7 @@ def pkg_manifest_toml_is_valid_or_error(filepath: str, strict: bool) -> Tuple[Op
     return None, result
 
 
-def pkg_manifest_detect_duplicates(pkg_idname: str, pkg_items: List[PkgManifest]) -> Optional[str]:
+def pkg_manifest_detect_duplicates(pkg_items: List[PkgManifest]) -> Optional[str]:
     """
     When a repository includes multiple packages with the same ID, ensure they don't conflict.
 
@@ -2088,17 +2472,23 @@ def pkg_manifest_detect_duplicates(pkg_idname: str, pkg_items: List[PkgManifest]
     return None
 
 
-def toml_from_bytes(data: bytes) -> Optional[Dict[str, Any]]:
-    result = tomllib.loads(data.decode('utf-8'))
-    assert isinstance(result, dict)
-    return result
+def toml_from_bytes_or_error(data: bytes) -> Union[Dict[str, Any], str]:
+    try:
+        result = tomllib.loads(data.decode('utf-8'))
+        assert isinstance(result, dict)
+        return result
+    except Exception as ex:
+        return str(ex)
 
 
-def toml_from_filepath(filepath: str) -> Optional[Dict[str, Any]]:
-    with open(filepath, "rb") as fh:
-        data = fh.read()
-    result = toml_from_bytes(data)
-    return result
+def toml_from_filepath_or_error(filepath: str) -> Union[Dict[str, Any], str]:
+    try:
+        with open(filepath, "rb") as fh:
+            data = fh.read()
+        result = toml_from_bytes_or_error(data)
+        return result
+    except Exception as ex:
+        return str(ex)
 
 
 def repo_local_private_dir(*, local_dir: str) -> str:
@@ -2108,31 +2498,54 @@ def repo_local_private_dir(*, local_dir: str) -> str:
     return os.path.join(local_dir, REPO_LOCAL_PRIVATE_DIR)
 
 
-def repo_local_private_dir_ensure(*, local_dir: str) -> str:
+def repo_local_private_dir_ensure(
+        *,
+        local_dir: str,
+        error_fn: Callable[[Exception], None],
+) -> Optional[str]:
     """
     Ensure the repos hidden directory exists.
     """
     local_private_dir = repo_local_private_dir(local_dir=local_dir)
     if not os.path.isdir(local_private_dir):
         # Unlikely but possible `local_dir` is missing.
-        os.makedirs(local_private_dir)
+        try:
+            os.makedirs(local_private_dir)
+        except Exception as ex:
+            error_fn(ex)
+            return None
     return local_private_dir
 
 
-def repo_local_private_dir_ensure_with_subdir(*, local_dir: str, subdir: str) -> str:
+def repo_local_private_dir_ensure_with_subdir(
+        *,
+        local_dir: str,
+        subdir: str,
+        error_fn: Callable[[Exception], None],
+) -> Optional[str]:
     """
     Return a local directory used to cache package downloads.
     """
-    local_private_subdir = os.path.join(repo_local_private_dir_ensure(local_dir=local_dir), subdir)
+    if (local_private_dir := repo_local_private_dir_ensure(
+            local_dir=local_dir,
+            error_fn=error_fn,
+    )) is None:
+        return None
+
+    local_private_subdir = os.path.join(local_private_dir, subdir)
     if not os.path.isdir(local_private_subdir):
         # Unlikely but possible `local_dir` is missing.
-        os.makedirs(local_private_subdir)
+        try:
+            os.makedirs(local_private_subdir)
+        except Exception as ex:
+            error_fn(ex)
+            return None
     return local_private_subdir
 
 
 def repo_sync_from_remote(
         *,
-        msg_fn: MessageFn,
+        msglog: MessageLogger,
         remote_name: str,
         remote_url: str,
         local_dir: str,
@@ -2148,17 +2561,24 @@ def repo_sync_from_remote(
 
     # Validate arguments.
     if (error := remote_url_validate_or_error(remote_url)) is not None:
-        message_error(msg_fn, error)
+        msglog.fatal_error(error)
         return False
 
     request_exit = False
-    request_exit |= message_status(msg_fn, "Checking repository \"{:s}\" for updates...".format(remote_name))
+    request_exit |= msglog.status("Checking repository \"{:s}\" for updates...".format(remote_name))
     if request_exit:
+        return False
+
+    if (local_private_dir := repo_local_private_dir_ensure(
+            local_dir=local_dir,
+            error_fn=lambda ex: any_as_none(
+                msglog.fatal_error("Error creating private directory: {:s}".format(str(ex)))
+            ),
+    )) is None:
         return False
 
     remote_json_url = remote_url_get(remote_url)
 
-    local_private_dir = repo_local_private_dir_ensure(local_dir=local_dir)
     local_json_path = os.path.join(local_private_dir, PKG_REPO_LIST_FILENAME)
     local_json_path_temp = local_json_path + "@"
 
@@ -2171,7 +2591,7 @@ def repo_sync_from_remote(
 
     with CleanupPathsContext(files=(local_json_path_temp,), directories=()):
         # TODO: time-out.
-        request_exit |= message_status(msg_fn, "Refreshing extensions list for \"{:s}\"...".format(remote_name))
+        request_exit |= msglog.status("Refreshing extensions list for \"{:s}\"...".format(remote_name))
         if request_exit:
             return False
 
@@ -2188,7 +2608,7 @@ def repo_sync_from_remote(
                     chunk_size=CHUNK_SIZE_DEFAULT,
                     timeout_in_seconds=timeout_in_seconds,
             ):
-                request_exit |= message_progress(msg_fn, "Downloading...", read_total, size, 'BYTE')
+                request_exit |= msglog.progress("Downloading...", read_total, size, 'BYTE')
                 if request_exit:
                     break
                 read_total += read
@@ -2196,9 +2616,9 @@ def repo_sync_from_remote(
         except (Exception, KeyboardInterrupt) as ex:
             msg = url_retrieve_exception_as_message(ex, prefix="sync", url=remote_url)
             if demote_connection_errors_to_status and url_retrieve_exception_is_connectivity(ex):
-                message_status(msg_fn, msg)
+                msglog.status(msg)
             else:
-                message_error(msg_fn, msg)
+                msglog.fatal_error(msg)
             return False
 
         if request_exit:
@@ -2206,14 +2626,13 @@ def repo_sync_from_remote(
 
         error_msg = repo_json_is_valid_or_error(local_json_path_temp)
         if error_msg is not None:
-            message_error(
-                msg_fn,
+            msglog.fatal_error(
                 "Repository error: invalid manifest ({:s}) for repository \"{:s}\"!".format(error_msg, remote_name),
             )
             return False
         del error_msg
 
-        request_exit |= message_status(msg_fn, "Extensions list for \"{:s}\" updated".format(remote_name))
+        request_exit |= msglog.status("Extensions list for \"{:s}\" updated".format(remote_name))
         if request_exit:
             return False
 
@@ -2224,41 +2643,59 @@ def repo_sync_from_remote(
         os.rename(local_json_path_temp, local_json_path)
 
         if extension_override:
-            request_exit |= message_path(msg_fn, os.path.relpath(local_json_path, local_dir))
+            request_exit |= msglog.path(os.path.relpath(local_json_path, local_dir))
 
     return True
 
 
-def repo_pkginfo_from_local_as_dict(*, local_dir: str) -> Optional[Dict[str, Any]]:
+def repo_pkginfo_from_local_as_dict_or_error(*, local_dir: str) -> Union[Dict[str, Any], str]:
     """
     Load package cache.
     """
     local_private_dir = repo_local_private_dir(local_dir=local_dir)
     local_json_path = os.path.join(local_private_dir, PKG_REPO_LIST_FILENAME)
-    if not os.path.exists(local_json_path):
-        return None
 
-    with open(local_json_path, "r", encoding="utf-8") as fh:
-        result = json.load(fh)
-        assert isinstance(result, dict)
+    # Don't check if the path exists, allow this to raise an exception.
+    try:
+        with open(local_json_path, "r", encoding="utf-8") as fh:
+            result = json.load(fh)
+    except Exception as ex:
+        return str(ex)
+
+    if not isinstance(result, dict):
+        return "expected a dict, not a {:s}".format(str(type(result)))
 
     return result
 
 
-def pkg_repo_dat_from_json(json_data: Dict[str, Any]) -> PkgRepoData:
+def pkg_repo_data_from_json_or_error(json_data: Dict[str, Any]) -> Union[PkgRepoData, str]:
+    if not isinstance((version := json_data.get("version", "v1")), str):
+        return "expected \"version\" to be a string"
+
+    if not isinstance((blocklist := json_data.get("blocklist", [])), list):
+        return "expected \"blocklist\" to be a list"
+    for item in blocklist:
+        if not isinstance(item, dict):
+            return "expected \"blocklist\" contain dictionary items"
+
+    if not isinstance((data := json_data.get("data", [])), list):
+        return "expected \"data\" to be a list"
+    for item in data:
+        if not isinstance(item, dict):
+            return "expected \"data\" contain dictionary items"
+
     result_new = PkgRepoData(
-        version=json_data.get("version", "v1"),
-        blocklist=json_data.get("blocklist", []),
-        data=json_data.get("data", []),
+        version=version,
+        blocklist=blocklist,
+        data=data,
     )
     return result_new
 
 
-def repo_pkginfo_from_local(*, local_dir: str) -> Optional[PkgRepoData]:
-    result = repo_pkginfo_from_local_as_dict(local_dir=local_dir)
-    if result is None:
-        return None
-    return pkg_repo_dat_from_json(result)
+def repo_pkginfo_from_local_or_none(*, local_dir: str) -> Union[PkgRepoData, str]:
+    if isinstance((result := repo_pkginfo_from_local_as_dict_or_error(local_dir=local_dir)), str):
+        return result
+    return pkg_repo_data_from_json_or_error(result)
 
 
 def url_has_known_prefix(path: str) -> bool:
@@ -2314,8 +2751,75 @@ def generic_arg_build_split_platforms(subparse: argparse.ArgumentParser) -> None
     )
 
 
+def generic_arg_package_valid_tags(subparse: argparse.ArgumentParser) -> None:
+    # NOTE(@ideasman42): when called from Blender tags for `extensions.blender.org` are enforced by default.
+    # For `extensions.blender.org` this is enforced on the server side, so it's better developers see the error
+    # on build/validate instead of uploading the package.
+    # It's worth noting not all extensions will be hosted on `extensions.blender.org`,
+    # 3rd party hosting should remain a first class citizen not some exceptional case.
+    #
+    # The rationale for applying these tags for all packages even accepting that not everyone is targeting
+    # Blender's official repository is to avoid every extension defining their own tags.
+    #
+    # This has two down sides:
+    # - Duplicate similar tags, e.g. `"render", "rendering"`, `"toon", "cartoon"` etc.
+    # - Tag proliferation (100's of tags), makes the UI unusable.
+    #   So even when all tags are valid and named well, having everyone defining
+    #   their own tags results the user having to filter between too many options.
+    #   Although a re-designed UI could account for this if it were important.
+    #
+    # Nevertheless, allow motivated developers to ignore the tags limitations as it's somewhat arbitrarily.
+    # The default to apply these limits is a "nudge" to avoid additional tags from typos as well as a hint
+    # that tags should be added to Blender's list if they're needed instead of being defined ad-hoc.
+
+    subparse.add_argument(
+        "--valid-tags",
+        dest="valid_tags_filepath",
+        default=ARG_DEFAULTS_OVERRIDE.build_valid_tags,
+        metavar="VALID_TAGS_JSON",
+        # NOTE(@ideasman42): Python input is also supported, intentionally undocumented for now,
+        # since this is only supported as Blender's tags happen to be stored as a Python script - which may change.
+        help=(
+            "Reference a file path containing valid tags lists.\n"
+            "\n"
+            "If you wish to reference custom tags a ``.json`` file can be used.\n"
+            "The contents must be a dictionary of lists where the ``key`` matches the extension type.\n"
+            "\n"
+            "For example:\n"
+            "   ``{\"add-ons\": [\"Example\", \"Another\"], \"theme\": [\"Other\", \"Tags\"]}``\n"
+            "\n"
+            "To disable validating tags, pass in an empty path ``--valid-tags=\"\"``."
+        ),
+    )
+
+
 # -----------------------------------------------------------------------------
 # Argument Handlers ("server-generate" command)
+
+def generic_arg_server_generate_repo_config(subparse: argparse.ArgumentParser) -> None:
+    subparse.add_argument(
+        "--repo-config",
+        dest="repo_config",
+        default="",
+        metavar="REPO_CONFIG",
+        help=(
+            "An optional server configuration to include information which can't be detected.\n"
+            "Defaults to ``blender_repo.toml`` (in the repository directory).\n"
+            "\n"
+            "This can be used to defined blocked extensions, for example ::\n"
+            "\n"
+            "   schema_version = \"1.0.0\"\n"
+            "\n"
+            "   [[blocklist]]\n"
+            "   id = \"my_example_package\"\n"
+            "   reason = \"Explanation for why this extension was blocked\"\n"
+            "   [[blocklist]]\n"
+            "   id = \"other_extenison\"\n"
+            "   reason = \"Another reason for why this is blocked\"\n"
+            "\n"
+        ),
+    )
+
 
 def generic_arg_server_generate_html(subparse: argparse.ArgumentParser) -> None:
     subparse.add_argument(
@@ -2499,9 +3003,9 @@ def generic_arg_package_output_filepath(subparse: argparse.ArgumentParser) -> No
         default="",
         type=str,
         help=(
-            "The package output filepath (should include a ``{:s}`` extension).\n"
+            "The package output filepath (should include a ``{0:s}`` extension).\n"
             "\n"
-            "Defaults to a name created using the ``id`` from the manifest."
+            "Defaults to ``{{id}}-{{version}}{0:s}`` using values from the manifest."
         ).format(PKG_EXT),
     )
 
@@ -2635,7 +3139,7 @@ class subcmd_server:
 
     @staticmethod
     def _generate_html(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             repo_dir: str,
             repo_data: List[Dict[str, Any]],
@@ -2685,13 +3189,13 @@ class subcmd_server:
             ):
                 fh.write("  <tr>\n")
 
-                platforms = [platform for platform in manifest_dict.get("platforms", "").split(",") if platform]
+                platforms = manifest_dict.get("platforms", [])
 
                 # Parse the URL and add parameters use for drag & drop.
                 parsed_url = urllib.parse.urlparse(manifest_dict["archive_url"])
                 # We could support existing values, currently always empty.
                 # `query = dict(urllib.parse.parse_qsl(parsed_url.query))`
-                query = {"repository": "/index.json"}
+                query = {"repository": "./index.json"}
                 if (value := manifest_dict.get("blender_version_min", "")):
                     query["blender_version_min"] = value
                 if (value := manifest_dict.get("blender_version_max", "")):
@@ -2746,7 +3250,7 @@ class subcmd_server:
                 with open(html_template_filepath, "r", encoding="utf-8") as fh_html:
                     html_template_text = fh_html.read()
             except Exception as ex:
-                message_error(msg_fn, "HTML template failed to read: {:s}".format(str(ex)))
+                msglog.fatal_error("HTML template failed to read: {:s}".format(str(ex)))
                 return False
         else:
             html_template_text = HTML_TEMPLATE
@@ -2760,39 +3264,74 @@ class subcmd_server:
                 date=html.escape(datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d, %H:%M")),
             )
         except KeyError as ex:
-            message_error(msg_fn, "HTML template error: {:s}".format(str(ex)))
+            msglog.fatal_error("HTML template error: {:s}".format(str(ex)))
             return False
         del template
 
-        with open(filepath_repo_html, "w", encoding="utf-8") as fh_html:
-            fh_html.write(result)
+        try:
+            with open(filepath_repo_html, "w", encoding="utf-8") as fh_html:
+                fh_html.write(result)
+        except Exception as ex:
+            msglog.fatal_error("HTML failed to write: {:s}".format(str(ex)))
+            return False
+
         return True
 
     @staticmethod
     def generate(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             repo_dir: str,
+            repo_config_filepath: str,
             html: bool,
             html_template: str,
     ) -> bool:
-
         if url_has_known_prefix(repo_dir):
-            message_error(msg_fn, "Directory: {!r} must be a local path, not a URL!".format(repo_dir))
+            msglog.fatal_error("Directory: {!r} must be a local path, not a URL!".format(repo_dir))
             return False
 
         if not os.path.isdir(repo_dir):
-            message_error(msg_fn, "Directory: {!r} not found!".format(repo_dir))
+            msglog.fatal_error("Directory: {!r} not found!".format(repo_dir))
             return False
+
+        # Server manifest (optional), use if found.
+        server_manifest_default = "blender_repo.toml"
+        if not repo_config_filepath:
+            server_manifest_test = os.path.join(repo_dir, server_manifest_default)
+            if os.path.exists(server_manifest_test):
+                repo_config_filepath = server_manifest_test
+            del server_manifest_test
+        del server_manifest_default
+
+        repo_config = None
+        if repo_config_filepath:
+            repo_config = pkg_server_repo_config_from_toml_and_validate(repo_config_filepath)
+            if isinstance(repo_config, str):
+                msglog.fatal_error("parsing repository configuration {!r}, {:s}".format(
+                    repo_config,
+                    repo_config_filepath,
+                ))
+                return False
+            if repo_config.schema_version != "1.0.0":
+                msglog.fatal_error("unsupported schema version {!r} in {:s}, expected 1.0.0".format(
+                    repo_config.schema_version,
+                    repo_config_filepath,
+                ))
+                return False
+        assert repo_config is None or isinstance(repo_config, PkgServerRepoConfig)
 
         repo_data_idname_map: Dict[str, List[PkgManifest]] = {}
         repo_data: List[Dict[str, Any]] = []
+
         # Write package meta-data into each directory.
         repo_gen_dict = {
             "version": "v1",
-            "blocklist": [],
+            "blocklist": [] if repo_config is None else repo_config.blocklist,
             "data": repo_data,
         }
+
+        del repo_config
+
         for entry in os.scandir(repo_dir):
             if not entry.name.endswith(PKG_EXT):
                 continue
@@ -2802,14 +3341,14 @@ class subcmd_server:
 
             # Harmless, but skip directories.
             if entry.is_dir():
-                message_warn(msg_fn, "found unexpected directory {!r}".format(entry.name))
+                msglog.warn("found unexpected directory {!r}".format(entry.name))
                 continue
 
             filename = entry.name
             filepath = os.path.join(repo_dir, filename)
             manifest = pkg_manifest_from_archive_and_validate(filepath, strict=False)
             if isinstance(manifest, str):
-                message_warn(msg_fn, "archive validation failed {!r}, error: {:s}".format(filepath, manifest))
+                msglog.error("archive validation failed {!r}, error: {:s}".format(filepath, manifest))
                 continue
             manifest_dict = manifest._asdict()
 
@@ -2828,10 +3367,7 @@ class subcmd_server:
             for key in ("archive_url", "archive_size", "archive_hash"):
                 if key not in manifest_dict:
                     continue
-                message_warn(
-                    msg_fn,
-                    "malformed meta-data from {!r}, contains key it shouldn't: {:s}".format(filepath, key),
-                )
+                msglog.error("malformed meta-data from {!r}, contains key it shouldn't: {:s}".format(filepath, key))
                 has_key_error = True
             if has_key_error:
                 continue
@@ -2840,10 +3376,11 @@ class subcmd_server:
             manifest_dict["archive_url"] = "./" + urllib.request.pathname2url(filename)
 
             # Add archive variables, see: `PkgManifest_Archive`.
-            (
-                manifest_dict["archive_size"],
-                manifest_dict["archive_hash"],
-            ) = sha256_from_file(filepath, hash_prefix=True)
+            if isinstance((result := sha256_from_file_or_error(filepath, hash_prefix=True)), str):
+                msglog.error("unable to calculate hash ({:s}): {:s}".format(result, filepath))
+                continue
+            manifest_dict["archive_size"], manifest_dict["archive_hash"] = result
+            del result
 
             repo_data.append(manifest_dict)
 
@@ -2852,12 +3389,12 @@ class subcmd_server:
         for pkg_idname, pkg_items in repo_data_idname_map.items():
             if len(pkg_items) == 1:
                 continue
-            if (error := pkg_manifest_detect_duplicates(pkg_idname, pkg_items)) is not None:
-                message_warn(msg_fn, "archive found with duplicates for id {:s}: {:s}".format(pkg_idname, error))
+            if (error := pkg_manifest_detect_duplicates(pkg_items)) is not None:
+                msglog.warn("archive found with duplicates for id {:s}: {:s}".format(pkg_idname, error))
 
         if html:
             if not subcmd_server._generate_html(
-                    msg_fn,
+                    msglog,
                     repo_dir=repo_dir,
                     repo_data=repo_data,
                     html_template_filepath=html_template,
@@ -2868,9 +3405,14 @@ class subcmd_server:
 
         filepath_repo_json = os.path.join(repo_dir, PKG_REPO_LIST_FILENAME)
 
-        with open(filepath_repo_json, "w", encoding="utf-8") as fh:
-            json.dump(repo_gen_dict, fh, indent=2)
-        message_status(msg_fn, "found {:d} packages.".format(len(repo_data)))
+        try:
+            with open(filepath_repo_json, "w", encoding="utf-8") as fh:
+                json.dump(repo_gen_dict, fh, indent=2)
+        except Exception as ex:
+            msglog.fatal_error("failed to write repository: {:s}".format(str(ex)))
+            return False
+
+        msglog.status("found {:d} packages.".format(len(repo_data)))
 
         return True
 
@@ -2882,7 +3424,7 @@ class subcmd_client:
 
     @staticmethod
     def list_packages(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             remote_url: str,
             online_user_agent: str,
             access_token: str,
@@ -2892,7 +3434,7 @@ class subcmd_client:
 
         # Validate arguments.
         if (error := remote_url_validate_or_error(remote_url)) is not None:
-            message_error(msg_fn, error)
+            msglog.fatal_error(error)
             return False
 
         remote_json_url = remote_url_get(remote_url)
@@ -2915,23 +3457,31 @@ class subcmd_client:
         except (Exception, KeyboardInterrupt) as ex:
             msg = url_retrieve_exception_as_message(ex, prefix="list", url=remote_url)
             if demote_connection_errors_to_status and url_retrieve_exception_is_connectivity(ex):
-                message_status(msg_fn, msg)
+                msglog.status(msg)
             else:
-                message_error(msg_fn, msg)
+                msglog.fatal_error(msg)
             return False
 
-        result_str = result.getvalue().decode("utf-8")
+        result_bytes = result.getvalue()
         del result
 
-        repo_gen_dict = pkg_repo_dat_from_json(json.loads(result_str))
+        try:
+            result_dict = json.loads(result_bytes)
+        except Exception as ex:
+            msglog.fatal_error("error loading JSON {:s}".format(str(ex)))
+            return False
+
+        if isinstance((repo_gen_dict := pkg_repo_data_from_json_or_error(result_dict)), str):
+            msglog.fatal_error("unexpected contants in JSON {:s}".format(repo_gen_dict))
+            return False
+        del result_dict
 
         items: List[Dict[str, Any]] = repo_gen_dict.data
         items.sort(key=lambda elem: elem.get("id", ""))
 
         request_exit = False
         for elem in items:
-            request_exit |= message_status(
-                msg_fn,
+            request_exit |= msglog.status(
                 "{:s}({:s}): {:s}".format(elem.get("id"), elem.get("version"), elem.get("name")),
             )
             if request_exit:
@@ -2941,7 +3491,7 @@ class subcmd_client:
 
     @staticmethod
     def sync(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             remote_url: str,
             remote_name: str,
@@ -2957,7 +3507,7 @@ class subcmd_client:
             force_exit_ok_enable()
 
         success = repo_sync_from_remote(
-            msg_fn=msg_fn,
+            msglog=msglog,
             remote_name=remote_name,
             remote_url=remote_url,
             local_dir=local_dir,
@@ -2971,12 +3521,15 @@ class subcmd_client:
 
     @staticmethod
     def _install_package_from_file_impl(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             local_dir: str,
             filepath_archive: str,
+            blender_version_tuple: Tuple[int, int, int],
             manifest_compare: Optional[PkgManifest],
     ) -> bool:
+        # NOTE: Don't use `FATAL_ERROR` because other packages will attempt to install.
+
         # Implement installing a package to a repository.
         # Used for installing from local cache as well as installing a local package from a file.
 
@@ -2984,29 +3537,21 @@ class subcmd_client:
         directories_to_clean: List[str] = []
         with CleanupPathsContext(files=(), directories=directories_to_clean):
             try:
+                # pylint: disable-next=consider-using-with
                 zip_fh_context = zipfile.ZipFile(filepath_archive, mode="r")
             except Exception as ex:
-                message_warn(
-                    msg_fn,
-                    "Error extracting archive: {:s}".format(str(ex)),
-                )
+                msglog.error("Error extracting archive: {:s}".format(str(ex)))
                 return False
 
             with contextlib.closing(zip_fh_context) as zip_fh:
                 archive_subdir = pkg_zipfile_detect_subdir_or_none(zip_fh)
                 if archive_subdir is None:
-                    message_warn(
-                        msg_fn,
-                        "Missing manifest from: {:s}".format(filepath_archive),
-                    )
+                    msglog.error("Missing manifest from: {:s}".format(filepath_archive))
                     return False
 
                 manifest = pkg_manifest_from_zipfile_and_validate(zip_fh, archive_subdir, strict=False)
                 if isinstance(manifest, str):
-                    message_warn(
-                        msg_fn,
-                        "Error loading manifest from: {:s}".format(manifest),
-                    )
+                    msglog.error("Failed to load manifest from: {:s}".format(manifest))
                     return False
 
                 if manifest_compare is not None:
@@ -3014,8 +3559,7 @@ class subcmd_client:
                     # otherwise the package will install but not be able to collate
                     # the installed package with the remote ID.
                     if manifest_compare.id != manifest.id:
-                        message_warn(
-                            msg_fn,
+                        msglog.error(
                             "Package ID mismatch (remote: \"{:s}\", archive: \"{:s}\")".format(
                                 manifest_compare.id,
                                 manifest.id,
@@ -3023,14 +3567,28 @@ class subcmd_client:
                         )
                         return False
                     if manifest_compare.version != manifest.version:
-                        message_warn(
-                            msg_fn,
+                        msglog.error(
                             "Package version mismatch (remote: \"{:s}\", archive: \"{:s}\")".format(
                                 manifest_compare.version,
                                 manifest.version,
                             )
                         )
                         return False
+
+                if repository_filter_skip(
+                    # Converting back to a dict is awkward but harmless,
+                    # done since some callers only have a dictionary.
+                    manifest._asdict(),
+                    filter_blender_version=blender_version_tuple,
+                    filter_platform=platform_from_this_system(),
+                    skip_message_fn=lambda message: any_as_none(
+                        msglog.error("{:s}: {:s}".format(manifest.id, message))
+                    ),
+                    error_fn=lambda ex: any_as_none(
+                        msglog.error("{:s}: {:s}".format(manifest.id, str(ex)))
+                    ),
+                ):
+                    return False
 
                 # We have the cache, extract it to a directory.
                 # This will be a directory.
@@ -3041,8 +3599,12 @@ class subcmd_client:
                 filepath_local_pkg_temp = filepath_local_pkg + "@"
 
                 # It's unlikely this exist, nevertheless if it does - it must be removed.
-                if os.path.isdir(filepath_local_pkg_temp):
-                    shutil.rmtree(filepath_local_pkg_temp)
+                if os.path.exists(filepath_local_pkg_temp):
+                    if (error := rmtree_with_fallback_or_error(filepath_local_pkg_temp)) is not None:
+                        msglog.error(
+                            "Failed to remove temporary directory for \"{:s}\": {:s}".format(manifest.id, error),
+                        )
+                        return False
 
                 directories_to_clean.append(filepath_local_pkg_temp)
 
@@ -3054,46 +3616,53 @@ class subcmd_client:
                     for member in zip_fh.infolist():
                         zip_fh.extract(member, filepath_local_pkg_temp)
                 except Exception as ex:
-                    message_warn(
-                        msg_fn,
-                        "Failed to extract files for \"{:s}\": {:s}".format(manifest.id, str(ex)),
-                    )
+                    msglog.error("Failed to extract files for \"{:s}\": {:s}".format(manifest.id, str(ex)))
                     return False
 
             is_reinstall = False
             if os.path.isdir(filepath_local_pkg):
-                shutil.rmtree(filepath_local_pkg)
+                if (error := rmtree_with_fallback_or_error(filepath_local_pkg)) is not None:
+                    msglog.error("Failed to remove existing directory for \"{:s}\": {:s}".format(manifest.id, error))
+                    return False
+
                 is_reinstall = True
 
             os.rename(filepath_local_pkg_temp, filepath_local_pkg)
             directories_to_clean.remove(filepath_local_pkg_temp)
 
         if is_reinstall:
-            message_status(msg_fn, "Reinstalled \"{:s}\"".format(manifest.id))
+            msglog.status("Reinstalled \"{:s}\"".format(manifest.id))
         else:
-            message_status(msg_fn, "Installed \"{:s}\"".format(manifest.id))
+            msglog.status("Installed \"{:s}\"".format(manifest.id))
 
         return True
 
     @staticmethod
     def install_packages_from_files(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             local_dir: str,
             package_files: Sequence[str],
+            blender_version: str,
     ) -> bool:
         if not os.path.exists(local_dir):
-            message_error(msg_fn, "destination directory \"{:s}\" does not exist".format(local_dir))
+            msglog.fatal_error("destination directory \"{:s}\" does not exist".format(local_dir))
             return False
+
+        if isinstance(blender_version_tuple := blender_version_parse_or_error(blender_version), str):
+            msglog.fatal_error(blender_version_tuple)
+            return False
+        assert isinstance(blender_version_tuple, tuple)
 
         # This is a simple file extraction, the main difference is that it validates the manifest before installing.
         directories_to_clean: List[str] = []
         with CleanupPathsContext(files=(), directories=directories_to_clean):
             for filepath_archive in package_files:
                 if not subcmd_client._install_package_from_file_impl(
-                        msg_fn,
+                        msglog,
                         local_dir=local_dir,
                         filepath_archive=filepath_archive,
+                        blender_version_tuple=blender_version_tuple,
                         # There is no manifest from the repository, leave this unset.
                         manifest_compare=None,
                 ):
@@ -3104,7 +3673,7 @@ class subcmd_client:
 
     @staticmethod
     def install_packages(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             remote_url: str,
             local_dir: str,
@@ -3118,18 +3687,27 @@ class subcmd_client:
 
         # Validate arguments.
         if (error := remote_url_validate_or_error(remote_url)) is not None:
-            message_error(msg_fn, error)
+            msglog.fatal_error(error)
             return False
 
         if isinstance(blender_version_tuple := blender_version_parse_or_error(blender_version), str):
-            message_error(msg_fn, blender_version_tuple)
+            msglog.fatal_error(blender_version_tuple)
             return False
         assert isinstance(blender_version_tuple, tuple)
 
         # Extract...
-        pkg_repo_data = repo_pkginfo_from_local(local_dir=local_dir)
-        if pkg_repo_data is None:
-            # TODO: raise warning.
+        if isinstance((pkg_repo_data := repo_pkginfo_from_local_or_none(local_dir=local_dir)), str):
+            msglog.fatal_error("Error loading package repository: {:s}".format(pkg_repo_data))
+            return False
+
+        # Ensure a private directory so a local cache can be created.
+        if (local_cache_dir := repo_local_private_dir_ensure_with_subdir(
+                local_dir=local_dir,
+                subdir="cache",
+                error_fn=lambda ex: any_as_none(
+                    msglog.fatal_error("Error creating cache directory: {:s}".format(str(ex)))
+                ),
+        )) is None:
             return False
 
         # Most likely this doesn't have duplicates,but any errors procured by duplicates
@@ -3137,16 +3715,14 @@ class subcmd_client:
         packages_as_set = set(packages)
         packages = tuple(sorted(packages_as_set))
 
-        # Ensure a private directory so a local cache can be created.
-        local_cache_dir = repo_local_private_dir_ensure_with_subdir(local_dir=local_dir, subdir="cache")
-
         # Needed so relative paths can be properly calculated.
         remote_url_strip = remote_url_params_strip(remote_url)
 
         # TODO: filter by version and platform.
         json_data_pkg_info = [
             pkg_info for pkg_info in pkg_repo_data.data
-            if pkg_info["id"] in packages_as_set
+            # The `id` key should always exist, avoid raising an unhandled exception here if it's not.
+            if pkg_info.get("id", "") in packages_as_set
         ]
 
         # Narrow down:
@@ -3154,18 +3730,28 @@ class subcmd_client:
         for pkg_info in json_data_pkg_info:
             json_data_pkg_info_map[pkg_info["id"]].append(pkg_info)
 
+        # NOTE: we could have full validation as a separate function,
+        # currently install is the only place this is needed.
+        json_data_pkg_block_map = {
+            pkg_idname: pkg_block.get("reason", "Unknown")
+            for pkg_block in pkg_repo_data.blocklist
+            if (pkg_idname := pkg_block.get("id"))
+        }
+
         platform_this = platform_from_this_system()
 
-        has_error = False
+        has_fatal_error = False
         packages_info: List[PkgManifest_Archive] = []
         for pkg_idname, pkg_info_list in json_data_pkg_info_map.items():
             if not pkg_info_list:
-                message_error(msg_fn, "Package \"{:s}\", not found".format(pkg_idname))
-                has_error = True
+                msglog.fatal_error("Package \"{:s}\", not found".format(pkg_idname))
+                has_fatal_error = True
                 continue
 
-            def error_handle(ex: Exception) -> None:
-                message_warn(msg_fn, "{:s}: {:s}".format(pkg_idname, str(ex)))
+            if (result := json_data_pkg_block_map.get(pkg_idname)) is not None:
+                msglog.fatal_error("Package \"{:s}\", is blocked: {:s}".format(pkg_idname, result))
+                has_fatal_error = True
+                continue
 
             pkg_info_list = [
                 pkg_info for pkg_info in pkg_info_list
@@ -3174,13 +3760,18 @@ class subcmd_client:
                     filter_blender_version=blender_version_tuple,
                     filter_platform=platform_this,
                     skip_message_fn=None,
-                    error_fn=error_handle,
+                    error_fn=lambda ex: any_as_none(
+                        # pylint: disable-next=cell-var-from-loop
+                        msglog.error("{:s}: {:s}".format(pkg_idname, str(ex))),
+                    ),
                 )
             ]
 
             if not pkg_info_list:
-                message_error(msg_fn, "Package \"{:s}\", found but not compatible with this system".format(pkg_idname))
-                has_error = True
+                msglog.fatal_error(
+                    "Package \"{:s}\", found but not compatible with this system".format(pkg_idname),
+                )
+                has_fatal_error = True
                 continue
 
             # TODO: use a tie breaker.
@@ -3188,18 +3779,18 @@ class subcmd_client:
 
             manifest_archive = pkg_manifest_archive_from_dict_and_validate(pkg_info, strict=False)
             if isinstance(manifest_archive, str):
-                message_error(msg_fn, "Package malformed meta-data for \"{:s}\", error: {:s}".format(
+                msglog.fatal_error("Package malformed meta-data for \"{:s}\", error: {:s}".format(
                     pkg_idname,
                     manifest_archive,
                 ))
-                has_error = True
+                has_fatal_error = True
                 continue
 
             packages_info.append(manifest_archive)
 
-        if has_error:
+        if has_fatal_error:
             return False
-        del has_error
+        del has_fatal_error
 
         request_exit = False
 
@@ -3231,14 +3822,16 @@ class subcmd_client:
                 # Check if the cache should be used.
                 found = False
                 if os.path.exists(filepath_local_cache_archive):
-                    if (
-                            local_cache and (
-                                archive_size_expected,
-                                archive_hash_expected,
-                            ) == sha256_from_file(filepath_local_cache_archive, hash_prefix=True)
-                    ):
-                        found = True
-                    else:
+                    if local_cache:
+                        if isinstance((result := sha256_from_file_or_error(
+                                filepath_local_cache_archive,
+                                hash_prefix=True,
+                        )), str):
+                            # Only a warning because it's not a problem to re-download the file.
+                            msglog.warn("unable to calculate hash for cache: {:s}".format(result))
+                        elif result == (archive_size_expected, archive_hash_expected):
+                            found = True
+                    if not found:
                         os.unlink(filepath_local_cache_archive)
 
                 if not found:
@@ -3260,8 +3853,7 @@ class subcmd_client:
                                     chunk_size=CHUNK_SIZE_DEFAULT,
                                     timeout_in_seconds=timeout_in_seconds,
                             ):
-                                request_exit |= message_progress(
-                                    msg_fn,
+                                request_exit |= msglog.progress(
                                     "Downloading \"{:s}\"".format(pkg_idname),
                                     filename_archive_size_test,
                                     archive_size_expected,
@@ -3277,7 +3869,9 @@ class subcmd_client:
                         # NOTE: don't support `demote_connection_errors_to_status` here because a connection
                         # failure on installing *is* an error by definition.
                         # Unlike querying information which might reasonably be skipped.
-                        message_error(msg_fn, url_retrieve_exception_as_message(ex, prefix="install", url=remote_url))
+                        msglog.fatal_error(
+                            url_retrieve_exception_as_message(
+                                ex, prefix="install", url=remote_url))
                         return False
 
                     if request_exit:
@@ -3285,7 +3879,7 @@ class subcmd_client:
 
                     # Validate:
                     if filename_archive_size_test != archive_size_expected:
-                        message_warn(msg_fn, "Archive size mismatch \"{:s}\", expected {:d}, was {:d}".format(
+                        msglog.fatal_error("Archive size mismatch \"{:s}\", expected {:d}, was {:d}".format(
                             pkg_idname,
                             archive_size_expected,
                             filename_archive_size_test,
@@ -3293,7 +3887,7 @@ class subcmd_client:
                         return False
                     filename_archive_hash_test = "sha256:" + sha256.hexdigest()
                     if filename_archive_hash_test != archive_hash_expected:
-                        message_warn(msg_fn, "Archive checksum mismatch \"{:s}\", expected {:s}, was {:s}".format(
+                        msglog.fatal_error("Archive checksum mismatch \"{:s}\", expected {:s}, was {:s}".format(
                             pkg_idname,
                             archive_hash_expected,
                             filename_archive_hash_test,
@@ -3309,9 +3903,10 @@ class subcmd_client:
                 filepath_local_cache_archive = os.path.join(local_cache_dir, manifest_archive.manifest.id + PKG_EXT)
 
                 if not subcmd_client._install_package_from_file_impl(
-                        msg_fn,
+                        msglog,
                         local_dir=local_dir,
                         filepath_archive=filepath_local_cache_archive,
+                        blender_version_tuple=blender_version_tuple,
                         manifest_compare=manifest_archive.manifest,
                 ):
                     # The package failed to install.
@@ -3321,14 +3916,25 @@ class subcmd_client:
 
     @staticmethod
     def uninstall_packages(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             local_dir: str,
             user_dir: str,
             packages: Sequence[str],
     ) -> bool:
         if not os.path.isdir(local_dir):
-            message_error(msg_fn, "Missing local \"{:s}\"".format(local_dir))
+            msglog.fatal_error("Missing local \"{:s}\"".format(local_dir))
+            return False
+
+        # Ensure a private directory so a local cache can be created.
+        # TODO: don't create (it's only accessed for file removal).
+        if (local_cache_dir := repo_local_private_dir_ensure_with_subdir(
+                local_dir=local_dir,
+                subdir="cache",
+                error_fn=lambda ex: any_as_none(
+                    msglog.fatal_error("Error creating cache directory: {:s}".format(str(ex)))
+                ),
+        )) is None:
             return False
 
         # Most likely this doesn't have duplicates,but any errors procured by duplicates
@@ -3337,44 +3943,38 @@ class subcmd_client:
 
         packages_valid = []
 
-        error = False
+        has_fatal_error = False
         for pkg_idname in packages:
             # As this simply removes the directories right now,
             # validate this path cannot be used for an unexpected outcome,
             # or using `../../` to remove directories that shouldn't.
             if (pkg_idname in {"", ".", ".."}) or ("\\" in pkg_idname or "/" in pkg_idname):
-                message_error(msg_fn, "Package name invalid \"{:s}\"".format(pkg_idname))
-                error = True
+                msglog.fatal_error("Package name invalid \"{:s}\"".format(pkg_idname))
+                has_fatal_error = True
                 continue
 
             # This will be a directory.
             filepath_local_pkg = os.path.join(local_dir, pkg_idname)
             if not os.path.isdir(filepath_local_pkg):
-                message_error(msg_fn, "Package not found \"{:s}\"".format(pkg_idname))
-                error = True
+                msglog.fatal_error("Package not found \"{:s}\"".format(pkg_idname))
+                has_fatal_error = True
                 continue
 
             packages_valid.append(pkg_idname)
         del filepath_local_pkg
 
-        if error:
+        if has_fatal_error:
             return False
-
-        # Ensure a private directory so a local cache can be created.
-        # TODO: don't create (it's only accessed for file removal).
-        local_cache_dir = repo_local_private_dir_ensure_with_subdir(local_dir=local_dir, subdir="cache")
 
         files_to_clean: List[str] = []
         with CleanupPathsContext(files=files_to_clean, directories=()):
             for pkg_idname in packages_valid:
                 filepath_local_pkg = os.path.join(local_dir, pkg_idname)
-                try:
-                    shutil.rmtree(filepath_local_pkg)
-                except Exception as ex:
-                    message_error(msg_fn, "Failure to remove \"{:s}\" with error ({:s})".format(pkg_idname, str(ex)))
-                    continue
 
-                message_status(msg_fn, "Removed \"{:s}\"".format(pkg_idname))
+                if (error := rmtree_with_fallback_or_error(filepath_local_pkg)) is not None:
+                    msglog.error("Failure to remove \"{:s}\" with error ({:s})".format(pkg_idname, error))
+                else:
+                    msglog.status("Removed \"{:s}\"".format(pkg_idname))
 
                 filepath_local_cache_archive = os.path.join(local_cache_dir, pkg_idname + PKG_EXT)
                 if os.path.exists(filepath_local_cache_archive):
@@ -3382,16 +3982,13 @@ class subcmd_client:
 
                 if user_dir:
                     filepath_user_pkg = os.path.join(user_dir, pkg_idname)
-                    if os.path.isdir(filepath_user_pkg):
-                        shutil.rmtree(filepath_user_pkg)
-                        try:
-                            shutil.rmtree(filepath_user_pkg)
-                        except Exception as ex:
-                            message_error(
-                                msg_fn,
-                                "Failure to remove \"{:s}\" user files with error ({:s})".format(pkg_idname, str(ex)),
+                    if os.path.exists(filepath_user_pkg):
+                        if (error := rmtree_with_fallback_or_error(filepath_user_pkg)) is not None:
+                            msglog.error(
+                                "Failure to remove \"{:s}\" user files with error ({:s})".format(pkg_idname, error),
                             )
-                            continue
+                        else:
+                            msglog.status("Removed cache \"{:s}\"".format(pkg_idname))
 
         return True
 
@@ -3400,26 +3997,27 @@ class subcmd_author:
 
     @staticmethod
     def build(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             pkg_source_dir: str,
             pkg_output_dir: str,
             pkg_output_filepath: str,
             split_platforms: bool,
+            valid_tags_filepath: str,
             verbose: bool,
     ) -> bool:
         if not os.path.isdir(pkg_source_dir):
-            message_error(msg_fn, "Missing local \"{:s}\"".format(pkg_source_dir))
+            msglog.fatal_error("Missing local \"{:s}\"".format(pkg_source_dir))
             return False
 
         if pkg_output_dir != "." and pkg_output_filepath != "":
-            message_error(msg_fn, "Both output directory & output filepath set, set one or the other")
+            msglog.fatal_error("Both output directory & output filepath set, set one or the other")
             return False
 
         pkg_manifest_filepath = os.path.join(pkg_source_dir, PKG_MANIFEST_FILENAME_TOML)
 
         if not os.path.exists(pkg_manifest_filepath):
-            message_error(msg_fn, "File \"{:s}\" not found!".format(pkg_manifest_filepath))
+            msglog.fatal_error("File \"{:s}\" not found!".format(pkg_manifest_filepath))
             return False
 
         # TODO: don't use this line, because the build information needs to be extracted too.
@@ -3429,13 +4027,13 @@ class subcmd_author:
             with open(pkg_manifest_filepath, "rb") as fh:
                 manifest_data = tomllib.load(fh)
         except Exception as ex:
-            message_error(msg_fn, "Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, str(ex)))
+            msglog.fatal_error("Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, str(ex)))
             return False
 
         manifest = pkg_manifest_from_dict_and_validate_all_errros(manifest_data, from_repo=False, strict=True)
         if isinstance(manifest, list):
             for error_msg in manifest:
-                message_error(msg_fn, "Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, error_msg))
+                msglog.fatal_error("Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, error_msg))
             return False
 
         if split_platforms:
@@ -3443,16 +4041,23 @@ class subcmd_author:
             # this could result in further problems for automated tasks which operate on the output
             # where they would expect a platform suffix on each archive. So consider this an error.
             if not manifest.platforms:
-                message_error(
-                    msg_fn,
+                msglog.fatal_error(
                     "Error in arguments \"--split-platforms\" with a manifest that does not declare \"platforms\"",
                 )
                 return False
 
+        if valid_tags_filepath:
+            if subcmd_author._validate_tags(
+                    msglog,
+                    manifest=manifest,
+                    pkg_manifest_filepath=pkg_manifest_filepath,
+                    valid_tags_filepath=valid_tags_filepath,
+            ) is False:
+                return False
+
         if (manifest_build_data := manifest_data.get("build")) is not None:
             if "generated" in manifest_build_data:
-                message_error(
-                    msg_fn,
+                msglog.fatal_error(
                     "Error in TOML \"{:s}\" contains reserved value: [build.generated]".format(pkg_manifest_filepath),
                 )
                 return False
@@ -3473,7 +4078,9 @@ class subcmd_author:
             )
             if isinstance(manifest_build_test, list):
                 for error_msg in manifest_build_test:
-                    message_error(msg_fn, "Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, error_msg))
+                    msglog.fatal_error(
+                        "Error parsing TOML \"{:s}\" {:s}".format(pkg_manifest_filepath, error_msg)
+                    )
                 return False
             manifest_build = manifest_build_test
             del manifest_build_test
@@ -3561,7 +4168,7 @@ class subcmd_author:
                 del build_paths_extra_canonical
 
             except Exception as ex:
-                message_status(msg_fn, "Error building path list \"{:s}\"".format(str(ex)))
+                msglog.fatal_error("Error building path list \"{:s}\"".format(str(ex)))
                 return False
 
         request_exit = False
@@ -3607,15 +4214,16 @@ class subcmd_author:
                 outfile = os.path.join(pkg_output_dir, pkg_filename)
                 outfile_temp = os.path.join(pkg_output_dir, "." + pkg_filename)
 
-            request_exit |= message_status(msg_fn, "building: {:s}".format(pkg_filename))
+            request_exit |= msglog.status("building: {:s}".format(pkg_filename))
             if request_exit:
                 return False
 
             with CleanupPathsContext(files=(outfile_temp,), directories=()):
                 try:
+                    # pylint: disable-next=consider-using-with
                     zip_fh_context = zipfile.ZipFile(outfile_temp, 'w', zipfile.ZIP_DEFLATED, compresslevel=9)
                 except Exception as ex:
-                    message_status(msg_fn, "Error creating archive \"{:s}\"".format(str(ex)))
+                    msglog.fatal_error("Error creating archive \"{:s}\"".format(str(ex)))
                     return False
 
                 with contextlib.closing(zip_fh_context) as zip_fh:
@@ -3623,17 +4231,31 @@ class subcmd_author:
 
                         zip_data_override: Optional[bytes] = None
                         if platform and (filepath_rel == PKG_MANIFEST_FILENAME_TOML):
-                            with open(filepath_abs, "rb") as temp_fh:
-                                zip_data_override = temp_fh.read()
-                                zip_data_override = zip_data_override + b"".join((
-                                    b"\n",
-                                    b"\n",
-                                    b"# BEGIN GENERATED CONTENT.\n",
-                                    b"# This must not be included in source manifests.\n",
-                                    b"[build.generated]\n",
-                                    "platforms = [\"{:s}\"]\n".format(platform).encode("utf-8"),
-                                    b"# END GENERATED CONTENT.\n",
-                                ))
+                            zip_data_override = b"".join((
+                                b"\n",
+                                b"\n",
+                                b"# BEGIN GENERATED CONTENT.\n",
+                                b"# This must not be included in source manifests.\n",
+                                b"[build.generated]\n",
+                                "platforms = [{:s}]\n".format(toml_repr_string(platform)).encode("utf-8"),
+                                # Including wheels simplifies server side check as this list can be tested
+                                # without the server having to filter by platform too.
+                                b"wheels = [",
+                                ", ".join([
+                                    toml_repr_string(wheel) for wheel in paths_filter_wheels_by_platform(
+                                        manifest.wheels or [],
+                                        platform,
+                                    )
+                                ]).encode("utf-8"),
+                                b"]\n"
+                                b"# END GENERATED CONTENT.\n",
+                            ))
+                            try:
+                                with open(filepath_abs, "rb") as temp_fh:
+                                    zip_data_override = temp_fh.read() + zip_data_override
+                            except Exception as ex:
+                                msglog.fatal_error("Error overriding manifest \"{:s}\"".format(str(ex)))
+                                return False
 
                         # Handy for testing that sub-directories:
                         # zip_fh.write(filepath_abs, manifest.id + "/" + filepath_rel)
@@ -3644,13 +4266,13 @@ class subcmd_author:
                             else:
                                 zip_fh.write(filepath_abs, filepath_rel, compress_type=compress_type)
                         except Exception as ex:
-                            message_status(msg_fn, "Error adding to archive \"{:s}\"".format(str(ex)))
+                            msglog.fatal_error("Error adding to archive \"{:s}\"".format(str(ex)))
                             return False
 
                         if verbose:
-                            message_status(msg_fn, "add: {:s}".format(filepath_rel))
+                            msglog.status("add: {:s}".format(filepath_rel))
 
-                    request_exit |= message_status(msg_fn, "complete")
+                    request_exit |= msglog.status("complete")
                     if request_exit:
                         return False
 
@@ -3658,27 +4280,54 @@ class subcmd_author:
                     os.unlink(outfile)
                 os.rename(outfile_temp, outfile)
 
-        message_status(msg_fn, "created: \"{:s}\", {:d}".format(outfile, os.path.getsize(outfile)))
+        msglog.status("created: \"{:s}\", {:d}".format(outfile, os.path.getsize(outfile)))
+        return True
+
+    @staticmethod
+    def _validate_tags(
+            msglog: MessageLogger,
+            *,
+            manifest: PkgManifest,
+            # NOTE: This path is only for inclusion in the error message,
+            # the path may not exist on the file-system (it may refer to a path inside an archive for e.g.).
+            pkg_manifest_filepath: str,
+            valid_tags_filepath: str,
+    ) -> bool:
+        assert valid_tags_filepath
+        if manifest.tags is not None:
+            if isinstance(valid_tags_data := pkg_manifest_tags_load_valid_map(valid_tags_filepath), str):
+                msglog.fatal_error(
+                    "Error in TAGS \"{:s}\" loading tags: {:s}".format(valid_tags_filepath, valid_tags_data),
+                )
+                return False
+            if (error := pkg_manifest_tags_valid_or_error(valid_tags_data, manifest.type, manifest.tags)) is not None:
+                msglog.fatal_error((
+                    "Error in TOML \"{:s}\" loading tags: {:s}\n"
+                    "Either correct the tag or disable validation using an empty tags argument --valid-tags=\"\", "
+                    "see --help text for details."
+                ).format(pkg_manifest_filepath, error))
+                return False
         return True
 
     @staticmethod
     def _validate_directory(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             pkg_source_dir: str,
+            valid_tags_filepath: str,
     ) -> bool:
         pkg_manifest_filepath = os.path.join(pkg_source_dir, PKG_MANIFEST_FILENAME_TOML)
 
         if not os.path.exists(pkg_manifest_filepath):
-            message_error(msg_fn, "Error, file \"{:s}\" not found!".format(pkg_manifest_filepath))
+            msglog.fatal_error("Error, file \"{:s}\" not found!".format(pkg_manifest_filepath))
             return False
 
         # Demote errors to status as the function of this action is to check the manifest is stable.
         manifest = pkg_manifest_from_toml_and_validate_all_errors(pkg_manifest_filepath, strict=True)
         if isinstance(manifest, list):
-            message_status(msg_fn, "Error parsing TOML \"{:s}\"".format(pkg_manifest_filepath))
+            msglog.status("Error parsing TOML \"{:s}\"".format(pkg_manifest_filepath))
             for error_msg in manifest:
-                message_status(msg_fn, error_msg)
+                msglog.status(error_msg)
             return False
 
         expected_files = []
@@ -3687,7 +4336,7 @@ class subcmd_author:
         ok = True
         for filepath in expected_files:
             if not os.path.exists(os.path.join(pkg_source_dir, filepath)):
-                message_status(msg_fn, "Error, file missing from {:s}: \"{:s}\"".format(
+                msglog.status("Error, file missing from {:s}: \"{:s}\"".format(
                     manifest.type,
                     filepath,
                 ))
@@ -3695,14 +4344,24 @@ class subcmd_author:
         if not ok:
             return False
 
-        message_status(msg_fn, "Success parsing TOML in \"{:s}\"".format(pkg_source_dir))
+        if valid_tags_filepath:
+            if subcmd_author._validate_tags(
+                    msglog,
+                    manifest=manifest,
+                    pkg_manifest_filepath=pkg_manifest_filepath,
+                    valid_tags_filepath=valid_tags_filepath,
+            ) is False:
+                return False
+
+        msglog.status("Success parsing TOML in \"{:s}\"".format(pkg_source_dir))
         return True
 
     @staticmethod
     def _validate_archive(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             pkg_source_archive: str,
+            valid_tags_filepath: str,
     ) -> bool:
         # NOTE(@ideasman42): having `_validate_directory` & `_validate_archive`
         # use separate code-paths isn't ideal in some respects however currently the difference
@@ -3718,22 +4377,36 @@ class subcmd_author:
         # extract the archive into a temporary directory and run validation there.
 
         try:
+            # pylint: disable-next=consider-using-with
             zip_fh_context = zipfile.ZipFile(pkg_source_archive, mode="r")
         except Exception as ex:
-            message_status(msg_fn, "Error extracting archive \"{:s}\"".format(str(ex)))
+            msglog.status("Error extracting archive \"{:s}\"".format(str(ex)))
             return False
 
         with contextlib.closing(zip_fh_context) as zip_fh:
             if (archive_subdir := pkg_zipfile_detect_subdir_or_none(zip_fh)) is None:
-                message_status(msg_fn, "Error, archive has no manifest: \"{:s}\"".format(PKG_MANIFEST_FILENAME_TOML))
+                msglog.fatal_error("Error, archive has no manifest: \"{:s}\"".format(PKG_MANIFEST_FILENAME_TOML))
                 return False
             # Demote errors to status as the function of this action is to check the manifest is stable.
             manifest = pkg_manifest_from_zipfile_and_validate_all_errors(zip_fh, archive_subdir, strict=True)
             if isinstance(manifest, list):
-                message_status(msg_fn, "Error parsing TOML in \"{:s}\"".format(pkg_source_archive))
+                msglog.fatal_error("Error parsing TOML in \"{:s}\"".format(pkg_source_archive))
                 for error_msg in manifest:
-                    message_status(msg_fn, error_msg)
+                    msglog.fatal_error(error_msg)
                 return False
+
+            if valid_tags_filepath:
+                if subcmd_author._validate_tags(
+                        msglog,
+                        manifest=manifest,
+                        # Only for the error message, use the ZIP relative path.
+                        pkg_manifest_filepath=(
+                            "{:s}/{:s}".format(archive_subdir, PKG_MANIFEST_FILENAME_TOML) if archive_subdir else
+                            PKG_MANIFEST_FILENAME_TOML
+                        ),
+                        valid_tags_filepath=valid_tags_filepath,
+                ) is False:
+                    return False
 
             # NOTE: this is arguably *not* manifest validation, the check could be refactored out.
             # Currently we always want to check both and it's useful to do that while the informatio
@@ -3747,7 +4420,7 @@ class subcmd_author:
             ok = True
             for filepath in expected_files:
                 if zip_fh.NameToInfo.get(filepath) is None:
-                    message_status(msg_fn, "Error, file missing from {:s}: \"{:s}\"".format(
+                    msglog.fatal_error("Error, file missing from {:s}: \"{:s}\"".format(
                         manifest.type,
                         filepath,
                     ))
@@ -3755,19 +4428,28 @@ class subcmd_author:
             if not ok:
                 return False
 
-        message_status(msg_fn, "Success parsing TOML in \"{:s}\"".format(pkg_source_archive))
+        msglog.status("Success parsing TOML in \"{:s}\"".format(pkg_source_archive))
         return True
 
     @staticmethod
     def validate(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             source_path: str,
+            valid_tags_filepath: str,
     ) -> bool:
         if os.path.isdir(source_path):
-            result = subcmd_author._validate_directory(msg_fn, pkg_source_dir=source_path)
+            result = subcmd_author._validate_directory(
+                msglog,
+                pkg_source_dir=source_path,
+                valid_tags_filepath=valid_tags_filepath,
+            )
         else:
-            result = subcmd_author._validate_archive(msg_fn, pkg_source_archive=source_path)
+            result = subcmd_author._validate_archive(
+                msglog,
+                pkg_source_archive=source_path,
+                valid_tags_filepath=valid_tags_filepath,
+            )
         return result
 
 
@@ -3775,7 +4457,7 @@ class subcmd_dummy:
 
     @staticmethod
     def repo(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             repo_dir: str,
             package_names: Sequence[str],
@@ -3784,21 +4466,20 @@ class subcmd_dummy:
         def msg_fn_no_done(ty: str, data: PrimTypeOrSeq) -> bool:
             if ty == 'DONE':
                 return False
-            return msg_fn(ty, data)
+            return msglog.msg_fn(ty, data)
 
         # Ensure package names are valid.
         package_names = tuple(set(package_names))
         for pkg_idname in package_names:
             if (error_msg := pkg_idname_is_valid_or_error(pkg_idname)) is None:
                 continue
-            message_error(
-                msg_fn,
+            msglog.fatal_error(
                 "key \"id\", \"{:s}\" doesn't match expected format, \"{:s}\"".format(pkg_idname, error_msg),
             )
             return False
 
         if url_has_known_prefix(repo_dir):
-            message_error(msg_fn, "Generating a repository on a remote path is not supported")
+            msglog.fatal_error("Generating a repository on a remote path is not supported")
             return False
 
         # Unlike most other commands, create the repo_dir it doesn't already exist.
@@ -3806,7 +4487,7 @@ class subcmd_dummy:
             try:
                 os.makedirs(repo_dir)
             except Exception as ex:
-                message_error(msg_fn, "Failed to create \"{:s}\" with error: {!r}".format(repo_dir, ex))
+                msglog.fatal_error("Failed to create \"{:s}\" with error: {!r}".format(repo_dir, ex))
                 return False
 
         import tempfile
@@ -3855,11 +4536,12 @@ def unregister():
 
                 # `{cmd} build --pkg-source-dir {pkg_src_dir} --pkg-output-dir {repo_dir}`.
                 if not subcmd_author.build(
-                    msg_fn_no_done,
+                    MessageLogger(msg_fn_no_done),
                     pkg_source_dir=pkg_src_dir,
                     pkg_output_dir=repo_dir,
                     pkg_output_filepath="",
                     split_platforms=False,
+                    valid_tags_filepath="",
                     verbose=False,
                 ):
                     # Error running command.
@@ -3867,20 +4549,21 @@ def unregister():
 
         # `{cmd} server-generate --repo-dir {repo_dir}`.
         if not subcmd_server.generate(
-            msg_fn_no_done,
+            MessageLogger(msg_fn_no_done),
             repo_dir=repo_dir,
+            repo_config_filepath="",
             html=True,
             html_template="",
         ):
             # Error running command.
             return False
 
-        message_done(msg_fn)
+        msglog.done()
         return True
 
     @staticmethod
     def progress(
-            msg_fn: MessageFn,
+            msglog: MessageLogger,
             *,
             time_duration: float,
             time_delay: float,
@@ -3891,7 +4574,7 @@ def unregister():
         size_beg = 0
         size_end = 100
         while time_duration == 0.0 or (time.time() - time_start < time_duration):
-            request_exit |= message_progress(msg_fn, "Demo", size_beg, size_end, 'BYTE')
+            request_exit |= msglog.progress("Demo", size_beg, size_end, 'BYTE')
             if request_exit:
                 break
             size_beg += 1
@@ -3899,10 +4582,10 @@ def unregister():
                 size_beg = 0
             time.sleep(time_delay)
         if request_exit:
-            message_done(msg_fn)
+            msglog.done()
             return False
 
-        message_done(msg_fn)
+        msglog.done()
         return True
 
 
@@ -3925,6 +4608,7 @@ def argparse_create_server_generate(
     )
 
     generic_arg_repo_dir(subparse)
+    generic_arg_server_generate_repo_config(subparse)
     generic_arg_server_generate_html(subparse)
     generic_arg_server_generate_html_template(subparse)
     if args_internal:
@@ -3932,8 +4616,9 @@ def argparse_create_server_generate(
 
     subparse.set_defaults(
         func=lambda args: subcmd_server.generate(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             repo_dir=args.repo_dir,
+            repo_config_filepath=args.repo_config,
             html=args.html,
             html_template=args.html_template,
         ),
@@ -3962,7 +4647,7 @@ def argparse_create_client_list(subparsers: "argparse._SubParsersAction[argparse
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.list_packages(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             args.remote_url,
             online_user_agent=args.online_user_agent,
             access_token=args.access_token,
@@ -3997,7 +4682,7 @@ def argparse_create_client_sync(subparsers: "argparse._SubParsersAction[argparse
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.sync(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             remote_url=args.remote_url,
             remote_name=args.remote_name if args.remote_name else remote_url_params_strip(args.remote_url),
             local_dir=args.local_dir,
@@ -4021,13 +4706,16 @@ def argparse_create_client_install_files(subparsers: "argparse._SubParsersAction
     generic_arg_file_list_positional(subparse)
 
     generic_arg_local_dir(subparse)
+    generic_arg_blender_version(subparse)
+
     generic_arg_output_type(subparse)
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.install_packages_from_files(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             local_dir=args.local_dir,
             package_files=args.files,
+            blender_version=args.blender_version,
         ),
     )
 
@@ -4053,7 +4741,7 @@ def argparse_create_client_install(subparsers: "argparse._SubParsersAction[argpa
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.install_packages(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             remote_url=args.remote_url,
             local_dir=args.local_dir,
             local_cache=args.local_cache,
@@ -4081,7 +4769,7 @@ def argparse_create_client_uninstall(subparsers: "argparse._SubParsersAction[arg
 
     subparse.set_defaults(
         func=lambda args: subcmd_client.uninstall_packages(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             local_dir=args.local_dir,
             user_dir=args.user_dir,
             packages=args.packages.split(","),
@@ -4106,6 +4794,7 @@ def argparse_create_author_build(
     generic_arg_package_source_dir(subparse)
     generic_arg_package_output_dir(subparse)
     generic_arg_package_output_filepath(subparse)
+    generic_arg_package_valid_tags(subparse)
     generic_arg_build_split_platforms(subparse)
     generic_arg_verbose(subparse)
 
@@ -4114,11 +4803,12 @@ def argparse_create_author_build(
 
     subparse.set_defaults(
         func=lambda args: subcmd_author.build(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             pkg_source_dir=args.source_dir,
             pkg_output_dir=args.output_dir,
             pkg_output_filepath=args.output_filepath,
             split_platforms=args.split_platforms,
+            valid_tags_filepath=args.valid_tags_filepath,
             verbose=args.verbose,
         ),
     )
@@ -4135,14 +4825,16 @@ def argparse_create_author_validate(
         formatter_class=argparse.RawTextHelpFormatter,
     )
     generic_arg_package_source_path_positional(subparse)
+    generic_arg_package_valid_tags(subparse)
 
     if args_internal:
         generic_arg_output_type(subparse)
 
     subparse.set_defaults(
         func=lambda args: subcmd_author.validate(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             source_path=args.source_path,
+            valid_tags_filepath=args.valid_tags_filepath,
         ),
     )
 
@@ -4174,7 +4866,7 @@ def argparse_create_dummy_repo(subparsers: "argparse._SubParsersAction[argparse.
 
     subparse.set_defaults(
         func=lambda args: subcmd_dummy.repo(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             repo_dir=args.repo_dir,
             package_names=args.package_names,
         ),
@@ -4215,7 +4907,7 @@ def argparse_create_dummy_progress(subparsers: "argparse._SubParsersAction[argpa
 
     subparse.set_defaults(
         func=lambda args: subcmd_dummy.progress(
-            msg_fn_from_args(args),
+            msglog_from_args(args),
             time_duration=args.time_duration,
             time_delay=args.time_delay,
         ),
@@ -4307,20 +4999,23 @@ def msg_print_json_0(ty: str, data: PrimTypeOrSeq) -> bool:
     return REQUEST_EXIT
 
 
-def msg_fn_from_args(args: argparse.Namespace) -> MessageFn:
+def msglog_from_args(args: argparse.Namespace) -> MessageLogger:
     # Will be None when running form Blender.
     output_type = getattr(args, "output_type", 'TEXT')
 
     match output_type:
         case 'JSON':
-            return msg_print_json
+            return MessageLogger(msg_print_json)
         case 'JSON_0':
-            return msg_print_json_0
+            return MessageLogger(msg_print_json_0)
         case 'TEXT':
-            return msg_print_text
+            return MessageLogger(msg_print_text)
 
     raise Exception("Unknown output!")
 
+
+# -----------------------------------------------------------------------------
+# Main Function
 
 def main(
         argv: Optional[List[str]] = None,
@@ -4334,6 +5029,7 @@ def main(
         # While this is typically the case, is only guaranteed to be `TextIO` so check `reconfigure` is available.
         if not isinstance(fh, io.TextIOWrapper):
             continue
+        # pylint: disable-next=no-member; False positive.
         if fh.encoding.lower().partition(":")[0] == "utf-8":
             continue
         fh.reconfigure(encoding="utf-8")
@@ -4341,6 +5037,9 @@ def main(
     if "--version" in sys.argv:
         sys.stdout.write("{:s}\n".format(VERSION))
         return 0
+
+    if sys.platform == "win32":
+        _worlaround_win32_ssl_cert_failure()
 
     parser = argparse_create(
         args_internal=args_internal,

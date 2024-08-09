@@ -44,8 +44,8 @@ struct rcti;
 #define BLF_CACHE_BYTES 400000
 
 /**
- * Offset from icon id to Unicode Supplimentary Private Use Area-B,
- * added with Unicode 2.0. 65,536 codepoints at U+100000..U+10FFFF.
+ * Offset from icon id to Unicode Supplementary Private Use Area-B,
+ * added with Unicode 2.0. 65,536 code-points at U+100000..U+10FFFF.
  */
 #define BLF_ICON_OFFSET 0x100000L
 
@@ -105,8 +105,9 @@ void blf_draw_svg_icon(FontBLF *font,
                        float x,
                        float y,
                        float size,
-                       float color[4],
-                       float outline_alpha);
+                       float color[4] = nullptr,
+                       float outline_alpha = 1.0f,
+                       bool multicolor = false);
 
 blender::Array<uchar> blf_svg_icon_bitmap(
     FontBLF *font, uint icon_id, float size, int *r_width, int *r_height);
@@ -184,7 +185,7 @@ GlyphBLF *blf_glyph_ensure(FontBLF *font, GlyphCacheBLF *gc, uint charcode, uint
 GlyphBLF *blf_glyph_ensure_subpixel(FontBLF *font, GlyphCacheBLF *gc, GlyphBLF *g, int32_t pen_x);
 #endif
 
-GlyphBLF *blf_glyph_ensure_icon(GlyphCacheBLF *gc, uint icon_id);
+GlyphBLF *blf_glyph_ensure_icon(GlyphCacheBLF *gc, uint icon_id, bool color = false);
 
 /**
  * Convert a character's outlines into curves.

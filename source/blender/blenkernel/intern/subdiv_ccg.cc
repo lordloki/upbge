@@ -1652,6 +1652,27 @@ SubdivCCGAdjacencyType BKE_subdiv_ccg_coarse_mesh_adjacency_info_get(
   return SUBDIV_CCG_ADJACENT_NONE;
 }
 
+bool BKE_subdiv_ccg_coord_is_mesh_boundary(const OffsetIndices<int> faces,
+                                           const Span<int> corner_verts,
+                                           const blender::BitSpan boundary_verts,
+                                           const SubdivCCG &subdiv_ccg,
+                                           const SubdivCCGCoord coord)
+{
+  int v1, v2;
+  const SubdivCCGAdjacencyType adjacency = BKE_subdiv_ccg_coarse_mesh_adjacency_info_get(
+      subdiv_ccg, coord, corner_verts, faces, v1, v2);
+  switch (adjacency) {
+    case SUBDIV_CCG_ADJACENT_VERTEX:
+      return boundary_verts[v1];
+    case SUBDIV_CCG_ADJACENT_EDGE:
+      return boundary_verts[v1] && boundary_verts[v2];
+    case SUBDIV_CCG_ADJACENT_NONE:
+      return false;
+  }
+  BLI_assert_unreachable();
+  return false;
+}
+
 blender::BitGroupVector<> &BKE_subdiv_ccg_grid_hidden_ensure(SubdivCCG &subdiv_ccg)
 {
   if (subdiv_ccg.grid_hidden.is_empty()) {
@@ -1707,6 +1728,23 @@ void BKE_subdiv_ccg_eval_limit_point(const SubdivCCG &subdiv_ccg,
   float u, v;
   subdiv_ccg_coord_to_ptex_coord(subdiv_ccg, coord, &ptex_face_index, &u, &v);
   eval_limit_point(subdiv, ptex_face_index, u, v, r_point);
+}
+
+void BKE_subdiv_ccg_eval_limit_positions(const SubdivCCG &subdiv_ccg,
+                                         const CCGKey &key,
+                                         const int grid_index,
+                                         const MutableSpan<float3> r_limit_positions)
+{
+  SubdivCCGCoord coord{};
+  coord.grid_index = grid_index;
+  for (const int y : IndexRange(key.grid_size)) {
+    for (const int x : IndexRange(key.grid_size)) {
+      const int i = CCG_grid_xy_to_index(key.grid_size, x, y);
+      coord.x = x;
+      coord.y = y;
+      BKE_subdiv_ccg_eval_limit_point(subdiv_ccg, coord, r_limit_positions[i]);
+    }
+  }
 }
 
 /** \} */

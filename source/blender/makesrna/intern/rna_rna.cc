@@ -160,16 +160,16 @@ const EnumPropertyItem rna_enum_property_unit_items[] = {
 /* Descriptions for rna_enum_property_flag_items and rna_enum_property_flag_enum_items. */
 static constexpr auto PROP_HIDDEN_DESCR =
     "For operators: hide from places in the user interface where Blender would add the property "
-    "automatically, like Adjust Last Operation. Also this property is not written to presets";
+    "automatically, like Adjust Last Operation. Also this property is not written to presets.";
 static constexpr auto PROP_SKIP_SAVE_DESCR =
     "For operators: the value of this property will not be remembered between invocations of the "
     "operator; instead, each invocation will start by using the default value. Also this "
-    "property is not written to presets";
+    "property is not written to presets.";
 static constexpr auto PROP_SKIP_PRESET_DESCR = "Do not write in presets";
 static constexpr auto PROP_ANIMATABLE_DESCR = "";
 static constexpr auto PROP_LIB_EXCEPTION_DESCR =
     "This property can be edited, even when it is used on linked data (which normally is "
-    "read-only). Note that edits to the property will not be saved to the blend file";
+    "read-only). Note that edits to the property will not be saved to the blend file.";
 static constexpr auto PROP_PROPORTIONAL_DESCR = "";
 static constexpr auto PROP_TEXTEDIT_UPDATE_DESCR = "";
 static constexpr auto PROP_PATH_OUTPUT_DESCR = "";
@@ -330,13 +330,17 @@ static bool rna_idproperty_known(CollectionPropertyIterator *iter, void *data)
   PropertyRNA *prop;
   StructRNA *ptype = iter->builtin_parent.type;
 
-  /* function to skip any id properties that are already known by RNA,
-   * for the second loop where we go over unknown id properties */
+  /* Function to skip any id properties that are already known by RNA,
+   * for the second loop where we go over unknown id properties.
+   *
+   * Note that only dynamically-defined RNA properties (the ones actually using IDProperties as
+   * storage back-end) should be checked here. If a custom property is named the same as a 'normal'
+   * RNA property, they are different data. */
   do {
     for (prop = static_cast<PropertyRNA *>(ptype->cont.properties.first); prop; prop = prop->next)
     {
       if ((prop->flag_internal & PROP_INTERN_BUILTIN) == 0 &&
-          STREQ(prop->identifier, idprop->name))
+          (prop->flag & PROP_IDPROPERTY) != 0 && STREQ(prop->identifier, idprop->name))
       {
         return true;
       }
@@ -1584,8 +1588,8 @@ static void rna_property_override_diff_propptr(Main *bmain,
                * liboverride is not matching its reference anymore. */
               opop->flag &= ~LIBOVERRIDE_OP_FLAG_IDPOINTER_MATCH_REFERENCE;
             }
-            else if ((owner_id_a->tag & LIB_TAG_LIBOVERRIDE_NEED_RESYNC) != 0 ||
-                     (owner_id_b->tag & LIB_TAG_LIBOVERRIDE_NEED_RESYNC) != 0)
+            else if ((owner_id_a->tag & ID_TAG_LIBOVERRIDE_NEED_RESYNC) != 0 ||
+                     (owner_id_b->tag & ID_TAG_LIBOVERRIDE_NEED_RESYNC) != 0)
             {
               /* In case one of the owner of the checked property is tagged as needing resync, do
                * not change the 'match reference' status of its ID pointer properties overrides,
@@ -2112,7 +2116,7 @@ void rna_property_override_diff_default(Main *bmain, RNAPropertyOverrideDiffCont
       {
         CLOG_ERROR(&LOG_COMPARE_OVERRIDE,
                    "RNA collection '%s' defined as supporting liboverride insertion of items, but "
-                   "no liboverride apply callback defined for it. No insertion will hapen.",
+                   "no liboverride apply callback defined for it. No insertion will happen.",
                    rna_path);
       }
 
@@ -3491,7 +3495,7 @@ static void rna_def_number_property(StructRNA *srna, PropertyType type)
                              "Precision",
                              "Number of digits after the dot used by buttons. Fraction is "
                              "automatically hidden for exact integer values of fields with unit "
-                             "'NONE' or 'TIME' (frame count) and step divisible by 100");
+                             "'NONE' or 'TIME' (frame count) and step divisible by 100.");
   }
 }
 
@@ -3587,7 +3591,7 @@ static void rna_def_enum_property(BlenderRNA *brna, StructRNA *srna)
       prop,
       "Static Items with UI Elements",
       "Possible values for the property (never calls optional dynamic generation of those). "
-      "Includes UI elements (separators and section headings)");
+      "Includes UI elements (separators and section headings).");
 
   srna = RNA_def_struct(brna, "EnumPropertyItem", nullptr);
   RNA_def_struct_ui_text(

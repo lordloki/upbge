@@ -48,7 +48,6 @@ DEF_ENUM(rna_enum_boidrule_type_items)
 DEF_ENUM(rna_enum_sequence_modifier_type_items)
 DEF_ENUM(rna_enum_sequence_video_modifier_type_items)
 DEF_ENUM(rna_enum_sequence_sound_modifier_type_items)
-DEF_ENUM(rna_enum_object_greasepencil_modifier_type_items)
 DEF_ENUM(rna_enum_object_shaderfx_type_items)
 
 DEF_ENUM(rna_enum_modifier_triangulate_quad_method_items)
@@ -255,6 +254,9 @@ DEF_ENUM(rna_enum_velocity_unit_items)
 DEF_ENUM(rna_enum_curves_type_items)
 DEF_ENUM(rna_enum_curves_handle_type_items)
 DEF_ENUM(rna_enum_curve_normal_mode_items)
+
+DEF_ENUM(rna_enum_geometry_nodes_gizmo_color_items)
+DEF_ENUM(rna_enum_geometry_nodes_linear_gizmo_draw_style_items)
 
 /* Not available to RNA pre-processing (`makesrna`).
  * Defined in editors for example. */

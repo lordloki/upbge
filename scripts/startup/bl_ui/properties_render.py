@@ -10,7 +10,6 @@ from bl_ui.space_view3d import (
     VIEW3D_PT_shading_options,
 )
 from bl_ui.utils import PresetPanel
-from bpy.app.translations import pgettext_rpt as rpt_
 
 
 class RenderButtonsPanel:
@@ -203,7 +202,7 @@ class RENDER_PT_color_management_display_settings(RenderButtonsPanel, Panel):
 
 
 class RENDER_PT_color_management_curves(RenderButtonsPanel, Panel):
-    bl_label = "Use Curves"
+    bl_label = "Curves"
     bl_parent_id = "RENDER_PT_color_management"
     bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {
@@ -229,9 +228,60 @@ class RENDER_PT_color_management_curves(RenderButtonsPanel, Panel):
         layout.use_property_split = False
         layout.use_property_decorate = False  # No animation.
 
-        layout.enabled = view.use_curve_mapping
+        layout.active = view.use_curve_mapping
 
         layout.template_curve_mapping(view, "curve_mapping", type='COLOR', levels=True)
+
+
+class RENDER_PT_color_management_white_balance_presets(PresetPanel, Panel):
+    bl_label = "White Balance Presets"
+    preset_subdir = "color_management/white_balance"
+    preset_operator = "script.execute_preset"
+    preset_add_operator = "render.color_management_white_balance_preset_add"
+
+
+class RENDER_PT_color_management_white_balance(RenderButtonsPanel, Panel):
+    bl_label = "White Balance"
+    bl_parent_id = "RENDER_PT_color_management"
+    bl_options = {'DEFAULT_CLOSED'}
+    COMPAT_ENGINES = {
+        'BLENDER_RENDER',
+        'BLENDER_EEVEE',
+        'BLENDER_EEVEE_NEXT',
+        'BLENDER_WORKBENCH',
+    }
+
+    def draw_header(self, context):
+        scene = context.scene
+        view = scene.view_settings
+
+        self.layout.prop(view, "use_white_balance", text="")
+
+    def draw_header_preset(self, context):
+        layout = self.layout
+
+        scene = context.scene
+        view = scene.view_settings
+
+        RENDER_PT_color_management_white_balance_presets.draw_panel_header(layout)
+
+        eye = layout.operator("ui.eyedropper_color", text="", icon='EYEDROPPER')
+        eye.prop_data_path = "scene.view_settings.white_balance_whitepoint"
+
+    def draw(self, context):
+        layout = self.layout
+
+        scene = context.scene
+        view = scene.view_settings
+
+        layout.use_property_split = True
+        layout.use_property_decorate = False  # No animation.
+
+        layout.active = view.use_white_balance
+
+        col = layout.column()
+        col.prop(view, "white_balance_temperature")
+        col.prop(view, "white_balance_tint")
 
 
 class RENDER_PT_eevee_ambient_occlusion(RenderButtonsPanel, Panel):
@@ -671,7 +721,6 @@ class RENDER_PT_eevee_next_raytracing(RenderButtonsPanel, Panel):
         options = context.scene.eevee.ray_tracing_options
 
         col.prop(options, "resolution_scale")
-        col.prop(options, "trace_max_roughness", text="Max Roughness")
 
 
 class RENDER_PT_eevee_next_screen_trace(RenderButtonsPanel, Panel):
@@ -711,29 +760,42 @@ class RENDER_PT_eevee_next_gi_approximation(RenderButtonsPanel, Panel):
     def poll(cls, context):
         return (context.engine in cls.COMPAT_ENGINES)
 
+    def draw_header(self, context):
+        self.layout.active = context.scene.eevee.use_raytracing
+        props = context.scene.eevee
+        self.layout.prop(props, "use_fast_gi", text="")
+
     def draw(self, context):
         scene = context.scene
         props = scene.eevee
+        options = scene.eevee.ray_tracing_options
 
         layout = self.layout
-        layout.active = props.use_raytracing
         layout.use_property_split = True
         layout.use_property_decorate = False
 
-        layout.prop(props, "fast_gi_method")
-        layout.prop(props, "fast_gi_resolution", text="Resolution")
+        col = layout.column()
+        col.active = props.use_raytracing and props.use_fast_gi
+        col.prop(options, "trace_max_roughness", text="Threshold")
 
-        col = layout.column(align=True)
-        col.prop(props, "fast_gi_ray_count", text="Rays")
-        col.prop(props, "fast_gi_step_count", text="Steps")
-        col.prop(props, "fast_gi_quality", text="Precision")
+        is_valid = props.use_raytracing and props.use_fast_gi and props.ray_tracing_options.trace_max_roughness < 1
 
-        col = layout.column(align=True)
-        col.prop(props, "fast_gi_distance")
-        col.prop(props, "fast_gi_thickness_near", text="Thickness Near")
-        col.prop(props, "fast_gi_thickness_far", text="Far")
+        col = layout.column()
+        col.active = is_valid
+        col.prop(props, "fast_gi_method")
+        col.prop(props, "fast_gi_resolution", text="Resolution")
 
-        layout.prop(props, "fast_gi_bias", text="Bias")
+        sub = col.column(align=True)
+        sub.prop(props, "fast_gi_ray_count", text="Rays")
+        sub.prop(props, "fast_gi_step_count", text="Steps")
+        sub.prop(props, "fast_gi_quality", text="Precision")
+
+        sub = col.column(align=True)
+        sub.prop(props, "fast_gi_distance")
+        sub.prop(props, "fast_gi_thickness_near", text="Thickness Near")
+        sub.prop(props, "fast_gi_thickness_far", text="Far")
+
+        col.prop(props, "fast_gi_bias", text="Bias")
 
 
 class RENDER_PT_eevee_next_denoise(RenderButtonsPanel, Panel):
@@ -1486,6 +1548,8 @@ classes = (
     RENDER_PT_color_management,
     RENDER_PT_color_management_display_settings,
     RENDER_PT_color_management_curves,
+    RENDER_PT_color_management_white_balance_presets,
+    RENDER_PT_color_management_white_balance,
 )
 
 if __name__ == "__main__":  # only for live edit.

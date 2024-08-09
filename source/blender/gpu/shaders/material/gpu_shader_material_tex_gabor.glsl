@@ -140,7 +140,7 @@ vec2 compute_2d_gabor_noise_cell(
 }
 
 /* Computes the Gabor noise value by dividing the space into a grid and evaluating the Gabor noise
- * in the space of each cell of the 3x3 cell neighbourhood. */
+ * in the space of each cell of the 3x3 cell neighborhood. */
 vec2 compute_2d_gabor_noise(vec2 coordinates,
                             float frequency,
                             float isotropy,
@@ -198,7 +198,7 @@ float compute_3d_gabor_standard_deviation(float frequency)
   return sqrt(IMPULSES_COUNT * second_moment * integral_of_gabor_squared);
 }
 
-/* Computes the orientation of the Gabor kernel such that it is is constant for anisotropic
+/* Computes the orientation of the Gabor kernel such that it is constant for anisotropic
  * noise while it is random for isotropic noise. We randomize in spherical coordinates for a
  * uniform distribution. */
 vec3 compute_3d_orientation(vec3 orientation, float isotropy, vec4 seed)
@@ -249,7 +249,7 @@ vec2 compute_3d_gabor_noise_cell(
   return noise;
 }
 
-/* Identical to compute_2d_gabor_noise but works in the 3D neighbourhood of the noise. */
+/* Identical to compute_2d_gabor_noise but works in the 3D neighborhood of the noise. */
 vec2 compute_3d_gabor_noise(vec3 coordinates,
                             float frequency,
                             float isotropy,

@@ -67,8 +67,10 @@
 #include "WM_api.hh"
 #include "WM_types.hh"
 
+#include "ANIM_action.hh"
 #include "ANIM_keyframing.hh"
 
+#include "ED_anim_api.hh"
 #include "ED_armature.hh"
 #include "ED_keyframing.hh"
 #include "ED_mesh.hh"
@@ -341,6 +343,10 @@ static int object_clear_transform_generic_exec(bContext *C,
   /* get KeyingSet to use */
   ks = ANIM_get_keyingset_for_autokeying(scene, default_ksName);
 
+  if (blender::animrig::is_autokey_on(scene)) {
+    ANIM_deselect_keys_in_animation_editors(C);
+  }
+
   for (Object *ob : objects) {
     if (use_transform_data_origin) {
       data_xform_container_item_ensure(xds, ob);
@@ -561,10 +567,10 @@ static void append_sorted_object_parent_hierarchy(Object *root_object,
     append_sorted_object_parent_hierarchy(
         root_object, object->parent, sorted_objects, object_index);
   }
-  if (object->id.tag & LIB_TAG_DOIT) {
+  if (object->id.tag & ID_TAG_DOIT) {
     sorted_objects[*object_index] = object;
     (*object_index)++;
-    object->id.tag &= ~LIB_TAG_DOIT;
+    object->id.tag &= ~ID_TAG_DOIT;
   }
 }
 
@@ -573,22 +579,22 @@ static Array<Object *> sorted_selected_editable_objects(bContext *C)
   Main *bmain = CTX_data_main(C);
 
   /* Count all objects, but also tag all the selected ones. */
-  BKE_main_id_tag_all(bmain, LIB_TAG_DOIT, false);
-  int num_objects = 0;
+  BKE_main_id_tag_all(bmain, ID_TAG_DOIT, false);
+  int objects_num = 0;
   CTX_DATA_BEGIN (C, Object *, object, selected_editable_objects) {
-    object->id.tag |= LIB_TAG_DOIT;
-    num_objects++;
+    object->id.tag |= ID_TAG_DOIT;
+    objects_num++;
   }
   CTX_DATA_END;
-  if (num_objects == 0) {
+  if (objects_num == 0) {
     return {};
   }
 
   /* Append all the objects. */
-  Array<Object *> sorted_objects(num_objects);
+  Array<Object *> sorted_objects(objects_num);
   int object_index = 0;
   CTX_DATA_BEGIN (C, Object *, object, selected_editable_objects) {
-    if ((object->id.tag & LIB_TAG_DOIT) == 0) {
+    if ((object->id.tag & ID_TAG_DOIT) == 0) {
       continue;
     }
     append_sorted_object_parent_hierarchy(object, object, sorted_objects.data(), &object_index);
@@ -1373,10 +1379,10 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
 
   LISTBASE_FOREACH (Object *, tob, &bmain->objects) {
     if (tob->data) {
-      ((ID *)tob->data)->tag &= ~LIB_TAG_DOIT;
+      ((ID *)tob->data)->tag &= ~ID_TAG_DOIT;
     }
     if (tob->instance_collection) {
-      ((ID *)tob->instance_collection)->tag &= ~LIB_TAG_DOIT;
+      ((ID *)tob->instance_collection)->tag &= ~ID_TAG_DOIT;
     }
   }
 
@@ -1397,7 +1403,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
     if (ob->data == nullptr) {
       /* Special support for instanced collections. */
       if ((ob->transflag & OB_DUPLICOLLECTION) && ob->instance_collection &&
-          (ob->instance_collection->id.tag & LIB_TAG_DOIT) == 0)
+          (ob->instance_collection->id.tag & ID_TAG_DOIT) == 0)
       {
         if (!BKE_id_is_editable(bmain, &ob->instance_collection->id)) {
           tot_lib_error++;
@@ -1419,7 +1425,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
           add_v3_v3(ob->instance_collection->instance_offset, cent);
 
           tot_change++;
-          ob->instance_collection->id.tag |= LIB_TAG_DOIT;
+          ob->instance_collection->id.tag |= ID_TAG_DOIT;
           do_inverse_offset = true;
         }
       }
@@ -1453,7 +1459,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
         BKE_mesh_translate(mesh, cent_neg, true);
 
         tot_change++;
-        mesh->id.tag |= LIB_TAG_DOIT;
+        mesh->id.tag |= ID_TAG_DOIT;
         do_inverse_offset = true;
       }
     }
@@ -1481,7 +1487,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
       BKE_curve_translate(cu, cent_neg, true);
 
       tot_change++;
-      cu->id.tag |= LIB_TAG_DOIT;
+      cu->id.tag |= ID_TAG_DOIT;
       do_inverse_offset = true;
 
       if (obedit) {
@@ -1515,7 +1521,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
         cu->yof = cu->yof - cent[1];
 
         tot_change++;
-        cu->id.tag |= LIB_TAG_DOIT;
+        cu->id.tag |= ID_TAG_DOIT;
         do_inverse_offset = true;
       }
     }
@@ -1536,7 +1542,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
         ED_armature_origin_set(bmain, ob, cursor, centermode, around);
 
         tot_change++;
-        arm->id.tag |= LIB_TAG_DOIT;
+        arm->id.tag |= ID_TAG_DOIT;
         // do_inverse_offset = true; /* docenter_armature() handles this. */
 
         Object *ob_eval = DEG_get_evaluated_object(depsgraph, ob);
@@ -1570,7 +1576,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
       BKE_mball_translate(mb, cent_neg);
 
       tot_change++;
-      mb->id.tag |= LIB_TAG_DOIT;
+      mb->id.tag |= ID_TAG_DOIT;
       do_inverse_offset = true;
 
       if (obedit) {
@@ -1599,7 +1605,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
       BKE_lattice_translate(lt, cent_neg, true);
 
       tot_change++;
-      lt->id.tag |= LIB_TAG_DOIT;
+      lt->id.tag |= ID_TAG_DOIT;
       do_inverse_offset = true;
     }
     else if (ob->type == OB_GPENCIL_LEGACY) {
@@ -1669,7 +1675,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
           DEG_id_tag_update(&gpd->id, ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY);
           DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
 
-          ob->id.tag |= LIB_TAG_DOIT;
+          ob->id.tag |= ID_TAG_DOIT;
           do_inverse_offset = true;
         }
         else {
@@ -1707,7 +1713,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
 
       tot_change++;
       curves.translate(-cent);
-      curves_id.id.tag |= LIB_TAG_DOIT;
+      curves_id.id.tag |= ID_TAG_DOIT;
       do_inverse_offset = true;
     }
     else if (ob->type == OB_POINTCLOUD) {
@@ -1737,7 +1743,7 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
       tot_change++;
       translate_positions(positions, -cent);
       pointcloud.tag_positions_changed();
-      pointcloud.id.tag |= LIB_TAG_DOIT;
+      pointcloud.id.tag |= ID_TAG_DOIT;
       do_inverse_offset = true;
     }
 
@@ -1801,12 +1807,12 @@ static int object_origin_set_exec(bContext *C, wmOperator *op)
   }
 
   LISTBASE_FOREACH (Object *, tob, &bmain->objects) {
-    if (tob->data && (((ID *)tob->data)->tag & LIB_TAG_DOIT)) {
+    if (tob->data && (((ID *)tob->data)->tag & ID_TAG_DOIT)) {
       BKE_object_batch_cache_dirty_tag(tob);
       DEG_id_tag_update(&tob->id, ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY);
     }
     /* Special support for dupli-groups. */
-    else if (tob->instance_collection && tob->instance_collection->id.tag & LIB_TAG_DOIT) {
+    else if (tob->instance_collection && tob->instance_collection->id.tag & ID_TAG_DOIT) {
       DEG_id_tag_update(&tob->id, ID_RECALC_TRANSFORM);
       DEG_id_tag_update(&tob->instance_collection->id, ID_RECALC_SYNC_TO_EVAL);
     }

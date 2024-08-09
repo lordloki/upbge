@@ -200,6 +200,7 @@ set(SRC
   BLI_bounds.hh
   BLI_bounds_types.hh
   BLI_boxpack_2d.h
+  BLI_build_config.h
   BLI_buffer.h
   BLI_cache_mutex.hh
   BLI_color.hh
@@ -416,6 +417,7 @@ set(LIB
   extern_wcwidth
   PRIVATE bf::intern::atomic
   PRIVATE extern_fmtlib
+  PUBLIC bf::dependencies::optional::tbb
   ${ZLIB_LIBRARIES}
   ${ZSTD_LIBRARIES}
 )
@@ -430,18 +432,6 @@ endif()
 
 if(WITH_MEM_VALGRIND)
   add_definitions(-DWITH_MEM_VALGRIND)
-endif()
-
-if(WITH_TBB)
-  add_definitions(-DWITH_TBB)
-
-  list(APPEND INC_SYS
-    ${TBB_INCLUDE_DIRS}
-  )
-
-  list(APPEND LIB
-    ${TBB_LIBRARIES}
-  )
 endif()
 
 if(WITH_GMP)
@@ -525,6 +515,7 @@ if(WITH_GTESTS)
     tests/BLI_bit_ref_test.cc
     tests/BLI_bit_span_test.cc
     tests/BLI_bit_vector_test.cc
+    tests/BLI_build_config_test.cc
     tests/BLI_bitmap_test.cc
     tests/BLI_bounds_test.cc
     tests/BLI_color_test.cc

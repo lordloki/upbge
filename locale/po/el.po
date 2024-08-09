@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 4.2.0 Beta (b'37e2a27bdddc')\n"
+"Project-Id-Version: Blender 4.3.0 Alpha (b'e981389bddb1')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-06-24 08:56+0000\n"
+"POT-Creation-Date: 2024-08-05 09:10+0000\n"
 "PO-Revision-Date: 2024-04-29 13:44+0000\n"
 "Last-Translator: Anonymous <noreply@weblate.org>\n"
 "Language-Team: Greek <https://translate.blender.org/projects/blender-ui/ui/el/>\n"
@@ -35,6 +35,14 @@ msgid "Select"
 msgstr "Επιλογή"
 
 
+msgid "Add"
+msgstr "Προσθήκη"
+
+
+msgid "Subtract"
+msgstr "Αφαίρεση"
+
+
 msgid "On"
 msgstr "Ενεργό"
 
@@ -49,14 +57,6 @@ msgstr "Κεντράρισμα"
 
 msgid "Action"
 msgstr "Δράση"
-
-
-msgid "Add"
-msgstr "Προσθήκη"
-
-
-msgid "Subtract"
-msgstr "Αφαίρεση"
 
 
 msgid "Hold"
@@ -149,10 +149,6 @@ msgstr "Κατάσταση"
 
 msgid "Fill"
 msgstr "Συμπλήρωμα"
-
-
-msgid "Draw"
-msgstr "Εμφάνιση"
 
 
 msgid "Crop"
@@ -347,30 +343,6 @@ msgid "Grid"
 msgstr "Πλέγμα"
 
 
-msgid "Edit Mode"
-msgstr "Κατάσταση Επεξεργασίας"
-
-
-msgid "Mirror"
-msgstr "Καθρέφτισμα"
-
-
-msgid "Subdivide"
-msgstr "Υποδιαίρεση"
-
-
-msgid "Lattice"
-msgstr "Πλέγμα"
-
-
-msgid "Shaded"
-msgstr "Με σκίαση"
-
-
-msgid "Merge"
-msgstr "Συγχώνευση"
-
-
 msgid "Repeat"
 msgstr "Repeat"
 
@@ -389,6 +361,10 @@ msgstr "Γραμματοσειρά"
 
 msgid "Key"
 msgstr "Κλειδί"
+
+
+msgid "Lattice"
+msgstr "Πλέγμα"
 
 
 msgid "Library"
@@ -431,6 +407,10 @@ msgid "Dynamic"
 msgstr "Δυναμικό"
 
 
+msgid "Draw"
+msgstr "Εμφάνιση"
+
+
 msgid "Sequence"
 msgstr "Μείξη"
 
@@ -461,10 +441,6 @@ msgstr "Μέγιστο"
 
 msgid "Panel"
 msgstr "Ταμπλό"
-
-
-msgid "Movie"
-msgstr "Βίντεο"
 
 
 msgid "Render polygon transparent, depending on alpha channel of the texture"
@@ -513,6 +489,10 @@ msgstr "Με υφή"
 
 msgid "Circle"
 msgstr "Κύκλος"
+
+
+msgid "Edit Mode"
+msgstr "Κατάσταση Επεξεργασίας"
 
 
 msgid "Vertex Paint"
@@ -583,6 +563,18 @@ msgid "Select Linked"
 msgstr "Επιλογή Συνδεδεμένων"
 
 
+msgid "Merge"
+msgstr "Συγχώνευση"
+
+
+msgid "Mirror"
+msgstr "Καθρέφτισμα"
+
+
+msgid "Import"
+msgstr "Εισαγωγή"
+
+
 msgid "Apply"
 msgstr "Εφαρμογή"
 
@@ -601,10 +593,6 @@ msgstr "Αρχείο"
 
 msgid "Export"
 msgstr "Εξαγωγή"
-
-
-msgid "Import"
-msgstr "Εισαγωγή"
 
 
 msgid "Help"
@@ -641,6 +629,10 @@ msgstr "Κύμα"
 
 msgid "New"
 msgstr "Νέο"
+
+
+msgid "Shaded"
+msgstr "Με σκίαση"
 
 
 msgid "Lines"
@@ -1030,18 +1022,26 @@ msgid "Layer:"
 msgstr "Στρώμα"
 
 
+msgid "Esc"
+msgstr "Esc"
+
+
 msgid "Cancel"
 msgstr "Ακύρωση"
+
+
+msgid "Movie"
+msgstr "Βίντεο"
 
 
 msgid "Fields"
 msgstr "Πεδία"
 
 
+msgid "Subdivide"
+msgstr "Υποδιαίρεση"
+
+
 msgid "Life"
 msgstr "Ζωή"
-
-
-msgid "Esc"
-msgstr "Esc"
 

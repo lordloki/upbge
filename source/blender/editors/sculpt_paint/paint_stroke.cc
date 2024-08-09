@@ -58,7 +58,7 @@ struct PaintSample {
 };
 
 struct PaintStroke {
-  void *mode_data;
+  std::unique_ptr<PaintModeData> mode_data;
   void *stroke_cursor;
   wmTimer *timer;
   std::optional<RandomNumberGenerator> rng;
@@ -282,15 +282,15 @@ static bool paint_tool_require_inbetween_mouse_events(const Brush &brush, const 
 }
 
 /* Initialize the stroke cache variants from operator properties */
-static bool paint_brush_update(bContext *C,
-                               const Brush &brush,
-                               PaintMode mode,
-                               PaintStroke *stroke,
-                               const float mouse_init[2],
-                               float mouse[2],
-                               float pressure,
-                               float r_location[3],
-                               bool *r_location_is_set)
+bool paint_brush_update(bContext *C,
+                        const Brush &brush,
+                        PaintMode mode,
+                        PaintStroke *stroke,
+                        const float mouse_init[2],
+                        float mouse[2],
+                        float pressure,
+                        float r_location[3],
+                        bool *r_location_is_set)
 {
   Scene *scene = CTX_data_scene(C);
   UnifiedPaintSettings &ups = *stroke->ups;
@@ -498,6 +498,38 @@ static bool paint_stroke_use_jitter(PaintMode mode, const Brush &brush, bool inv
   return use_jitter;
 }
 
+void paint_stroke_jitter_pos(Scene &scene,
+                             const PaintStroke &stroke,
+                             const PaintMode mode,
+                             const Brush &brush,
+                             const float pressure,
+                             const float mval[2],
+                             float r_mouse_out[2])
+{
+  if (paint_stroke_use_jitter(mode, brush, stroke.stroke_mode == BRUSH_STROKE_INVERT)) {
+    float delta[2];
+    float factor = stroke.zoom_2d;
+
+    if (brush.flag & BRUSH_JITTER_PRESSURE) {
+      factor *= pressure;
+    }
+
+    BKE_brush_jitter_pos(scene, brush, mval, r_mouse_out);
+
+    /* XXX: meh, this is round about because
+     * BKE_brush_jitter_pos isn't written in the best way to
+     * be reused here */
+    if (factor != 1.0f) {
+      sub_v2_v2v2(delta, r_mouse_out, mval);
+      mul_v2_fl(delta, factor);
+      add_v2_v2v2(r_mouse_out, mval, delta);
+    }
+  }
+  else {
+    copy_v2_v2(r_mouse_out, mval);
+  }
+}
+
 /* Put the location of the next stroke dot into the stroke RNA and apply it to the mesh */
 static void paint_brush_stroke_add_step(
     bContext *C, wmOperator *op, PaintStroke *stroke, const float mval[2], float pressure)
@@ -557,28 +589,8 @@ static void paint_brush_stroke_add_step(
     }
   }
 
-  if (paint_stroke_use_jitter(mode, brush, stroke->stroke_mode == BRUSH_STROKE_INVERT)) {
-    float delta[2];
-    float factor = stroke->zoom_2d;
-
-    if (brush.flag & BRUSH_JITTER_PRESSURE) {
-      factor *= pressure;
-    }
-
-    BKE_brush_jitter_pos(scene, brush, mval, mouse_out);
-
-    /* XXX: meh, this is round about because
-     * BKE_brush_jitter_pos isn't written in the best way to
-     * be reused here */
-    if (factor != 1.0f) {
-      sub_v2_v2v2(delta, mouse_out, mval);
-      mul_v2_fl(delta, factor);
-      add_v2_v2v2(mouse_out, mval, delta);
-    }
-  }
-  else {
-    copy_v2_v2(mouse_out, mval);
-  }
+  /* Get jitter position (same as mval if no jitter is used). */
+  paint_stroke_jitter_pos(scene, *stroke, mode, brush, pressure, mval, mouse_out);
 
   bool is_location_is_set;
   ups->last_hit = paint_brush_update(
@@ -1670,7 +1682,7 @@ ViewContext *paint_stroke_view_context(PaintStroke *stroke)
 
 void *paint_stroke_mode_data(PaintStroke *stroke)
 {
-  return stroke->mode_data;
+  return stroke->mode_data.get();
 }
 
 bool paint_stroke_flipped(PaintStroke *stroke)
@@ -1688,9 +1700,9 @@ float paint_stroke_distance_get(PaintStroke *stroke)
   return stroke->stroke_distance;
 }
 
-void paint_stroke_set_mode_data(PaintStroke *stroke, void *mode_data)
+void paint_stroke_set_mode_data(PaintStroke *stroke, std::unique_ptr<PaintModeData> mode_data)
 {
-  stroke->mode_data = mode_data;
+  stroke->mode_data = std::move(mode_data);
 }
 
 bool paint_stroke_started(PaintStroke *stroke)

@@ -12,7 +12,10 @@
 
 #include "BKE_curves.hh"
 #include "BKE_customdata.hh"
+#include "BKE_deform.hh"
+#include "BKE_geometry_nodes_gizmos_transforms.hh"
 #include "BKE_geometry_set_instances.hh"
+#include "BKE_grease_pencil.hh"
 #include "BKE_instances.hh"
 #include "BKE_material.h"
 #include "BKE_mesh.hh"
@@ -175,6 +178,27 @@ struct RealizeCurveTask {
   uint32_t id = 0;
 };
 
+struct GreasePencilRealizeInfo {
+  const GreasePencil *grease_pencil = nullptr;
+  /** Matches the order in #AllGreasePencilsInfo.attributes. */
+  Array<std::optional<GVArraySpan>> attributes;
+  /** Maps old material indices to new material indices. */
+  Array<int> material_index_map;
+};
+
+struct RealizeGreasePencilTask {
+  /** Index where the first layer is realized in the final grease pencil. */
+  int start_index;
+  const GreasePencilRealizeInfo *grease_pencil_info;
+  float4x4 transform;
+  AttributeFallbacksArray attribute_fallbacks;
+};
+
+struct RealizeEditDataTask {
+  const bke::GeometryComponentEditData *edit_data;
+  float4x4 transform;
+};
+
 struct AllPointCloudsInfo {
   /** Ordering of all attributes that are propagated to the output point cloud generically. */
   OrderedAttributes attributes;
@@ -219,6 +243,17 @@ struct AllCurvesInfo {
   bool create_custom_normal_attribute = false;
 };
 
+struct AllGreasePencilsInfo {
+  /** Ordering of all attributes that are propagated to the output grease pencil generically. */
+  OrderedAttributes attributes;
+  /** Ordering of the original grease pencils that are joined. */
+  VectorSet<const GreasePencil *> order;
+  /** Preprocessed data about every original grease pencil. This is ordered by #order. */
+  Array<GreasePencilRealizeInfo> realize_info;
+  /** Ordered materials on the output grease pencil. */
+  VectorSet<Material *> materials;
+};
+
 struct AllInstancesInfo {
   /** Stores an array of void pointer to attributes for each component. */
   Vector<AttributeFallbacksArray> attribute_fallback;
@@ -233,11 +268,12 @@ struct GatherTasks {
   Vector<RealizePointCloudTask> pointcloud_tasks;
   Vector<RealizeMeshTask> mesh_tasks;
   Vector<RealizeCurveTask> curve_tasks;
+  Vector<RealizeGreasePencilTask> grease_pencil_tasks;
+  Vector<RealizeEditDataTask> edit_data_tasks;
 
   /* Volumes only have very simple support currently. Only the first found volume is put into the
    * output. */
   ImplicitSharingPtr<const bke::VolumeComponent> first_volume;
-  ImplicitSharingPtr<const bke::GeometryComponentEditData> first_edit_data;
 };
 
 /** Current offsets while during the gather operation. */
@@ -245,6 +281,7 @@ struct GatherOffsets {
   int pointcloud_offset = 0;
   MeshElementStartIndices mesh_offsets;
   CurvesElementStartIndices curves_offsets;
+  int grease_pencil_layer_offset = 0;
 };
 
 struct GatherTasksInfo {
@@ -252,6 +289,7 @@ struct GatherTasksInfo {
   const AllPointCloudsInfo &pointclouds;
   const AllMeshesInfo &meshes;
   const AllCurvesInfo &curves;
+  const AllGreasePencilsInfo &grease_pencils;
   const OrderedAttributes &instances_attriubutes;
   bool create_id_attribute_on_any_component = false;
 
@@ -287,6 +325,8 @@ struct InstanceContext {
   AttributeFallbacksArray meshes;
   /** Ordered by #AllCurvesInfo.attributes. */
   AttributeFallbacksArray curves;
+  /** Ordered by #AllGreasePencilsInfo.attributes. */
+  AttributeFallbacksArray grease_pencils;
   /** Ordered by #AllInstancesInfo.attributes. */
   AttributeFallbacksArray instances;
   /** Id mixed from all parent instances. */
@@ -296,6 +336,7 @@ struct InstanceContext {
       : pointclouds(gather_info.pointclouds.attributes.size()),
         meshes(gather_info.meshes.attributes.size()),
         curves(gather_info.curves.attributes.size()),
+        grease_pencils(gather_info.grease_pencils.attributes.size()),
         instances(gather_info.instances_attriubutes.size())
   {
     // empty
@@ -318,25 +359,6 @@ static int64_t get_final_points_num(const GatherTasks &tasks)
     points_num += task.start_indices.point + task.curve_info->curves->geometry.point_num;
   }
   return points_num;
-}
-
-static void realize_collections(Collection &collection, bke::Instances &instances)
-{
-  LISTBASE_FOREACH (CollectionChild *, collection_child, &collection.children) {
-    float4x4 transform = float4x4::identity();
-    transform.location() += float3(collection_child->collection->instance_offset);
-    transform.location() -= float3(collection.instance_offset);
-    const int handle = instances.add_reference(*collection_child->collection);
-    instances.add_instance(handle, transform);
-  }
-
-  LISTBASE_FOREACH (CollectionObject *, collection_object, &collection.gobject) {
-    float4x4 transform = float4x4::identity();
-    transform.location() -= float3(collection.instance_offset);
-    transform *= (collection_object->ob)->object_to_world();
-    const int handle = instances.add_reference(*collection_object->ob);
-    instances.add_instance(handle, transform);
-  }
 }
 
 static void copy_transformed_positions(const Span<float3> src,
@@ -500,33 +522,6 @@ static Vector<std::pair<int, GSpan>> prepare_attribute_fallbacks(
   return attributes_to_override;
 }
 
-static bke::GeometrySet geometry_set_from_reference(const InstanceReference &reference)
-{
-  switch (reference.type()) {
-    case InstanceReference::Type::Object: {
-      const Object &object = reference.object();
-      const bke::GeometrySet geometry_set = bke::object_get_evaluated_geometry_set(object);
-      return geometry_set;
-    }
-    case InstanceReference::Type::Collection: {
-      std::unique_ptr<bke::Instances> instances_ptr = std::make_unique<bke::Instances>();
-      realize_collections(reference.collection(), *instances_ptr);
-      bke::GeometrySet geometry_set;
-      geometry_set.replace_instances(instances_ptr.release());
-      return geometry_set;
-    }
-    case InstanceReference::Type::GeometrySet: {
-      const bke::GeometrySet geometry_set = reference.geometry_set();
-      return geometry_set;
-    }
-    case InstanceReference::Type::None: {
-      /* Return an empty GeometrySet for None type. */
-      return {};
-    }
-  }
-  return {};
-}
-
 /**
  * Calls #fn for every geometry in the given #InstanceReference. Also passes on the transformation
  * that is applied to every instance.
@@ -538,7 +533,8 @@ static void foreach_geometry_in_reference(
     FunctionRef<void(const bke::GeometrySet &geometry_set, const float4x4 &transform, uint32_t id)>
         fn)
 {
-  bke::GeometrySet geometry_set = geometry_set_from_reference(reference);
+  bke::GeometrySet geometry_set;
+  reference.to_geometry_set(geometry_set);
   fn(geometry_set, base_transform, id);
 }
 
@@ -569,6 +565,8 @@ static void gather_realize_tasks_for_instances(GatherTasksInfo &gather_info,
       gather_info, instances, gather_info.meshes.attributes);
   Vector<std::pair<int, GSpan>> curve_attributes_to_override = prepare_attribute_fallbacks(
       gather_info, instances, gather_info.curves.attributes);
+  Vector<std::pair<int, GSpan>> grease_pencil_attributes_to_override = prepare_attribute_fallbacks(
+      gather_info, instances, gather_info.grease_pencils.attributes);
   Vector<std::pair<int, GSpan>> instance_attributes_to_override = prepare_attribute_fallbacks(
       gather_info, instances, gather_info.instances_attriubutes);
 
@@ -593,6 +591,9 @@ static void gather_realize_tasks_for_instances(GatherTasksInfo &gather_info,
     }
     for (const std::pair<int, GSpan> &pair : curve_attributes_to_override) {
       instance_context.curves.array[pair.first] = pair.second[i];
+    }
+    for (const std::pair<int, GSpan> &pair : grease_pencil_attributes_to_override) {
+      instance_context.grease_pencils.array[pair.first] = pair.second[i];
     }
     for (const std::pair<int, GSpan> &pair : instance_attributes_to_override) {
       instance_context.instances.array[pair.first] = pair.second[i];
@@ -690,6 +691,23 @@ static void gather_realize_tasks_recursive(GatherTasksInfo &gather_info,
         }
         break;
       }
+      case bke::GeometryComponent::Type::GreasePencil: {
+        const auto &grease_pencil_component = *static_cast<const bke::GreasePencilComponent *>(
+            component);
+        const GreasePencil *grease_pencil = grease_pencil_component.get();
+        if (grease_pencil != nullptr && !grease_pencil->layers().is_empty()) {
+          const int grease_pencil_index = gather_info.grease_pencils.order.index_of(grease_pencil);
+          const GreasePencilRealizeInfo &grease_pencil_info =
+              gather_info.grease_pencils.realize_info[grease_pencil_index];
+          gather_info.r_tasks.grease_pencil_tasks.append(
+              {gather_info.r_offsets.grease_pencil_layer_offset,
+               &grease_pencil_info,
+               base_transform,
+               base_instance_context.grease_pencils});
+          gather_info.r_offsets.grease_pencil_layer_offset += grease_pencil->layers().size();
+        }
+        break;
+      }
       case bke::GeometryComponent::Type::Instance: {
         if (current_depth == target_depth) {
           gather_info.instances.attribute_fallback.append(base_instance_context.instances);
@@ -721,17 +739,11 @@ static void gather_realize_tasks_recursive(GatherTasksInfo &gather_info,
         break;
       }
       case bke::GeometryComponent::Type::Edit: {
-        if (!gather_info.r_tasks.first_edit_data) {
-          const bke::GeometryComponentEditData *edit_component =
-              static_cast<const bke::GeometryComponentEditData *>(component);
-          edit_component->add_user();
-          gather_info.r_tasks.first_edit_data =
-              ImplicitSharingPtr<const bke::GeometryComponentEditData>(edit_component);
+        const auto *edit_component = static_cast<const bke::GeometryComponentEditData *>(
+            component);
+        if (edit_component->gizmo_edit_hints_ || edit_component->curves_edit_hints_) {
+          gather_info.r_tasks.edit_data_tasks.append({edit_component, base_transform});
         }
-        break;
-      }
-      case bke::GeometryComponent::Type::GreasePencil: {
-        /* TODO. Do nothing for now. */
         break;
       }
     }
@@ -770,8 +782,10 @@ static bool attribute_foreach(const bke::GeometrySet &geometry_set,
                                   IndexMask(IndexRange(instances.instances_num()));
     indices.foreach_index([&](const int i) {
       const int child_depth_target = (0 == current_depth) ? instance_depth[i] : depth_target;
-      bke::GeometrySet instance_geometry_set = geometry_set_from_reference(
-          instances.references()[instances.reference_handles()[i]]);
+      const bke::InstanceReference &reference =
+          instances.references()[instances.reference_handles()[i]];
+      bke::GeometrySet instance_geometry_set;
+      reference.to_geometry_set(instance_geometry_set);
       /* Process child instances with a recursive call. */
       if (current_depth != child_depth_target) {
         child_has_component = child_has_component | attribute_foreach(instance_geometry_set,
@@ -1929,6 +1943,233 @@ static void execute_realize_curve_tasks(const RealizeInstancesOptions &options,
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Grease Pencil
+ * \{ */
+
+static OrderedAttributes gather_generic_grease_pencil_attributes_to_propagate(
+    const bke::GeometrySet &in_geometry_set,
+    const RealizeInstancesOptions &options,
+    const VariedDepthOptions &varied_depth_options)
+{
+  Vector<bke::GeometryComponent::Type> src_component_types;
+  src_component_types.append(bke::GeometryComponent::Type::GreasePencil);
+  if (options.realize_instance_attributes) {
+    src_component_types.append(bke::GeometryComponent::Type::Instance);
+  }
+
+  Map<AttributeIDRef, AttributeKind> attributes_to_propagate;
+  gather_attributes_for_propagation(in_geometry_set,
+                                    src_component_types,
+                                    bke::GeometryComponent::Type::GreasePencil,
+                                    varied_depth_options.depths,
+                                    varied_depth_options.selection,
+                                    options.propagation_info,
+                                    attributes_to_propagate);
+
+  OrderedAttributes ordered_attributes;
+  for (auto &&item : attributes_to_propagate.items()) {
+    ordered_attributes.ids.add_new(item.key);
+    ordered_attributes.kinds.append(item.value);
+  }
+  return ordered_attributes;
+}
+
+static void gather_grease_pencils_to_realize(const bke::GeometrySet &geometry_set,
+                                             VectorSet<const GreasePencil *> &r_grease_pencils)
+{
+  if (const GreasePencil *grease_pencil = geometry_set.get_grease_pencil()) {
+    if (!grease_pencil->layers().is_empty()) {
+      r_grease_pencils.add(grease_pencil);
+    }
+  }
+  if (const Instances *instances = geometry_set.get_instances()) {
+    instances->foreach_referenced_geometry([&](const bke::GeometrySet &instance_geometry_set) {
+      gather_grease_pencils_to_realize(instance_geometry_set, r_grease_pencils);
+    });
+  }
+}
+
+static AllGreasePencilsInfo preprocess_grease_pencils(
+    const bke::GeometrySet &geometry_set,
+    const RealizeInstancesOptions &options,
+    const VariedDepthOptions &varied_depth_options)
+{
+  AllGreasePencilsInfo info;
+  info.attributes = gather_generic_grease_pencil_attributes_to_propagate(
+      geometry_set, options, varied_depth_options);
+
+  gather_grease_pencils_to_realize(geometry_set, info.order);
+  info.realize_info.reinitialize(info.order.size());
+  for (const int grease_pencil_index : info.realize_info.index_range()) {
+    GreasePencilRealizeInfo &grease_pencil_info = info.realize_info[grease_pencil_index];
+    const GreasePencil *grease_pencil = info.order[grease_pencil_index];
+    grease_pencil_info.grease_pencil = grease_pencil;
+
+    bke::AttributeAccessor attributes = grease_pencil->attributes();
+    grease_pencil_info.attributes.reinitialize(info.attributes.size());
+    for (const int attribute_index : info.attributes.index_range()) {
+      const AttributeIDRef &attribute_id = info.attributes.ids[attribute_index];
+      const eCustomDataType data_type = info.attributes.kinds[attribute_index].data_type;
+      const bke::AttrDomain domain = info.attributes.kinds[attribute_index].domain;
+      if (attributes.contains(attribute_id)) {
+        GVArray attribute = *attributes.lookup_or_default(attribute_id, domain, data_type);
+        grease_pencil_info.attributes[attribute_index].emplace(std::move(attribute));
+      }
+    }
+
+    grease_pencil_info.material_index_map.reinitialize(grease_pencil->material_array_num);
+    for (const int i : IndexRange(grease_pencil->material_array_num)) {
+      Material *material = grease_pencil->material_array[i];
+      grease_pencil_info.material_index_map[i] = info.materials.index_of_or_add(material);
+    }
+  }
+  return info;
+}
+
+static void execute_realize_grease_pencil_task(
+    const RealizeGreasePencilTask &task,
+    const OrderedAttributes &ordered_attributes,
+    GreasePencil &dst_grease_pencil,
+    MutableSpan<GSpanAttributeWriter> dst_attribute_writers)
+{
+  const GreasePencilRealizeInfo &grease_pencil_info = *task.grease_pencil_info;
+  const GreasePencil &src_grease_pencil = *grease_pencil_info.grease_pencil;
+  const Span<const bke::greasepencil::Layer *> src_layers = src_grease_pencil.layers();
+  const IndexRange dst_layers_slice{task.start_index, src_layers.size()};
+  const Span<bke::greasepencil::Layer *> dst_layers = dst_grease_pencil.layers_for_write().slice(
+      dst_layers_slice);
+
+  for (const int layer_i : src_layers.index_range()) {
+    const bke::greasepencil::Layer &src_layer = *src_layers[layer_i];
+    bke::greasepencil::Layer &dst_layer = *dst_layers[layer_i];
+
+    dst_layer.set_local_transform(task.transform * src_layer.local_transform());
+
+    const bke::greasepencil::Drawing *src_drawing = src_grease_pencil.get_eval_drawing(src_layer);
+    if (!src_drawing) {
+      continue;
+    }
+    bke::greasepencil::Drawing &dst_drawing = *dst_grease_pencil.get_eval_drawing(dst_layer);
+
+    const bke::CurvesGeometry &src_curves = src_drawing->strokes();
+    bke::CurvesGeometry &dst_curves = dst_drawing.strokes_for_write();
+    dst_curves = src_curves;
+
+    /* Remap materials. */
+    bke::MutableAttributeAccessor dst_attributes = dst_curves.attributes_for_write();
+    bke::SpanAttributeWriter<int> material_indices =
+        dst_attributes.lookup_or_add_for_write_span<int>("material_index", bke::AttrDomain::Curve);
+    for (int &material_index : material_indices.span) {
+      if (material_index >= 0 && material_index < src_grease_pencil.material_array_num) {
+        material_index = grease_pencil_info.material_index_map[material_index];
+      }
+    }
+    material_indices.finish();
+  }
+
+  copy_generic_attributes_to_result(
+      grease_pencil_info.attributes,
+      task.attribute_fallbacks,
+      ordered_attributes,
+      [&](const bke::AttrDomain domain) {
+        BLI_assert(domain == bke::AttrDomain::Layer);
+        UNUSED_VARS_NDEBUG(domain);
+        return dst_layers_slice;
+      },
+      dst_attribute_writers);
+}
+
+static void execute_realize_grease_pencil_tasks(
+    const AllGreasePencilsInfo &all_grease_pencils_info,
+    const Span<RealizeGreasePencilTask> tasks,
+    const OrderedAttributes &ordered_attributes,
+    bke::GeometrySet &r_realized_geometry)
+{
+  if (tasks.is_empty()) {
+    return;
+  }
+  /* Allocate new grease pencil. */
+  GreasePencil *dst_grease_pencil = BKE_grease_pencil_new_nomain();
+  r_realized_geometry.replace_grease_pencil(dst_grease_pencil);
+
+  /* Prepare layer names. This is currently quadratic in the number of layers because layer names
+   * are made unique. */
+  for (const RealizeGreasePencilTask &task : tasks) {
+    const GreasePencil &src_grease_pencil = *task.grease_pencil_info->grease_pencil;
+    for (const bke::greasepencil::Layer *src_layer : src_grease_pencil.layers()) {
+      bke::greasepencil::Layer &dst_layer = dst_grease_pencil->add_layer(src_layer->name());
+      dst_grease_pencil->insert_frame(dst_layer, dst_grease_pencil->runtime->eval_frame);
+    }
+  }
+
+  /* Transfer material pointers. The material indices are updated for each task separately. */
+  if (!all_grease_pencils_info.materials.is_empty()) {
+    dst_grease_pencil->material_array_num = all_grease_pencils_info.materials.size();
+    dst_grease_pencil->material_array = MEM_cnew_array<Material *>(
+        dst_grease_pencil->material_array_num, __func__);
+    uninitialized_copy_n(all_grease_pencils_info.materials.data(),
+                         dst_grease_pencil->material_array_num,
+                         dst_grease_pencil->material_array);
+  }
+
+  /* Prepare generic output attributes. */
+  bke::MutableAttributeAccessor dst_attributes = dst_grease_pencil->attributes_for_write();
+  Vector<GSpanAttributeWriter> dst_attribute_writers;
+  for (const int attribute_index : ordered_attributes.index_range()) {
+    const AttributeIDRef &attribute_id = ordered_attributes.ids[attribute_index];
+    const eCustomDataType data_type = ordered_attributes.kinds[attribute_index].data_type;
+    dst_attribute_writers.append(dst_attributes.lookup_or_add_for_write_only_span(
+        attribute_id, bke::AttrDomain::Layer, data_type));
+  }
+
+  /* Actually execute all tasks. */
+  threading::parallel_for(tasks.index_range(), 100, [&](const IndexRange task_range) {
+    for (const int task_index : task_range) {
+      const RealizeGreasePencilTask &task = tasks[task_index];
+      execute_realize_grease_pencil_task(
+          task, ordered_attributes, *dst_grease_pencil, dst_attribute_writers);
+    }
+  });
+
+  /* Tag modified attributes. */
+  for (GSpanAttributeWriter &dst_attribute : dst_attribute_writers) {
+    dst_attribute.finish();
+  }
+}
+/* -------------------------------------------------------------------- */
+/** \name Edit Data
+ * \{ */
+
+static void execute_realize_edit_data_tasks(const Span<RealizeEditDataTask> tasks,
+                                            bke::GeometrySet &r_realized_geometry)
+{
+  if (tasks.is_empty()) {
+    return;
+  }
+
+  auto &component = r_realized_geometry.get_component_for_write<bke::GeometryComponentEditData>();
+  for (const RealizeEditDataTask &task : tasks) {
+    if (!component.curves_edit_hints_) {
+      if (task.edit_data->curves_edit_hints_) {
+        component.curves_edit_hints_ = std::make_unique<bke::CurvesEditHints>(
+            *task.edit_data->curves_edit_hints_);
+      }
+    }
+    if (const bke::GizmoEditHints *src_gizmo_edit_hints = task.edit_data->gizmo_edit_hints_.get())
+    {
+      if (!component.gizmo_edit_hints_) {
+        component.gizmo_edit_hints_ = std::make_unique<bke::GizmoEditHints>();
+      }
+      for (auto item : src_gizmo_edit_hints->gizmo_transforms.items()) {
+        component.gizmo_edit_hints_->gizmo_transforms.add(item.key, task.transform * item.value);
+      }
+    }
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Realize Instances
  * \{ */
 
@@ -1941,7 +2182,8 @@ static void remove_id_attribute_from_instances(bke::GeometrySet &geometry_set)
   });
 }
 
-/** Propagate instances from the old geometry set to the new geometry set if they are not realized.
+/** Propagate instances from the old geometry set to the new geometry set if they are not
+ * realized.
  */
 static void propagate_instances_to_keep(
     const bke::GeometrySet &geometry_set,
@@ -1986,8 +2228,8 @@ bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
 {
   /* The algorithm works in three steps:
    * 1. Preprocess each unique geometry that is instanced (e.g. each `Mesh`).
-   * 2. Gather "tasks" that need to be executed to realize the instances. Each task corresponds to
-   *    instances of the previously preprocessed geometry.
+   * 2. Gather "tasks" that need to be executed to realize the instances. Each task corresponds
+   * to instances of the previously preprocessed geometry.
    * 3. Execute all tasks in parallel.
    */
 
@@ -2007,6 +2249,8 @@ bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
       geometry_set, options, varied_depth_option);
   AllMeshesInfo all_meshes_info = preprocess_meshes(geometry_set, options, varied_depth_option);
   AllCurvesInfo all_curves_info = preprocess_curves(geometry_set, options, varied_depth_option);
+  AllGreasePencilsInfo all_grease_pencils_info = preprocess_grease_pencils(
+      geometry_set, options, varied_depth_option);
   OrderedAttributes all_instance_attributes = gather_generic_instance_attributes_to_propagate(
       geometry_set, options, varied_depth_option);
 
@@ -2017,6 +2261,7 @@ bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
   GatherTasksInfo gather_info = {all_pointclouds_info,
                                  all_meshes_info,
                                  all_curves_info,
+                                 all_grease_pencils_info,
                                  all_instance_attributes,
                                  create_id_attribute,
                                  varied_depth_option.selection,
@@ -2064,12 +2309,14 @@ bke::GeometrySet realize_instances(bke::GeometrySet geometry_set,
                                 gather_info.r_tasks.curve_tasks,
                                 all_curves_info.attributes,
                                 new_geometry_set);
+    execute_realize_grease_pencil_tasks(all_grease_pencils_info,
+                                        gather_info.r_tasks.grease_pencil_tasks,
+                                        all_grease_pencils_info.attributes,
+                                        new_geometry_set);
+    execute_realize_edit_data_tasks(gather_info.r_tasks.edit_data_tasks, new_geometry_set);
   });
   if (gather_info.r_tasks.first_volume) {
     new_geometry_set.add(*gather_info.r_tasks.first_volume);
-  }
-  if (gather_info.r_tasks.first_edit_data) {
-    new_geometry_set.add(*gather_info.r_tasks.first_edit_data);
   }
 
   return new_geometry_set;

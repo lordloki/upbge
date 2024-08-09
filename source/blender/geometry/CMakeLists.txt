@@ -20,7 +20,9 @@ set(SRC
   intern/curve_constraints.cc
   intern/extend_curves.cc
   intern/fillet_curves.cc
+  intern/interpolate_curves.cc
   intern/join_geometries.cc
+  intern/merge_curves.cc
   intern/mesh_boolean.cc
   intern/mesh_copy_selection.cc
   intern/mesh_merge_by_distance.cc
@@ -56,7 +58,9 @@ set(SRC
   GEO_curve_constraints.hh
   GEO_extend_curves.hh
   GEO_fillet_curves.hh
+  GEO_interpolate_curves.hh
   GEO_join_geometries.hh
+  GEO_merge_curves.hh
   GEO_mesh_boolean.hh
   GEO_mesh_copy_selection.hh
   GEO_mesh_merge_by_distance.hh
@@ -86,6 +90,7 @@ set(SRC
   GEO_trim_curves.hh
   GEO_uv_pack.hh
   GEO_uv_parametrizer.hh
+  GEO_volume_grid_resample.hh
 )
 
 set(LIB
@@ -110,18 +115,6 @@ if(WITH_OPENVDB)
   add_definitions(-DWITH_OPENVDB ${OPENVDB_DEFINITIONS})
 endif()
 
-if(WITH_TBB)
-  add_definitions(-DWITH_TBB)
-
-  list(APPEND INC_SYS
-    ${TBB_INCLUDE_DIRS}
-  )
-
-  list(APPEND LIB
-    ${TBB_LIBRARIES}
-  )
-endif()
-
 if(WITH_GMP)
   add_definitions(-DWITH_GMP)
 
@@ -135,3 +128,14 @@ if(WITH_GMP)
 endif()
 
 blender_add_lib(bf_geometry "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+
+if(WITH_GTESTS)
+  set(TEST_INC
+  )
+  set(TEST_SRC
+    tests/GEO_merge_curves_test.cc
+  )
+  set(TEST_LIB
+  )
+  blender_add_test_suite_lib(bf_geometry_tests "${TEST_SRC}" "${INC};${TEST_INC}" "${INC_SYS}" "${LIB};${TEST_LIB}")
+endif()

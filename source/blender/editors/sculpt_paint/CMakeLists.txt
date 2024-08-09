@@ -5,9 +5,13 @@
 set(INC
   ../..
 
+  ../asset
   ../include
   ../uvedit
+  ../../asset_system
   ../../blenkernel
+  ../../blenlib
+  ../../blenloader
   ../../blentranslation
   ../../bmesh
   ../../draw
@@ -20,7 +24,7 @@ set(INC
   ../../render
   ../../windowmanager
   ../../../../intern/eigen
-  # RNA_prototypes.h
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -28,6 +32,7 @@ set(INC_SYS
 )
 
 set(SRC
+  brush_asset_ops.cc
   curves_sculpt_add.cc
   curves_sculpt_brush.cc
   curves_sculpt_comb.cc
@@ -45,6 +50,7 @@ set(SRC
   grease_pencil_draw_ops.cc
   grease_pencil_erase.cc
   grease_pencil_fill.cc
+  grease_pencil_interpolate.cc
   grease_pencil_paint.cc
   grease_pencil_sculpt_clone.cc
   grease_pencil_sculpt_common.cc
@@ -57,6 +63,8 @@ set(SRC
   grease_pencil_sculpt_thickness.cc
   grease_pencil_sculpt_twist.cc
   grease_pencil_tint.cc
+  grease_pencil_trace.cc
+  grease_pencil_trace_util.cc
   grease_pencil_weight_average.cc
   grease_pencil_weight_blur.cc
   grease_pencil_weight_draw.cc
@@ -93,10 +101,10 @@ set(SRC
   sculpt_filter_color.cc
   sculpt_filter_mask.cc
   sculpt_filter_mesh.cc
+  sculpt_flood_fill.cc
   sculpt_geodesic.cc
   sculpt_gesture.cc
   sculpt_mask_init.cc
-  sculpt_multiplane_scrape.cc
   sculpt_ops.cc
   sculpt_paint_color.cc
   sculpt_paint_image.cc
@@ -110,24 +118,42 @@ set(SRC
 
   curves_sculpt_intern.hh
   grease_pencil_intern.hh
-  mesh_brush_common.hh
+  grease_pencil_trace_util.hh
   grease_pencil_weight_paint.hh
+  mesh_brush_common.hh
   paint_intern.hh
   sculpt_intern.hh
 
+  brushes/bmesh_topology_rake.cc
   brushes/clay.cc
   brushes/clay_strips.cc
+  brushes/clay_thumb.cc
   brushes/crease.cc
-  brushes/draw_vector_displacement.cc
   brushes/draw.cc
+  brushes/draw_face_sets.cc
+  brushes/draw_sharp.cc
+  brushes/draw_vector_displacement.cc
+  brushes/elastic_deform.cc
+  brushes/enhance_details.cc
   brushes/fill.cc
   brushes/flatten.cc
+  brushes/grab.cc
   brushes/inflate.cc
+  brushes/layer.cc
   brushes/mask.cc
+  brushes/multiplane_scrape.cc
   brushes/multires_displacement_eraser.cc
+  brushes/multires_displacement_smear.cc
+  brushes/pinch.cc
+  brushes/relax.cc
+  brushes/rotate.cc
   brushes/scrape.cc
   brushes/smooth.cc
   brushes/smooth_mask.cc
+  brushes/snake_hook.cc
+  brushes/surface_smooth.cc
+  brushes/thumb.cc
+  brushes/topology_slide.cc
 
   brushes/types.hh
 )
@@ -144,11 +170,14 @@ set(LIB
   PRIVATE bf::intern::guardedalloc
 )
 
-if(WITH_TBB)
-  list(APPEND INC_SYS
-    ${TBB_INCLUDE_DIRS}
+if(WITH_POTRACE)
+  list(APPEND INC
+    ${POTRACE_INCLUDE_DIRS}
   )
-  add_definitions(-DWITH_TBB)
+  list(APPEND LIB
+    ${POTRACE_LIBRARIES}
+  )
+  add_definitions(-DWITH_POTRACE)
 endif()
 
 if(WIN32)
@@ -163,7 +192,7 @@ if(WITH_GTESTS)
   )
   set(TEST_LIB
     ${LIB}
-    bf_rna  # RNA_prototypes.h
+    bf_rna  # RNA_prototypes.hh
   )
   blender_add_test_suite_lib(editor_sculpt_paint "${TEST_SRC}" "${INC};${TEST_INC}" "${INC_SYS}" "${TEST_LIB}")
 endif()
@@ -175,5 +204,5 @@ if(WITH_TBB AND MSVC_CLANG)
 endif()
 
 blender_add_lib(bf_editor_sculpt_paint "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_editor_sculpt_paint bf_rna)

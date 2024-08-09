@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <variant>
 
 #include "MEM_guardedalloc.h"
 
@@ -57,6 +58,7 @@
 #include "ED_screen.hh"
 #include "ED_undo.hh"
 
+#include "UI_abstract_view.hh"
 #include "UI_interface.hh"
 #include "UI_interface_c.hh"
 #include "UI_string_search.hh"
@@ -66,7 +68,7 @@
 #include "interface_intern.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -183,6 +185,12 @@ static void ui_block_interaction_update(bContext *C,
 static void ui_mouse_motion_keynav_init(uiKeyNavLock *keynav, const wmEvent *event);
 static bool ui_mouse_motion_keynav_test(uiKeyNavLock *keynav, const wmEvent *event);
 #endif
+
+static void with_but_active_as_semi_modal(bContext *C,
+                                          ARegion *region,
+                                          uiBut *but,
+                                          blender::FunctionRef<void()> fn);
+static int ui_handle_region_semi_modal_buttons(bContext *C, const wmEvent *event, ARegion *region);
 
 /** \} */
 
@@ -421,6 +429,13 @@ struct uiHandleButtonData {
    */
   bool disable_force;
 
+  /**
+   * Semi-modal buttons: Instead of capturing all events, pass on events that aren't relevant to
+   * own handling. This way a text button (e.g. a search/filter field) can stay active while the
+   * remaining UI stays interactive. Only few button types support this well currently.
+   */
+  bool is_semi_modal;
+
   /* auto open */
   bool used_mouse;
   wmTimer *autoopentimer;
@@ -485,6 +500,8 @@ struct uiAfterFunc {
 
   uiButHandleNFunc funcN;
   void *func_argN;
+  uiButArgNFree func_argN_free_fn;
+  /* uiButArgNCopy func_argN_copy_fn is not needed currently. */
 
   uiButHandleRenameFunc rename_func;
   void *rename_arg1;
@@ -852,7 +869,9 @@ static void ui_apply_but_func(bContext *C, uiBut *but)
   after->apply_func = but->apply_func;
 
   after->funcN = but->funcN;
-  after->func_argN = (but->func_argN) ? MEM_dupallocN(but->func_argN) : nullptr;
+  after->func_argN = (but->func_argN) ? but->func_argN_copy_fn(but->func_argN) : nullptr;
+  after->func_argN_free_fn = but->func_argN_free_fn;
+  /* but->func_argN_copy_fn is not needed for #uiAfterFunc. */
 
   after->rename_func = but->rename_func;
   after->rename_arg1 = but->rename_arg1;
@@ -866,9 +885,15 @@ static void ui_apply_but_func(bContext *C, uiBut *but)
     after->popup_op = block->handle->popup_op;
   }
 
-  after->optype = but->optype;
-  after->opcontext = but->opcontext;
-  after->opptr = but->opptr;
+  if (!but->operator_never_call) {
+    after->optype = but->optype;
+    after->opcontext = but->opcontext;
+    after->opptr = but->opptr;
+
+    but->optype = nullptr;
+    but->opcontext = wmOperatorCallContext(0);
+    but->opptr = nullptr;
+  }
 
   after->rnapoin = but->rnapoin;
   after->rnaprop = but->rnaprop;
@@ -907,10 +932,6 @@ static void ui_apply_but_func(bContext *C, uiBut *but)
   }
 
   after->drawstr = ui_but_drawstr_without_sep_char(but);
-
-  but->optype = nullptr;
-  but->opcontext = wmOperatorCallContext(0);
-  but->opptr = nullptr;
 }
 
 /* typically call ui_apply_but_undo(), ui_apply_but_autokey() */
@@ -1067,7 +1088,7 @@ static void ui_apply_but_funcs_after(bContext *C)
       after.funcN(C, after.func_argN, after.func_arg2);
     }
     if (after.func_argN) {
-      MEM_freeN(after.func_argN);
+      after.func_argN_free_fn(after.func_argN);
     }
 
     if (after.handle_func) {
@@ -1939,46 +1960,46 @@ static void ui_selectcontext_apply(bContext *C,
     const int index = but->rnaindex;
     const bool use_delta = (selctx_data->is_copy == false);
 
-    union {
-      bool b;
-      int i;
-      float f;
-      char *str;
-      PointerRNA p;
-    } delta, min, max;
+    std::variant<bool, int, float, std::string, PointerRNA> delta, min, max;
 
     const bool is_array = RNA_property_array_check(prop);
     const int rna_type = RNA_property_type(prop);
 
     if (rna_type == PROP_FLOAT) {
-      delta.f = use_delta ? (value - value_orig) : value;
-      RNA_property_float_range(&but->rnapoin, prop, &min.f, &max.f);
+      delta.emplace<float>(use_delta ? (value - value_orig) : value);
+      float min_v, max_v;
+      RNA_property_float_range(&but->rnapoin, prop, &min_v, &max_v);
+      min.emplace<float>(min_v);
+      max.emplace<float>(max_v);
     }
     else if (rna_type == PROP_INT) {
-      delta.i = use_delta ? (int(value) - int(value_orig)) : int(value);
-      RNA_property_int_range(&but->rnapoin, prop, &min.i, &max.i);
+      delta.emplace<int>(int(use_delta ? (value - value_orig) : value));
+      int min_v, max_v;
+      RNA_property_int_range(&but->rnapoin, prop, &min_v, &max_v);
+      min.emplace<int>(min_v);
+      max.emplace<int>(max_v);
     }
     else if (rna_type == PROP_ENUM) {
       /* Not a delta in fact. */
-      delta.i = RNA_property_enum_get(&but->rnapoin, prop);
+      delta.emplace<int>(RNA_property_enum_get(&but->rnapoin, prop));
     }
     else if (rna_type == PROP_BOOLEAN) {
       if (is_array) {
         /* Not a delta in fact. */
-        delta.b = RNA_property_boolean_get_index(&but->rnapoin, prop, index);
+        delta.emplace<bool>(RNA_property_boolean_get_index(&but->rnapoin, prop, index));
       }
       else {
         /* Not a delta in fact. */
-        delta.b = RNA_property_boolean_get(&but->rnapoin, prop);
+        delta.emplace<bool>(RNA_property_boolean_get(&but->rnapoin, prop));
       }
     }
     else if (rna_type == PROP_POINTER) {
       /* Not a delta in fact. */
-      delta.p = RNA_property_pointer_get(&but->rnapoin, prop);
+      delta.emplace<PointerRNA>(RNA_property_pointer_get(&but->rnapoin, prop));
     }
     else if (rna_type == PROP_STRING) {
       /* Not a delta in fact. */
-      delta.str = RNA_property_string_get_alloc(&but->rnapoin, prop, nullptr, 0, nullptr);
+      delta.emplace<std::string>(RNA_property_string_get(&but->rnapoin, prop));
     }
 
 #  ifdef USE_ALLSELECT_LAYER_HACK
@@ -2017,8 +2038,8 @@ static void ui_selectcontext_apply(bContext *C,
       PointerRNA lptr = other->ptr;
 
       if (rna_type == PROP_FLOAT) {
-        float other_value = use_delta ? (other->val_f + delta.f) : delta.f;
-        CLAMP(other_value, min.f, max.f);
+        float other_value = std::get<float>(delta) + (use_delta ? other->val_f : 0.0f);
+        CLAMP(other_value, std::get<float>(min), std::get<float>(max));
         if (is_array) {
           RNA_property_float_set_index(&lptr, lprop, index, other_value);
         }
@@ -2027,8 +2048,8 @@ static void ui_selectcontext_apply(bContext *C,
         }
       }
       else if (rna_type == PROP_INT) {
-        int other_value = use_delta ? (other->val_i + delta.i) : delta.i;
-        CLAMP(other_value, min.i, max.i);
+        int other_value = std::get<int>(delta) + (use_delta ? other->val_i : 0);
+        CLAMP(other_value, std::get<int>(min), std::get<int>(max));
         if (is_array) {
           RNA_property_int_set_index(&lptr, lprop, index, other_value);
         }
@@ -2037,32 +2058,29 @@ static void ui_selectcontext_apply(bContext *C,
         }
       }
       else if (rna_type == PROP_BOOLEAN) {
-        const bool other_value = delta.b;
+        const bool other_value = std::get<bool>(delta);
         if (is_array) {
           RNA_property_boolean_set_index(&lptr, lprop, index, other_value);
         }
         else {
-          RNA_property_boolean_set(&lptr, lprop, delta.b);
+          RNA_property_boolean_set(&lptr, lprop, other_value);
         }
       }
       else if (rna_type == PROP_ENUM) {
-        const int other_value = delta.i;
+        const int other_value = std::get<int>(delta);
         BLI_assert(!is_array);
         RNA_property_enum_set(&lptr, lprop, other_value);
       }
       else if (rna_type == PROP_POINTER) {
-        const PointerRNA other_value = delta.p;
+        const PointerRNA &other_value = std::get<PointerRNA>(delta);
         RNA_property_pointer_set(&lptr, lprop, other_value, nullptr);
       }
       else if (rna_type == PROP_STRING) {
-        const char *other_value = delta.str;
-        RNA_property_string_set(&lptr, lprop, other_value);
+        const std::string &other_value = std::get<std::string>(delta);
+        RNA_property_string_set(&lptr, lprop, other_value.c_str());
       }
 
       RNA_property_update(C, &lptr, prop);
-    }
-    if (rna_type == PROP_STRING) {
-      MEM_freeN(delta.str);
     }
   }
 }
@@ -3638,16 +3656,19 @@ static void ui_textedit_ime_end(wmWindow *win, uiBut * /*but*/)
 
 void ui_but_ime_reposition(uiBut *but, int x, int y, bool complete)
 {
-  BLI_assert(but->active);
+  BLI_assert(but->active || but->semi_modal_state);
+  uiHandleButtonData *data = but->semi_modal_state ? but->semi_modal_state : but->active;
 
-  ui_region_to_window(but->active->region, &x, &y);
-  wm_window_IME_begin(but->active->window, x, y - 4, 0, 0, complete);
+  ui_region_to_window(data->region, &x, &y);
+  wm_window_IME_begin(data->window, x, y - 4, 0, 0, complete);
 }
 
 const wmIMEData *ui_but_ime_data_get(uiBut *but)
 {
-  if (but->active && but->active->window) {
-    return but->active->window->ime_data;
+  uiHandleButtonData *data = but->semi_modal_state ? but->semi_modal_state : but->active;
+
+  if (data && data->window) {
+    return data->window->ime_data;
   }
   else {
     return nullptr;
@@ -3938,7 +3959,7 @@ static eStrCursorJumpType ui_textedit_jump_type_from_event(const wmEvent *event)
   return STRCUR_JUMP_NONE;
 }
 
-static void ui_do_but_textedit(
+static int ui_do_but_textedit(
     bContext *C, uiBlock *block, uiBut *but, uiHandleButtonData *data, const wmEvent *event)
 {
   uiTextEdit &text_edit = data->text_edit;
@@ -3975,6 +3996,10 @@ static void ui_do_but_textedit(
       break;
     case RIGHTMOUSE:
     case EVT_ESCKEY:
+      /* Don't consume cancel events (would usually end text editing), let menu code handle it. */
+      if (data->is_semi_modal) {
+        break;
+      }
       if (event->val == KM_PRESS) {
         /* Support search context menu. */
         if (event->type == RIGHTMOUSE) {
@@ -4034,7 +4059,7 @@ static void ui_do_but_textedit(
           button_activate_state(C, but, BUTTON_STATE_TEXT_SELECTING);
           retval = WM_UI_HANDLER_BREAK;
         }
-        else if (inbox == false) {
+        else if (inbox == false && !data->is_semi_modal) {
           /* if searchbox, click outside will cancel */
           if (data->searchbox) {
             data->cancel = data->escapecancel = true;
@@ -4064,7 +4089,7 @@ static void ui_do_but_textedit(
           changed = true;
         }
       }
-      else if (inbox) {
+      else if (inbox && !data->is_semi_modal) {
         /* if we allow activation on key press,
          * it gives problems launching operators #35713. */
         if (event->val == KM_RELEASE) {
@@ -4314,9 +4339,12 @@ static void ui_do_but_textedit(
       ED_region_tag_refresh_ui(data->region);
     }
   }
+
+  /* Swallow all events unless semi-modal handling is requested. */
+  return data->is_semi_modal ? retval : WM_UI_HANDLER_BREAK;
 }
 
-static void ui_do_but_textedit_select(
+static int ui_do_but_textedit_select(
     bContext *C, uiBlock *block, uiBut *but, uiHandleButtonData *data, const wmEvent *event)
 {
   int retval = WM_UI_HANDLER_CONTINUE;
@@ -4343,6 +4371,8 @@ static void ui_do_but_textedit_select(
     ui_but_update(but);
     ED_region_tag_redraw(data->region);
   }
+
+  return retval;
 }
 
 /** \} */
@@ -4630,6 +4660,10 @@ static void ui_block_open_begin(bContext *C, uiBut *but, uiHandleButtonData *dat
     }
   }
 #endif
+
+  /* Force new region handler to run, in case that needs to activate some state (e.g. to handle
+   * #UI_BUT2_FORCE_SEMI_MODAL_ACTIVE). */
+  WM_event_add_mousemove(data->window);
 
   /* this makes adjacent blocks auto open from now on */
   // if (but->block->auto_open == 0) {
@@ -5021,12 +5055,10 @@ static int ui_do_but_TEX(
     }
   }
   else if (data->state == BUTTON_STATE_TEXT_EDITING) {
-    ui_do_but_textedit(C, block, but, data, event);
-    return WM_UI_HANDLER_BREAK;
+    return ui_do_but_textedit(C, block, but, data, event);
   }
   else if (data->state == BUTTON_STATE_TEXT_SELECTING) {
-    ui_do_but_textedit_select(C, block, but, data, event);
-    return WM_UI_HANDLER_BREAK;
+    return ui_do_but_textedit_select(C, block, but, data, event);
   }
 
   return WM_UI_HANDLER_CONTINUE;
@@ -5126,6 +5158,30 @@ static int ui_do_but_TOG(bContext *C, uiBut *but, uiHandleButtonData *data, cons
   return WM_UI_HANDLER_CONTINUE;
 }
 
+/**
+ * \param close_popup: In most cases activating the view item should close the popup it is in
+ *                     (unless #AbstractView::keep_open() was called when building the view), if
+ *                     any. But this should only be done when activating the view item directly,
+ *                     things like clicking nested buttons or calling the context menu should keep
+ *                     the popup open for further interaction.
+ */
+static void force_activate_view_item_but(bContext *C,
+                                         ARegion *region,
+                                         uiButViewItem *but,
+                                         const bool close_popup = true)
+{
+  if (but->active) {
+    ui_apply_but(C, but->block, but, but->active, true);
+  }
+  else {
+    UI_but_execute(C, region, but);
+  }
+
+  if (close_popup && !UI_view_item_popup_keep_open(*but->view_item)) {
+    UI_popup_menu_close_from_but(but);
+  }
+}
+
 static int ui_do_but_VIEW_ITEM(bContext *C,
                                uiBut *but,
                                uiHandleButtonData *data,
@@ -5149,9 +5205,12 @@ static int ui_do_but_VIEW_ITEM(bContext *C,
             data->dragstarty = event->xy[1];
           }
           else {
-            button_activate_state(C, but, BUTTON_STATE_EXIT);
+            force_activate_view_item_but(C, data->region, view_item_but);
           }
 
+          /* Always continue for drag and drop handling. Also for cases where keymap items are
+           * registered to add custom activate or drag operators (the pose library does this for
+           * example). */
           return WM_UI_HANDLER_CONTINUE;
         case KM_DBL_CLICK:
           data->cancel = true;
@@ -8349,15 +8408,15 @@ static int ui_do_button(bContext *C, uiBlock *block, uiBut *but, const wmEvent *
         (event->modifier & (KM_SHIFT | KM_CTRL | KM_ALT | KM_OSKEY)) == 0 &&
         (event->val == KM_PRESS))
     {
-      /* For some button types that are typically representing entire sets of data, right-clicking
-       * to spawn the context menu should also activate the item. This makes it clear which item
-       * will be operated on.
-       * Apply the button immediately, so context menu polls get the right active item. */
-      uiBut *clicked_view_item_but = but->type == UI_BTYPE_VIEW_ITEM ?
-                                         but :
-                                         ui_view_item_find_mouse_over(data->region, event->xy);
+      /* For some button types that are typically representing entire sets of data,
+       * right-clicking to spawn the context menu should also activate the item. This makes it
+       * clear which item will be operated on. Apply the button immediately, so context menu
+       * polls get the right active item. */
+      uiButViewItem *clicked_view_item_but = static_cast<uiButViewItem *>(
+          but->type == UI_BTYPE_VIEW_ITEM ? but :
+                                            ui_view_item_find_mouse_over(data->region, event->xy));
       if (clicked_view_item_but) {
-        UI_but_execute(C, data->region, clicked_view_item_but);
+        clicked_view_item_but->view_item->activate(*C);
       }
 
       /* RMB has two options now */
@@ -8896,6 +8955,10 @@ static void button_activate_init(bContext *C,
                                  uiBut *but,
                                  uiButtonActivateType type)
 {
+  /* Don't activate semi-modal buttons the normal way, they have special activation handling. */
+  if (but->semi_modal_state) {
+    return;
+  }
   /* Only ever one active button! */
   BLI_assert(ui_region_find_active_but(region) == nullptr);
 
@@ -9109,6 +9172,8 @@ static void button_activate_exit(
     }
   }
 
+  BLI_assert(!but->semi_modal_state || but->semi_modal_state == but->active);
+  but->semi_modal_state = nullptr;
   /* clean up button */
   MEM_SAFE_FREE(but->active);
 
@@ -9136,6 +9201,18 @@ void ui_but_active_free(const bContext *C, uiBut *but)
     data->cancel = true;
     button_activate_exit((bContext *)C, but, data, false, true);
   }
+}
+
+void ui_but_semi_modal_state_free(const bContext *C, uiBut *but)
+{
+  if (!but->semi_modal_state) {
+    return;
+  }
+  /* Activate the button (using the semi modal state) and use the normal active button freeing. */
+  with_but_active_as_semi_modal(const_cast<bContext *>(C),
+                                but->semi_modal_state->region,
+                                but,
+                                [&]() { ui_but_active_free(C, but); });
 }
 
 /* returns the active button with an optional checking function */
@@ -9524,6 +9601,68 @@ static bool ui_handle_button_activate_by_type(bContext *C, ARegion *region, uiBu
     return false;
   }
   return true;
+}
+
+/**
+ * Calls \a fn with \a but activated for semi-modal handling.
+ *
+ * Button handling code requires the button to be active, but at the same time only one active
+ * button per region is supported. So if there's a different active button already, it needs to be
+ * deactivated temporarily (by unsetting its #uiBut.active member and restoring it when done).
+ *
+ * During the \fn call, the passed \a but will appear to be the active button of the region, i.e.
+ * #ui_region_find_active_but() will return \a but.
+ */
+static void with_but_active_as_semi_modal(bContext *C,
+                                          ARegion *region,
+                                          uiBut *but,
+                                          blender::FunctionRef<void()> fn)
+{
+  BLI_assert(but->active == nullptr);
+
+  uiBut *prev_active_but = ui_region_find_active_but(region);
+  uiHandleButtonData *prev_active_data = prev_active_but ? prev_active_but->active : nullptr;
+  if (prev_active_but) {
+    prev_active_but->active = nullptr;
+  }
+
+  /* Enforce the button to actually be active, using #uiBut.semi_modal_state to store its handling
+   * state. */
+  if (!but->semi_modal_state) {
+    ui_but_activate_event(C, region, but);
+    but->semi_modal_state = but->active;
+    but->semi_modal_state->is_semi_modal = true;
+  }
+
+  /* Activate the button using the previously created/stored semi-modal state. */
+  but->active = but->semi_modal_state;
+  fn();
+  but->active = nullptr;
+
+  if (prev_active_but) {
+    prev_active_but->active = prev_active_data;
+  }
+}
+
+/**
+ * Calls \a fn for all buttons that are either already semi-modal active or should be made to be
+ * because the #UI_BUT2_FORCE_SEMI_MODAL_ACTIVE flag is set. During the \a fn call, the button will
+ * appear to be the active button, i.e. #ui_region_find_active_but() will return this button.
+ */
+static void foreach_semi_modal_but_as_active(bContext *C,
+                                             ARegion *region,
+                                             blender::FunctionRef<void(uiBut *semi_modal_but)> fn)
+{
+  /* Might want to have some way to define which order these should be handled in - if there's
+   * every actually a use-case for multiple semi-active buttons at the same time. */
+
+  LISTBASE_FOREACH (uiBlock *, block, &region->uiblocks) {
+    LISTBASE_FOREACH (uiBut *, but, &block->buttons) {
+      if ((but->flag2 & UI_BUT2_FORCE_SEMI_MODAL_ACTIVE) || but->semi_modal_state) {
+        with_but_active_as_semi_modal(C, region, but, [&]() { fn(but); });
+      }
+    }
+  }
 }
 
 /** \} */
@@ -10127,30 +10266,62 @@ static int ui_handle_list_event(bContext *C, const wmEvent *event, ARegion *regi
 }
 
 /* Handle mouse hover for Views and UiList rows. */
-static int ui_handle_viewlist_items_hover(const wmEvent *event, const ARegion *region)
+static int ui_handle_viewlist_items_hover(const wmEvent *event, ARegion *region)
 {
-  bool has_item = false;
-  LISTBASE_FOREACH (uiBlock *, block, &region->uiblocks) {
-    LISTBASE_FOREACH (uiBut *, but, &block->buttons) {
-      if (ELEM(but->type, UI_BTYPE_VIEW_ITEM, UI_BTYPE_LISTROW)) {
-        but->flag &= ~UI_HOVER;
-        has_item = true;
+  const bool has_list = !BLI_listbase_is_empty(&region->ui_lists);
+  const bool has_view = [&]() {
+    LISTBASE_FOREACH (uiBlock *, block, &region->uiblocks) {
+      if (!BLI_listbase_is_empty(&block->views)) {
+        return true;
       }
     }
-  }
+    return false;
+  }();
 
-  if (!has_item) {
+  if (!has_view && !has_list) {
     /* Avoid unnecessary lookup. */
     return WM_UI_HANDLER_CONTINUE;
   }
 
   /* Always highlight the hovered view item, even if the mouse hovers another button inside. */
-  uiBut *hovered_row_but = ui_view_item_find_mouse_over(region, event->xy);
-  if (!hovered_row_but) {
-    hovered_row_but = ui_list_row_find_mouse_over(region, event->xy);
+  uiBut *highlight_row_but = [&]() -> uiBut * {
+    if (uiBut *but = ui_view_item_find_search_highlight(region)) {
+      return but;
+    }
+    if (uiBut *but = ui_view_item_find_mouse_over(region, event->xy)) {
+      return but;
+    }
+    if (uiBut *but = ui_list_row_find_mouse_over(region, event->xy)) {
+      return but;
+    }
+    return nullptr;
+  }();
+
+  bool changed = false;
+
+  if (highlight_row_but && !(highlight_row_but->flag & UI_HOVER)) {
+    highlight_row_but->flag |= UI_HOVER;
+    changed = true;
   }
-  if (hovered_row_but) {
-    hovered_row_but->flag |= UI_HOVER;
+
+  LISTBASE_FOREACH (uiBlock *, block, &region->uiblocks) {
+    LISTBASE_FOREACH (uiBut *, but, &block->buttons) {
+      if (but == highlight_row_but) {
+        continue;
+      }
+      if (!ELEM(but->type, UI_BTYPE_VIEW_ITEM, UI_BTYPE_LISTROW)) {
+        continue;
+      }
+
+      if (but->flag & UI_HOVER) {
+        but->flag &= ~UI_HOVER;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    ED_region_tag_redraw_no_rebuild(region);
   }
 
   return WM_UI_HANDLER_CONTINUE;
@@ -10161,16 +10332,41 @@ static int ui_handle_view_item_event(bContext *C,
                                      uiBut *active_but,
                                      ARegion *region)
 {
-  if ((event->type == LEFTMOUSE) && (event->val == KM_PRESS)) {
-    /* Only bother finding the active view item button if the active button isn't already a view
-     * item. */
-    uiBut *view_but = (active_but && active_but->type == UI_BTYPE_VIEW_ITEM) ?
-                          active_but :
-                          ui_view_item_find_mouse_over(region, event->xy);
-    /* Will free active button if there already is one. */
-    if (view_but) {
-      UI_but_execute(C, region, view_but);
-    }
+  switch (event->type) {
+    case MOUSEMOVE:
+      if (event->xy[0] != event->prev_xy[0] || event->xy[1] != event->prev_xy[1]) {
+        UI_region_views_clear_search_highlight(region);
+      }
+      break;
+    case LEFTMOUSE:
+      if (event->val == KM_PRESS) {
+        /* Only bother finding the active view item button if the active button isn't already a
+         * view item. */
+        uiButViewItem *view_but = static_cast<uiButViewItem *>(
+            (active_but && active_but->type == UI_BTYPE_VIEW_ITEM) ?
+                active_but :
+                ui_view_item_find_mouse_over(region, event->xy));
+        /* Will free active button if there already is one. */
+        if (view_but) {
+          /* Close the popup when clicking on the view item directly, not any overlapped button. */
+          const bool close_popup = view_but == active_but;
+          force_activate_view_item_but(C, region, view_but, close_popup);
+        }
+      }
+      break;
+    case EVT_RETKEY:
+    case EVT_PADENTER:
+      if (event->val == KM_PRESS) {
+        if (uiButViewItem *search_highlight_but = static_cast<uiButViewItem *>(
+                ui_view_item_find_search_highlight(region)))
+        {
+          force_activate_view_item_but(C, region, search_highlight_but);
+          return WM_UI_HANDLER_BREAK;
+        }
+      }
+      break;
+    default:
+      break;
   }
 
   return WM_UI_HANDLER_CONTINUE;
@@ -11113,13 +11309,13 @@ static int ui_handle_menu_event(bContext *C,
             }
 
             /* Accelerator keys that allow "pressing" a menu entry by pressing a single key. */
-            LISTBASE_FOREACH (uiBut *, but, &block->buttons) {
-              if (!(but->flag & UI_BUT_DISABLED) && but->menu_key == event->type) {
-                if (but->type == UI_BTYPE_BUT) {
-                  UI_but_execute(C, region, but);
+            LISTBASE_FOREACH (uiBut *, but_iter, &block->buttons) {
+              if (!(but_iter->flag & UI_BUT_DISABLED) && but_iter->menu_key == event->type) {
+                if (but_iter->type == UI_BTYPE_BUT) {
+                  UI_but_execute(C, region, but_iter);
                 }
                 else {
-                  ui_handle_button_activate_by_type(C, region, but);
+                  ui_handle_button_activate_by_type(C, region, but_iter);
                 }
                 return WM_UI_HANDLER_BREAK;
               }
@@ -11198,6 +11394,7 @@ static int ui_handle_menu_event(bContext *C,
         if ((but_default != nullptr) && (but_default->active == nullptr)) {
           if (but_default->type == UI_BTYPE_BUT) {
             UI_but_execute(C, region, but_default);
+            retval = WM_UI_HANDLER_BREAK;
           }
           else {
             ui_handle_button_activate_by_type(C, region, but_default);
@@ -11754,6 +11951,11 @@ static int ui_handle_menus_recursive(bContext *C,
   }
 
   /* now handle events for our own menu */
+
+  if (retval == WM_UI_HANDLER_CONTINUE) {
+    retval = ui_handle_region_semi_modal_buttons(C, event, menu->region);
+  }
+
   if (retval == WM_UI_HANDLER_CONTINUE || event->type == TIMER) {
     const bool do_but_search = (but && (but->type == UI_BTYPE_SEARCH_MENU));
     if (submenu && submenu->menuretval) {
@@ -11862,6 +12064,10 @@ static int ui_region_handler(bContext *C, const wmEvent *event, void * /*userdat
   }
 
   if (retval == WM_UI_HANDLER_CONTINUE) {
+    retval = ui_handle_region_semi_modal_buttons(C, event, region);
+  }
+
+  if (retval == WM_UI_HANDLER_CONTINUE) {
     if (but) {
       retval = ui_handle_button_event(C, event, but);
     }
@@ -11909,6 +12115,27 @@ static void ui_region_handler_remove(bContext *C, void * /*userdata*/)
   if (BLI_findindex(&screen->regionbase, region) == -1) {
     ui_apply_but_funcs_after(C);
   }
+}
+
+static int ui_handle_region_semi_modal_buttons(bContext *C, const wmEvent *event, ARegion *region)
+{
+  /* If there's a fully modal button, it has priority. */
+  if (const uiBut *active_but = ui_region_find_active_but(region)) {
+    BLI_assert(active_but->semi_modal_state == nullptr);
+    if (button_modal_state(active_but->active->state)) {
+      return WM_UI_HANDLER_CONTINUE;
+    }
+  }
+
+  int retval = WM_UI_HANDLER_CONTINUE;
+
+  foreach_semi_modal_but_as_active(C, region, [&](uiBut *semi_modal_but) {
+    if (retval == WM_UI_HANDLER_CONTINUE) {
+      retval = ui_handle_button_event(C, event, semi_modal_but);
+    }
+  });
+
+  return retval;
 }
 
 /* handle buttons at the window level, modal, for example while

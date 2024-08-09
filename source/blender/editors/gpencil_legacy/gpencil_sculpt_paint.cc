@@ -40,7 +40,6 @@
 #include "BKE_context.hh"
 #include "BKE_gpencil_geom_legacy.h"
 #include "BKE_gpencil_legacy.h"
-#include "BKE_gpencil_modifier_legacy.h"
 #include "BKE_main.hh"
 #include "BKE_material.h"
 #include "BKE_paint.hh"
@@ -53,7 +52,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_view2d.hh"
 
@@ -1189,7 +1188,7 @@ static bool gpencil_sculpt_brush_init(bContext *C, wmOperator *op)
       gso->vrgroup = -1;
     }
     /* Check if some modifier can transform the stroke. */
-    gso->is_transformed = BKE_gpencil_has_transform_modifiers(ob);
+    gso->is_transformed = false;
 
     gso->ob_eval = (Object *)DEG_get_evaluated_id(gso->depsgraph, &ob->id);
   }
@@ -1204,6 +1203,9 @@ static bool gpencil_sculpt_brush_init(bContext *C, wmOperator *op)
 
   Paint *paint = &ts->gp_sculptpaint->paint;
   Brush *brush = BKE_paint_brush(paint);
+  if (brush && !brush->gpencil_settings) {
+    BKE_brush_init_gpencil_settings(brush);
+  }
   gso->brush = brush;
   BKE_curvemapping_init(gso->brush->curve);
 
@@ -2177,9 +2179,10 @@ static void gpencil_sculpt_brush_apply(bContext *C, wmOperator *op, PointerRNA *
 static Brush *gpencil_sculpt_get_smooth_brush(tGP_BrushEditData *gso)
 {
   Main *bmain = gso->bmain;
-  Brush *brush = static_cast<Brush *>(
-      BLI_findstring(&bmain->brushes, "Smooth Stroke", offsetof(ID, name) + 2));
-
+  Brush *brush = BKE_paint_brush_from_essentials(bmain, "Smooth Stroke");
+  if (brush && !brush->gpencil_settings) {
+    BKE_brush_init_gpencil_settings(brush);
+  }
   return brush;
 }
 

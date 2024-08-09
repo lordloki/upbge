@@ -105,6 +105,8 @@ class GHOST_WindowWayland : public GHOST_Window {
 
   GHOST_TSuccess getCursorBitmap(GHOST_CursorBitmapRef *bitmap) override;
 
+  bool getValid() const override;
+
   void setTitle(const char *title) override;
 
   std::string getTitle() const override;

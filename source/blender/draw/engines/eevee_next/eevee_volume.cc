@@ -58,11 +58,39 @@ void VolumeModule::init()
   use_reprojection_ = (scene_eval->eevee.flag & SCE_EEVEE_TAA_REPROJECTION) != 0;
 }
 
-void VolumeModule::begin_sync() {}
+void VolumeModule::begin_sync()
+{
+  previous_objects_ = current_objects_;
+  current_objects_.clear();
+}
+
+void VolumeModule::world_sync(const WorldHandle &world_handle)
+{
+  if (!use_reprojection_) {
+    return;
+  }
+
+  if (world_handle.recalc && !inst_.is_playback()) {
+    valid_history_ = false;
+  }
+}
+
+void VolumeModule::object_sync(const ObjectHandle &ob_handle)
+{
+  current_objects_.add(ob_handle.object_key);
+
+  if (!use_reprojection_) {
+    return;
+  }
+
+  if (ob_handle.recalc && !inst_.is_playback()) {
+    valid_history_ = false;
+  }
+}
 
 void VolumeModule::end_sync()
 {
-  enabled_ = inst_.world.has_volume() || inst_.pipelines.volume.is_enabled();
+  enabled_ = inst_.world.has_volume() || !current_objects_.is_empty();
 
   const Scene *scene_eval = inst_.scene;
 
@@ -94,6 +122,13 @@ void VolumeModule::end_sync()
     valid_history_ = false;
   }
 
+  if (valid_history_) {
+    /* Avoid the (potentially expensive) check if valid_history_ is already false. */
+    if (current_objects_ != previous_objects_) {
+      valid_history_ = false;
+    }
+  }
+
   if (inst_.camera.is_perspective()) {
     float sample_distribution = scene_eval->eevee.volumetric_sample_distribution;
     sample_distribution = 4.0f * math::max(1.0f - sample_distribution, 1e-2f);
@@ -114,6 +149,7 @@ void VolumeModule::end_sync()
     prop_extinction_tx_.free();
     prop_emission_tx_.free();
     prop_phase_tx_.free();
+    prop_phase_weight_tx_.free();
     scatter_tx_.current().free();
     scatter_tx_.previous().free();
     extinction_tx_.current().free();
@@ -129,6 +165,7 @@ void VolumeModule::end_sync()
     properties.extinction_tx_ = nullptr;
     properties.emission_tx_ = nullptr;
     properties.phase_tx_ = nullptr;
+    properties.phase_weight_tx_ = nullptr;
     properties.occupancy_tx_ = nullptr;
     occupancy.occupancy_tx_ = nullptr;
     occupancy.hit_depth_tx_ = nullptr;
@@ -152,7 +189,9 @@ void VolumeModule::end_sync()
   prop_scattering_tx_.ensure_3d(GPU_R11F_G11F_B10F, data_.tex_size, usage);
   prop_extinction_tx_.ensure_3d(GPU_R11F_G11F_B10F, data_.tex_size, usage);
   prop_emission_tx_.ensure_3d(GPU_R11F_G11F_B10F, data_.tex_size, usage);
-  prop_phase_tx_.ensure_3d(GPU_RG16F, data_.tex_size, usage);
+  /* We need 2 separate images to prevent bugs in Nvidia drivers (See #122454). */
+  prop_phase_tx_.ensure_3d(GPU_R16F, data_.tex_size, usage);
+  prop_phase_weight_tx_.ensure_3d(GPU_R16F, data_.tex_size, usage);
 
   int occupancy_layers = divide_ceil_u(data_.tex_size.z, 32u);
   eGPUTextureUsage occupancy_usage = GPU_TEXTURE_USAGE_SHADER_READ |
@@ -201,6 +240,7 @@ void VolumeModule::end_sync()
   properties.extinction_tx_ = prop_extinction_tx_;
   properties.emission_tx_ = prop_emission_tx_;
   properties.phase_tx_ = prop_phase_tx_;
+  properties.phase_weight_tx_ = prop_phase_weight_tx_;
   properties.occupancy_tx_ = occupancy_tx_;
   occupancy.occupancy_tx_ = occupancy_tx_;
   occupancy.hit_depth_tx_ = hit_depth_tx_;
@@ -226,6 +266,7 @@ void VolumeModule::end_sync()
   scatter_ps_.bind_texture("extinction_tx", &prop_extinction_tx_);
   scatter_ps_.bind_image("in_emission_img", &prop_emission_tx_);
   scatter_ps_.bind_image("in_phase_img", &prop_phase_tx_);
+  scatter_ps_.bind_image("in_phase_weight_img", &prop_phase_weight_tx_);
   scatter_ps_.bind_texture("scattering_history_tx", &scatter_tx_.previous(), history_sampler);
   scatter_ps_.bind_texture("extinction_history_tx", &extinction_tx_.previous(), history_sampler);
   scatter_ps_.bind_image("out_scattering_img", &scatter_tx_.current());
@@ -371,7 +412,7 @@ void VolumeModule::draw_prepass(View &main_view)
    * We need custom culling for these but that's not implemented yet. */
   volume_view.visibility_test(false);
 
-  if (inst_.pipelines.volume.is_enabled()) {
+  if (!current_objects_.is_empty()) {
     inst_.pipelines.volume.render(volume_view, occupancy_tx_);
   }
   DRW_stats_group_end();

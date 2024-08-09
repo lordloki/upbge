@@ -126,14 +126,27 @@ static void ui_popup_block_position(wmWindow *window,
 
   ui_block_to_window_rctf(butregion, but->block, &block->rect, &block->rect);
 
+  /* `block->rect` is already scaled with `butregion->winrct`,
+   * apply this scale to layout panels too. */
+  if (Panel *panel = block->panel) {
+    for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+      body.start_y /= block->aspect;
+      body.end_y /= block->aspect;
+    }
+    for (LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
+      header.start_y /= block->aspect;
+      header.end_y /= block->aspect;
+    }
+  }
+
   /* Compute direction relative to button, based on available space. */
   const int size_x = BLI_rctf_size_x(&block->rect) + 0.2f * UI_UNIT_X; /* 4 for shadow */
   const int size_y = BLI_rctf_size_y(&block->rect) + 0.2f * UI_UNIT_Y;
   const int center_x = (block->direction & UI_DIR_CENTER_X) ? size_x / 2 : 0;
   const int center_y = (block->direction & UI_DIR_CENTER_Y) ? size_y / 2 : 0;
 
-  const int win_x = WM_window_pixels_x(window);
-  const int win_y = WM_window_pixels_y(window);
+  const int win_x = WM_window_native_pixel_x(window);
+  const int win_y = WM_window_native_pixel_y(window);
 
   /* Take into account maximum size so we don't have to flip on refresh. */
   const float max_size_x = max_ff(size_x, handle->max_size_x);
@@ -466,8 +479,8 @@ static void ui_popup_block_clip(wmWindow *window, uiBlock *block)
     return;
   }
 
-  const int winx = WM_window_pixels_x(window);
-  const int winy = WM_window_pixels_y(window);
+  const int winx = WM_window_native_pixel_x(window);
+  const int winy = WM_window_native_pixel_y(window);
 
   /* shift to left if outside of view */
   if (block->rect.xmax > winx - margin) {
@@ -711,8 +724,8 @@ uiBlock *ui_popup_block_refresh(bContext *C,
   if (block->flag & UI_BLOCK_PIE_MENU) {
     const int win_width = UI_SCREEN_MARGIN;
 
-    const int winx = WM_window_pixels_x(window);
-    const int winy = WM_window_pixels_y(window);
+    const int winx = WM_window_native_pixel_x(window);
+    const int winy = WM_window_native_pixel_y(window);
 
     copy_v2_v2(block->pie_data.pie_center_init, block->pie_data.pie_center_spawned);
 

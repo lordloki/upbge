@@ -13,6 +13,8 @@
 
 #include "DNA_curve_types.h"
 
+#include "ANIM_action.hh"
+
 struct AnimData;
 struct CacheFile;
 struct FCurve;
@@ -29,6 +31,11 @@ struct bAnimContext;
 struct bDopeSheet;
 struct bGPDlayer;
 struct bGPdata;
+
+namespace blender::animrig {
+class Action;
+class Slot;
+}  // namespace blender::animrig
 
 /* ****************************** Base Structs ****************************** */
 
@@ -151,7 +158,8 @@ int64_t ED_keylist_array_len(const AnimKeylist *keylist);
 /**
  * Add the keyframes of the F-Curve to the keylist.
  * \param adt: can be a nullptr.
- * \param range: only adds keys in the given range to the keylist.
+ * \param range: adds keys in the given range to the keylist plus 1 extra on each side if
+ * available.
  */
 void fcurve_to_keylist(
     AnimData *adt, FCurve *fcu, AnimKeylist *keylist, int saction_flag, blender::float2 range);
@@ -164,6 +172,12 @@ void action_group_to_keylist(AnimData *adt,
 /* Action */
 void action_to_keylist(
     AnimData *adt, bAction *act, AnimKeylist *keylist, int saction_flag, blender::float2 range);
+void action_slot_to_keylist(AnimData *adt,
+                            blender::animrig::Action &action,
+                            blender::animrig::slot_handle_t slot_handle,
+                            AnimKeylist *keylist,
+                            int saction_flag,
+                            blender::float2 range);
 /* Object */
 void ob_to_keylist(
     bDopeSheet *ads, Object *ob, AnimKeylist *keylist, int saction_flag, blender::float2 range);

@@ -29,7 +29,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_path.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_keyframing.hh"
 
@@ -40,7 +40,9 @@
 #include "DEG_depsgraph_build.hh"
 
 #include "ANIM_action.hh"
+#include "ANIM_animdata.hh"
 #include "ANIM_fcurve.hh"
+#include "action_runtime.hh"
 
 #include "atomic_ops.h"
 
@@ -51,14 +53,14 @@ namespace blender::animrig {
 
 namespace {
 /**
- * Default name for animation bindings. The first two characters in the name indicate the ID type
+ * Default name for action slots. The first two characters in the name indicate the ID type
  * of whatever is animated by it.
  *
- * Since the ID type may not be determined when the binding is created, the prefix starts out at
- * XX. Note that no code should use this XX value; use Binding::has_idtype() instead.
+ * Since the ID type may not be determined when the slot is created, the prefix starts out at
+ * XX. Note that no code should use this XX value; use Slot::has_idtype() instead.
  */
-constexpr const char *binding_default_name = "Binding";
-constexpr const char *binding_unbound_prefix = "XX";
+constexpr const char *slot_default_name = "Slot";
+constexpr const char *slot_unbound_prefix = "XX";
 
 constexpr const char *layer_default_name = "Layer";
 
@@ -94,7 +96,7 @@ template<typename T> static void grow_array(T **array, int *num, const int add_n
   BLI_assert(add_num > 0);
   const int new_array_num = *num + add_num;
   T *new_array = reinterpret_cast<T *>(
-      MEM_cnew_array<T *>(new_array_num, "animrig::animation/grow_array"));
+      MEM_cnew_array<T *>(new_array_num, "animrig::action/grow_array"));
 
   blender::uninitialized_relocate_n(*array, *num, new_array);
   MEM_SAFE_FREE(*array);
@@ -122,24 +124,28 @@ template<typename T> static void shrink_array(T **array, int *num, const int shr
   *num = new_array_num;
 }
 
-/* ----- Animation implementation ----------- */
+/* ----- Action implementation ----------- */
 
 bool Action::is_empty() const
 {
-  return this->layer_array_num == 0 && this->binding_array_num == 0 &&
-         BLI_listbase_is_empty(&this->curves);
+  /* The check for emptiness has to include the check for an empty `groups` ListBase because of the
+   * animation filtering code. With the functions `rearrange_action_channels` and
+   * `join_groups_action_temp` the ownership of FCurves is temporarily transferred to the `groups`
+   * ListBase leaving `curves` potentially empty. */
+  return this->layer_array_num == 0 && this->slot_array_num == 0 &&
+         BLI_listbase_is_empty(&this->curves) && BLI_listbase_is_empty(&this->groups);
 }
 bool Action::is_action_legacy() const
 {
   /* This is a valid legacy Action only if there is no layered info. */
-  return this->layer_array_num == 0 && this->binding_array_num == 0;
+  return this->layer_array_num == 0 && this->slot_array_num == 0;
 }
 bool Action::is_action_layered() const
 {
   /* This is a valid layered Action if there is ANY layered info (because that
    * takes precedence) or when there is no legacy info. */
-  return this->layer_array_num > 0 || this->binding_array_num > 0 ||
-         BLI_listbase_is_empty(&this->curves);
+  return this->layer_array_num > 0 || this->slot_array_num > 0 ||
+         (BLI_listbase_is_empty(&this->curves) && BLI_listbase_is_empty(&this->groups));
 }
 
 blender::Span<const Layer *> Action::layers() const
@@ -201,14 +207,26 @@ bool Action::layer_remove(Layer &layer_to_remove)
   return true;
 }
 
-void Action::layer_ensure_at_least_one()
+void Action::layer_keystrip_ensure()
 {
-  if (!this->layers().is_empty()) {
-    return;
+  /* Ensure a layer. */
+  Layer *layer;
+  if (this->layers().is_empty()) {
+    layer = &this->layer_add(DATA_(layer_default_name));
+  }
+  else {
+    layer = this->layer(0);
   }
 
-  Layer &layer = this->layer_add(DATA_(layer_default_name));
-  layer.strip_add(Strip::Type::Keyframe);
+  /* Ensure a KeyframeStrip. */
+  if (layer->strips().is_empty()) {
+    layer->strip_add<KeyframeStrip>();
+  }
+
+  /* Within the limits of Baklava Phase 1, the above code should not have
+   * created more than one layer, or more than one strip on the layer. And if a
+   * layer + strip already existed, that must have been a keyframe strip. */
+  assert_baklava_phase_1_invariants(*this);
 }
 
 int64_t Action::find_layer_index(const Layer &layer) const
@@ -222,89 +240,91 @@ int64_t Action::find_layer_index(const Layer &layer) const
   return -1;
 }
 
-blender::Span<const Binding *> Action::bindings() const
+blender::Span<const Slot *> Action::slots() const
 {
-  return blender::Span<Binding *>{reinterpret_cast<Binding **>(this->binding_array),
-                                  this->binding_array_num};
+  return blender::Span<Slot *>{reinterpret_cast<Slot **>(this->slot_array), this->slot_array_num};
 }
-blender::MutableSpan<Binding *> Action::bindings()
+blender::MutableSpan<Slot *> Action::slots()
 {
-  return blender::MutableSpan<Binding *>{reinterpret_cast<Binding **>(this->binding_array),
-                                         this->binding_array_num};
+  return blender::MutableSpan<Slot *>{reinterpret_cast<Slot **>(this->slot_array),
+                                      this->slot_array_num};
 }
-const Binding *Action::binding(const int64_t index) const
+const Slot *Action::slot(const int64_t index) const
 {
-  return &this->binding_array[index]->wrap();
+  return &this->slot_array[index]->wrap();
 }
-Binding *Action::binding(const int64_t index)
+Slot *Action::slot(const int64_t index)
 {
-  return &this->binding_array[index]->wrap();
-}
-
-Binding *Action::binding_for_handle(const binding_handle_t handle)
-{
-  const Binding *binding = const_cast<const Action *>(this)->binding_for_handle(handle);
-  return const_cast<Binding *>(binding);
+  return &this->slot_array[index]->wrap();
 }
 
-const Binding *Action::binding_for_handle(const binding_handle_t handle) const
+Slot *Action::slot_for_handle(const slot_handle_t handle)
 {
+  const Slot *slot = const_cast<const Action *>(this)->slot_for_handle(handle);
+  return const_cast<Slot *>(slot);
+}
+
+const Slot *Action::slot_for_handle(const slot_handle_t handle) const
+{
+  if (handle == Slot::unassigned) {
+    return nullptr;
+  }
+
   /* TODO: implement hash-map lookup. */
-  for (const Binding *binding : bindings()) {
-    if (binding->handle == handle) {
-      return binding;
+  for (const Slot *slot : slots()) {
+    if (slot->handle == handle) {
+      return slot;
     }
   }
   return nullptr;
 }
 
-static void anim_binding_name_ensure_unique(Action &animation, Binding &binding)
+static void slot_name_ensure_unique(Action &action, Slot &slot)
 {
   /* Cannot capture parameters by reference in the lambda, as that would change its signature
    * and no longer be compatible with BLI_uniquename_cb(). That's why this struct is necessary. */
   struct DupNameCheckData {
-    Action &anim;
-    Binding &binding;
+    Action &action;
+    Slot &slot;
   };
-  DupNameCheckData check_data = {animation, binding};
+  DupNameCheckData check_data = {action, slot};
 
   auto check_name_is_used = [](void *arg, const char *name) -> bool {
     DupNameCheckData *data = static_cast<DupNameCheckData *>(arg);
-    for (const Binding *binding : data->anim.bindings()) {
-      if (binding == &data->binding) {
-        /* Don't compare against the binding that's being renamed. */
+    for (const Slot *slot : data->action.slots()) {
+      if (slot == &data->slot) {
+        /* Don't compare against the slot that's being renamed. */
         continue;
       }
-      if (STREQ(binding->name, name)) {
+      if (STREQ(slot->name, name)) {
         return true;
       }
     }
     return false;
   };
 
-  BLI_uniquename_cb(check_name_is_used, &check_data, "", '.', binding.name, sizeof(binding.name));
+  BLI_uniquename_cb(check_name_is_used, &check_data, "", '.', slot.name, sizeof(slot.name));
 }
 
 /* TODO: maybe this function should only set the 'name without prefix' aka the 'display name'. That
  * way only `this->id_type` is responsible for the prefix. I (Sybren) think that's easier to
  * determine when the code is a bit more mature, and we can see what the majority of the calls to
  * this function actually do/need. */
-void Action::binding_name_set(Main &bmain, Binding &binding, const StringRefNull new_name)
+void Action::slot_name_set(Main &bmain, Slot &slot, const StringRefNull new_name)
 {
-  this->binding_name_define(binding, new_name);
-  this->binding_name_propagate(bmain, binding);
+  this->slot_name_define(slot, new_name);
+  this->slot_name_propagate(bmain, slot);
 }
 
-void Action::binding_name_define(Binding &binding, const StringRefNull new_name)
+void Action::slot_name_define(Slot &slot, const StringRefNull new_name)
 {
-  BLI_assert_msg(
-      StringRef(new_name).size() >= Binding::name_length_min,
-      "Animation Bindings must be large enough for a 2-letter ID code + the display name");
-  STRNCPY_UTF8(binding.name, new_name.c_str());
-  anim_binding_name_ensure_unique(*this, binding);
+  BLI_assert_msg(StringRef(new_name).size() >= Slot::name_length_min,
+                 "Action Slots must be large enough for a 2-letter ID code + the display name");
+  STRNCPY_UTF8(slot.name, new_name.c_str());
+  slot_name_ensure_unique(*this, slot);
 }
 
-void Action::binding_name_propagate(Main &bmain, const Binding &binding)
+void Action::slot_name_propagate(Main &bmain, const Slot &slot)
 {
   /* Just loop over all animatable IDs in the main database. */
   ListBase *lb;
@@ -319,56 +339,60 @@ void Action::binding_name_propagate(Main &bmain, const Binding &binding)
 
       AnimData *adt = BKE_animdata_from_id(id);
       if (!adt || adt->action != this) {
-        /* Not animated by this Animation. */
+        /* Not animated by this Action. */
         continue;
       }
-      if (adt->binding_handle != binding.handle) {
-        /* Not animated by this Binding. */
+      if (adt->slot_handle != slot.handle) {
+        /* Not animated by this Slot. */
         continue;
       }
 
-      /* Ensure the Binding name on the AnimData is correct. */
-      STRNCPY_UTF8(adt->binding_name, binding.name);
+      /* Ensure the Slot name on the AnimData is correct. */
+      STRNCPY_UTF8(adt->slot_name, slot.name);
     }
     FOREACH_MAIN_LISTBASE_ID_END;
   }
   FOREACH_MAIN_LISTBASE_END;
 }
 
-Binding *Action::binding_find_by_name(const StringRefNull binding_name)
+Slot *Action::slot_find_by_name(const StringRefNull slot_name)
 {
-  for (Binding *binding : bindings()) {
-    if (STREQ(binding->name, binding_name.c_str())) {
-      return binding;
+  for (Slot *slot : slots()) {
+    if (STREQ(slot->name, slot_name.c_str())) {
+      return slot;
     }
   }
   return nullptr;
 }
 
-Binding &Action::binding_allocate()
+Slot &Action::slot_allocate()
 {
-  Binding &binding = MEM_new<ActionBinding>(__func__)->wrap();
-  this->last_binding_handle++;
-  BLI_assert_msg(this->last_binding_handle > 0, "Animation Binding handle overflow");
-  binding.handle = this->last_binding_handle;
-  return binding;
+  Slot &slot = *MEM_new<Slot>(__func__);
+  this->last_slot_handle++;
+  BLI_assert_msg(this->last_slot_handle > 0, "Action Slot handle overflow");
+  slot.handle = this->last_slot_handle;
+
+  /* Set the default flags. These cannot be set via the 'DNA defaults' system,
+   * as that would require knowing which bit corresponds with which flag. That's
+   * only known to the C++ wrapper code. */
+  slot.set_expanded(true);
+  return slot;
 }
 
-Binding &Action::binding_add()
+Slot &Action::slot_add()
 {
-  Binding &binding = this->binding_allocate();
+  Slot &slot = this->slot_allocate();
 
   /* Assign the default name and the 'unbound' name prefix. */
-  STRNCPY_UTF8(binding.name, binding_unbound_prefix);
-  BLI_strncpy_utf8(binding.name + 2, DATA_(binding_default_name), ARRAY_SIZE(binding.name) - 2);
+  STRNCPY_UTF8(slot.name, slot_unbound_prefix);
+  BLI_strncpy_utf8(slot.name + 2, DATA_(slot_default_name), ARRAY_SIZE(slot.name) - 2);
 
-  /* Append the Binding to the animation data-block. */
-  grow_array_and_append<::ActionBinding *>(
-      &this->binding_array, &this->binding_array_num, &binding);
+  /* Append the Slot to the Action. */
+  grow_array_and_append<::ActionSlot *>(&this->slot_array, &this->slot_array_num, &slot);
 
-  anim_binding_name_ensure_unique(*this, binding);
+  slot_name_ensure_unique(*this, slot);
 
-  /* If this is the first binding in this Action, it means that it could have
+  /* If this is the first slot in this Action, it means that it could have
    * been used as a legacy Action before. As a result, this->idroot may be
    * non-zero while it should be zero for layered Actions.
    *
@@ -376,79 +400,104 @@ Binding &Action::binding_add()
    * there is no check for whether this is actually the first layer. */
   this->idroot = 0;
 
-  return binding;
+  return slot;
 }
 
-Binding &Action::binding_add_for_id(const ID &animated_id)
+Slot &Action::slot_add_for_id(const ID &animated_id)
 {
-  Binding &binding = this->binding_add();
+  Slot &slot = this->slot_add();
 
-  binding.idtype = GS(animated_id.name);
-  this->binding_name_define(binding, animated_id.name);
+  slot.idtype = GS(animated_id.name);
+  this->slot_name_define(slot, animated_id.name);
 
-  /* No need to call anim.binding_name_propagate() as nothing will be using
-   * this brand new Binding yet. */
+  /* No need to call anim.slot_name_propagate() as nothing will be using
+   * this brand new Slot yet. */
 
-  return binding;
+  return slot;
 }
 
-Binding *Action::find_suitable_binding_for(const ID &animated_id)
+Slot &Action::slot_ensure_for_id(const ID &animated_id)
+{
+  if (Slot *slot = this->find_suitable_slot_for(animated_id)) {
+    return *slot;
+  }
+
+  return this->slot_add_for_id(animated_id);
+}
+
+void Action::slot_active_set(const slot_handle_t slot_handle)
+{
+  for (Slot *slot : slots()) {
+    slot->set_active(slot->handle == slot_handle);
+  }
+}
+
+Slot *Action::slot_active_get()
+{
+  for (Slot *slot : slots()) {
+    if (slot->is_active()) {
+      return slot;
+    }
+  }
+  return nullptr;
+}
+
+Slot *Action::find_suitable_slot_for(const ID &animated_id)
 {
   AnimData *adt = BKE_animdata_from_id(&animated_id);
 
-  /* The binding handle is only valid when this action has already been
+  /* The slot handle is only valid when this action has already been
    * assigned. Otherwise it's meaningless. */
   if (adt && adt->action == this) {
-    Binding *binding = this->binding_for_handle(adt->binding_handle);
-    if (binding && binding->is_suitable_for(animated_id)) {
-      return binding;
+    Slot *slot = this->slot_for_handle(adt->slot_handle);
+    if (slot && slot->is_suitable_for(animated_id)) {
+      return slot;
     }
   }
 
-  /* Try the binding name from the AnimData, if it is set. */
-  if (adt && adt->binding_name[0]) {
-    Binding *binding = this->binding_find_by_name(adt->binding_name);
-    if (binding && binding->is_suitable_for(animated_id)) {
-      return binding;
+  /* Try the slot name from the AnimData, if it is set. */
+  if (adt && adt->slot_name[0]) {
+    Slot *slot = this->slot_find_by_name(adt->slot_name);
+    if (slot && slot->is_suitable_for(animated_id)) {
+      return slot;
     }
   }
 
   /* As a last resort, search for the ID name. */
-  Binding *binding = this->binding_find_by_name(animated_id.name);
-  if (binding && binding->is_suitable_for(animated_id)) {
-    return binding;
+  Slot *slot = this->slot_find_by_name(animated_id.name);
+  if (slot && slot->is_suitable_for(animated_id)) {
+    return slot;
   }
 
   return nullptr;
 }
 
-bool Action::is_binding_animated(const binding_handle_t binding_handle) const
+bool Action::is_slot_animated(const slot_handle_t slot_handle) const
 {
-  if (binding_handle == Binding::unassigned) {
+  if (slot_handle == Slot::unassigned) {
     return false;
   }
 
-  Span<const FCurve *> fcurves = fcurves_for_animation(*this, binding_handle);
+  Span<const FCurve *> fcurves = fcurves_for_action_slot(*this, slot_handle);
   return !fcurves.is_empty();
 }
 
 Layer *Action::get_layer_for_keyframing()
 {
-  /* TODO: handle multiple layers. */
+  assert_baklava_phase_1_invariants(*this);
+
   if (this->layers().is_empty()) {
     return nullptr;
-  }
-  if (this->layers().size() > 1) {
-    std::fprintf(stderr,
-                 "Action '%s' has multiple layers, which isn't handled by keyframing code yet.",
-                 this->id.name);
   }
 
   return this->layer(0);
 }
 
-bool Action::assign_id(Binding *binding, ID &animated_id)
+bool Action::assign_id(Slot *slot, ID &animated_id)
 {
+  BLI_assert_msg(!slot || this->slots().as_span().contains(slot),
+                 "Slot should be owned by this Action");
+
   AnimData *adt = BKE_animdata_ensure_id(&animated_id);
   if (!adt) {
     return false;
@@ -456,26 +505,28 @@ bool Action::assign_id(Binding *binding, ID &animated_id)
 
   if (adt->action && adt->action != this) {
     /* The caller should unassign the ID from its existing animation first, or
-     * use the top-level function `assign_animation(anim, ID)`. */
+     * use the top-level function `assign_action(anim, ID)`. */
     return false;
   }
 
-  /* Check that the new Binding is suitable, before changing `adt`. */
-  if (binding && !binding->is_suitable_for(animated_id)) {
+  /* Check that the new Slot is suitable, before changing `adt`. */
+  if (slot && !slot->is_suitable_for(animated_id)) {
     return false;
   }
 
-  /* Unassign any previously-assigned Binding. */
-  Binding *binding_to_unassign = this->binding_for_handle(adt->binding_handle);
-  if (binding_to_unassign) {
-    /* Before unassigning, make sure that the stored Binding name is up to date. The binding name
+  /* Unassign any previously-assigned Slot. */
+  Slot *slot_to_unassign = this->slot_for_handle(adt->slot_handle);
+  if (slot_to_unassign) {
+    slot_to_unassign->users_remove(animated_id);
+
+    /* Before unassigning, make sure that the stored Slot name is up to date. The slot name
      * might have changed in a way that wasn't copied into the ADT yet (for example when the
      * Action is linked from another file), so better copy the name to be sure that it can be
      * transparently reassigned later.
      *
      * TODO: Replace this with a BLI_assert() that the name is as expected, and "simply" ensure
      * this name is always correct. */
-    STRNCPY_UTF8(adt->binding_name, binding_to_unassign->name);
+    STRNCPY_UTF8(adt->slot_name, slot_to_unassign->name);
   }
 
   /* Assign the Action itself. */
@@ -487,36 +538,37 @@ bool Action::assign_id(Binding *binding, ID &animated_id)
     adt->action = this;
   }
 
-  /* Assign the Binding. */
-  if (binding) {
-    this->binding_setup_for_id(*binding, animated_id);
-    adt->binding_handle = binding->handle;
+  /* Assign the Slot. */
+  if (slot) {
+    this->slot_setup_for_id(*slot, animated_id);
+    adt->slot_handle = slot->handle;
+    slot->users_add(animated_id);
 
-    /* Always make sure the ID's binding name matches the assigned binding. */
-    STRNCPY_UTF8(adt->binding_name, binding->name);
+    /* Always make sure the ID's slot name matches the assigned slot. */
+    STRNCPY_UTF8(adt->slot_name, slot->name);
   }
   else {
-    adt->binding_handle = Binding::unassigned;
+    adt->slot_handle = Slot::unassigned;
   }
 
   return true;
 }
 
-void Action::binding_name_ensure_prefix(Binding &binding)
+void Action::slot_name_ensure_prefix(Slot &slot)
 {
-  binding.name_ensure_prefix();
-  anim_binding_name_ensure_unique(*this, binding);
+  slot.name_ensure_prefix();
+  slot_name_ensure_unique(*this, slot);
 }
 
-void Action::binding_setup_for_id(Binding &binding, const ID &animated_id)
+void Action::slot_setup_for_id(Slot &slot, const ID &animated_id)
 {
-  if (binding.has_idtype()) {
-    BLI_assert(binding.idtype == GS(animated_id.name));
+  if (slot.has_idtype()) {
+    BLI_assert(slot.idtype == GS(animated_id.name));
     return;
   }
 
-  binding.idtype = GS(animated_id.name);
-  this->binding_name_ensure_prefix(binding);
+  slot.idtype = GS(animated_id.name);
+  this->slot_name_ensure_prefix(slot);
 }
 
 void Action::unassign_id(ID &animated_id)
@@ -525,7 +577,7 @@ void Action::unassign_id(ID &animated_id)
   BLI_assert_msg(adt, "ID is not animated at all");
   BLI_assert_msg(adt->action == this, "ID is not assigned to this Animation");
 
-  /* Unassign the Binding first. */
+  /* Unassign the Slot first. */
   this->assign_id(nullptr, animated_id);
 
   /* Unassign the Action itself. */
@@ -590,9 +642,9 @@ static void strip_ptr_destructor(ActionStrip **dna_strip_ptr)
   MEM_delete(&strip);
 };
 
-bool Layer::strip_remove(Strip &strip_to_remove)
+bool Layer::strip_remove(Strip &strip)
 {
-  const int64_t strip_index = this->find_strip_index(strip_to_remove);
+  const int64_t strip_index = this->find_strip_index(strip);
   if (strip_index < 0) {
     return false;
   }
@@ -614,31 +666,186 @@ int64_t Layer::find_strip_index(const Strip &strip) const
   return -1;
 }
 
-/* ----- ActionBinding implementation ----------- */
+/* ----- ActionSlot implementation ----------- */
 
-bool Binding::is_suitable_for(const ID &animated_id) const
+Slot::Slot()
+{
+  memset(this, 0, sizeof(*this));
+  this->runtime = MEM_new<SlotRuntime>(__func__);
+}
+
+Slot::Slot(const Slot &other)
+{
+  memset(this, 0, sizeof(*this));
+  STRNCPY(this->name, other.name);
+  this->idtype = other.idtype;
+  this->handle = other.handle;
+  this->runtime = MEM_new<SlotRuntime>(__func__);
+}
+
+Slot::~Slot()
+{
+  MEM_delete(this->runtime);
+}
+
+void Slot::blend_read_post()
+{
+  BLI_assert(!this->runtime);
+  this->runtime = MEM_new<SlotRuntime>(__func__);
+}
+
+bool Slot::is_suitable_for(const ID &animated_id) const
 {
   if (!this->has_idtype()) {
-    /* Without specific ID type set, this Binding can animate any ID. */
+    /* Without specific ID type set, this Slot can animate any ID. */
     return true;
   }
 
-  /* Check that the ID type is compatible with this binding. */
+  /* Check that the ID type is compatible with this slot. */
   const int animated_idtype = GS(animated_id.name);
   return this->idtype == animated_idtype;
 }
 
-bool Binding::has_idtype() const
+bool Slot::has_idtype() const
 {
   return this->idtype != 0;
 }
 
-bool assign_animation(Action &anim, ID &animated_id)
+Slot::Flags Slot::flags() const
 {
-  unassign_animation(animated_id);
+  return static_cast<Slot::Flags>(this->slot_flags);
+}
+bool Slot::is_expanded() const
+{
+  return this->slot_flags & uint8_t(Flags::Expanded);
+}
+void Slot::set_expanded(const bool expanded)
+{
+  if (expanded) {
+    this->slot_flags |= uint8_t(Flags::Expanded);
+  }
+  else {
+    this->slot_flags &= ~(uint8_t(Flags::Expanded));
+  }
+}
 
-  Binding *binding = anim.find_suitable_binding_for(animated_id);
-  return anim.assign_id(binding, animated_id);
+bool Slot::is_selected() const
+{
+  return this->slot_flags & uint8_t(Flags::Selected);
+}
+void Slot::set_selected(const bool selected)
+{
+  if (selected) {
+    this->slot_flags |= uint8_t(Flags::Selected);
+  }
+  else {
+    this->slot_flags &= ~(uint8_t(Flags::Selected));
+  }
+}
+
+bool Slot::is_active() const
+{
+  return this->slot_flags & uint8_t(Flags::Active);
+}
+void Slot::set_active(const bool active)
+{
+  if (active) {
+    this->slot_flags |= uint8_t(Flags::Active);
+  }
+  else {
+    this->slot_flags &= ~(uint8_t(Flags::Active));
+  }
+}
+
+Span<ID *> Slot::users(Main &bmain) const
+{
+  if (bmain.is_action_slot_to_id_map_dirty) {
+    internal::rebuild_slot_user_cache(bmain);
+  }
+  BLI_assert(this->runtime);
+  return this->runtime->users.as_span();
+}
+
+Vector<ID *> Slot::runtime_users()
+{
+  BLI_assert_msg(this->runtime, "Slot::runtime should always be allocated");
+  return this->runtime->users;
+}
+
+void Slot::users_add(ID &animated_id)
+{
+  BLI_assert(this->runtime);
+  this->runtime->users.append_non_duplicates(&animated_id);
+}
+
+void Slot::users_remove(ID &animated_id)
+{
+  BLI_assert(this->runtime);
+  Vector<ID *> &users = this->runtime->users;
+
+  const int64_t vector_index = users.first_index_of_try(&animated_id);
+  if (vector_index < 0) {
+    return;
+  }
+
+  users.remove_and_reorder(vector_index);
+}
+
+void Slot::users_invalidate(Main &bmain)
+{
+  bmain.is_action_slot_to_id_map_dirty = true;
+}
+
+std::string Slot::name_prefix_for_idtype() const
+{
+  if (!this->has_idtype()) {
+    return slot_unbound_prefix;
+  }
+
+  char name[3] = {0};
+  *reinterpret_cast<short *>(name) = this->idtype;
+  return name;
+}
+
+StringRefNull Slot::name_without_prefix() const
+{
+  BLI_assert(StringRef(this->name).size() >= name_length_min);
+
+  /* Avoid accessing an uninitialized part of the string accidentally. */
+  if (this->name[0] == '\0' || this->name[1] == '\0') {
+    return "";
+  }
+  return this->name + 2;
+}
+
+void Slot::name_ensure_prefix()
+{
+  BLI_assert(StringRef(this->name).size() >= name_length_min);
+
+  if (StringRef(this->name).size() < 2) {
+    /* The code below would overwrite the trailing 0-byte. */
+    this->name[2] = '\0';
+  }
+
+  if (!this->has_idtype()) {
+    /* A zero idtype is not going to convert to a two-character string, so we
+     * need to explicitly assign the default prefix. */
+    this->name[0] = slot_unbound_prefix[0];
+    this->name[1] = slot_unbound_prefix[1];
+    return;
+  }
+
+  *reinterpret_cast<short *>(this->name) = this->idtype;
+}
+
+/* ----- Functions  ----------- */
+
+bool assign_action(Action &action, ID &animated_id)
+{
+  unassign_action(animated_id);
+
+  Slot *slot = action.find_suitable_slot_for(animated_id);
+  return action.assign_id(slot, animated_id);
 }
 
 bool is_action_assignable_to(const bAction *dna_action, const ID_Type id_code)
@@ -665,37 +872,37 @@ bool is_action_assignable_to(const bAction *dna_action, const ID_Type id_code)
   return true;
 }
 
-void unassign_animation(ID &animated_id)
+void unassign_action(ID &animated_id)
 {
-  Action *anim = get_animation(animated_id);
-  if (!anim) {
+  Action *action = get_action(animated_id);
+  if (!action) {
     return;
   }
-  anim->unassign_id(animated_id);
+  action->unassign_id(animated_id);
 }
 
-void unassign_binding(ID &animated_id)
+void unassign_slot(ID &animated_id)
 {
   AnimData *adt = BKE_animdata_from_id(&animated_id);
-  BLI_assert_msg(adt, "Cannot unassign an Action Binding from a non-animated ID.");
+  BLI_assert_msg(adt, "Cannot unassign an Action Slot from a non-animated ID.");
   if (!adt) {
     return;
   }
 
   if (!adt->action) {
     /* Nothing assigned. */
-    BLI_assert_msg(adt->binding_handle == Binding::unassigned,
-                   "Binding handle should be 'unassigned' when no Action is assigned");
+    BLI_assert_msg(adt->slot_handle == Slot::unassigned,
+                   "Slot handle should be 'unassigned' when no Action is assigned");
     return;
   }
 
-  /* Assign the 'nullptr' binding, effectively unassigning it. */
+  /* Assign the 'nullptr' slot, effectively unassigning it. */
   Action &action = adt->action->wrap();
   action.assign_id(nullptr, animated_id);
 }
 
 /* TODO: rename to get_action(). */
-Action *get_animation(ID &animated_id)
+Action *get_action(ID &animated_id)
 {
   AnimData *adt = BKE_animdata_from_id(&animated_id);
   if (!adt) {
@@ -707,46 +914,22 @@ Action *get_animation(ID &animated_id)
   return &adt->action->wrap();
 }
 
-std::string Binding::name_prefix_for_idtype() const
+std::optional<std::pair<Action *, Slot *>> get_action_slot_pair(ID &animated_id)
 {
-  if (!this->has_idtype()) {
-    return binding_unbound_prefix;
+  AnimData *adt = BKE_animdata_from_id(&animated_id);
+  if (!adt || !adt->action) {
+    /* Not animated by any Action. */
+    return std::nullopt;
   }
 
-  char name[3] = {0};
-  *reinterpret_cast<short *>(name) = this->idtype;
-  return name;
-}
-
-StringRefNull Binding::name_without_prefix() const
-{
-  BLI_assert(StringRef(this->name).size() >= name_length_min);
-
-  /* Avoid accessing an uninitialized part of the string accidentally. */
-  if (this->name[0] == '\0' || this->name[1] == '\0') {
-    return "";
-  }
-  return this->name + 2;
-}
-
-void Binding::name_ensure_prefix()
-{
-  BLI_assert(StringRef(this->name).size() >= name_length_min);
-
-  if (StringRef(this->name).size() < 2) {
-    /* The code below would overwrite the trailing 0-byte. */
-    this->name[2] = '\0';
+  Action &action = adt->action->wrap();
+  Slot *slot = action.slot_for_handle(adt->slot_handle);
+  if (!slot) {
+    /* Will not receive any animation from this Action. */
+    return std::nullopt;
   }
 
-  if (!this->has_idtype()) {
-    /* A zero idtype is not going to convert to a two-character string, so we
-     * need to explicitly assign the default prefix. */
-    this->name[0] = binding_unbound_prefix[0];
-    this->name[1] = binding_unbound_prefix[1];
-    return;
-  }
-
-  *reinterpret_cast<short *>(this->name) = this->idtype;
+  return std::make_pair(&action, slot);
 }
 
 /* ----- ActionStrip implementation ----------- */
@@ -809,21 +992,21 @@ KeyframeStrip::KeyframeStrip(const KeyframeStrip &other)
 {
   memcpy(this, &other, sizeof(*this));
 
-  this->channelbags_array = MEM_cnew_array<ActionChannelBag *>(other.channelbags_array_num,
-                                                               __func__);
+  this->channelbag_array = MEM_cnew_array<ActionChannelBag *>(other.channelbag_array_num,
+                                                              __func__);
   Span<const ChannelBag *> channelbags_src = other.channelbags();
   for (int i : channelbags_src.index_range()) {
-    this->channelbags_array[i] = MEM_new<animrig::ChannelBag>(__func__, *other.channelbag(i));
+    this->channelbag_array[i] = MEM_new<animrig::ChannelBag>(__func__, *other.channelbag(i));
   }
 }
 
 KeyframeStrip::~KeyframeStrip()
 {
-  for (ChannelBag *channelbag_for_binding : this->channelbags()) {
-    MEM_delete(channelbag_for_binding);
+  for (ChannelBag *channelbag_for_slot : this->channelbags()) {
+    MEM_delete(channelbag_for_slot);
   }
-  MEM_SAFE_FREE(this->channelbags_array);
-  this->channelbags_array_num = 0;
+  MEM_SAFE_FREE(this->channelbag_array);
+  this->channelbag_array_num = 0;
 }
 
 template<> bool Strip::is<KeyframeStrip>() const
@@ -850,138 +1033,209 @@ KeyframeStrip::operator Strip &()
 
 blender::Span<const ChannelBag *> KeyframeStrip::channelbags() const
 {
-  return blender::Span<ChannelBag *>{reinterpret_cast<ChannelBag **>(this->channelbags_array),
-                                     this->channelbags_array_num};
+  return blender::Span<ChannelBag *>{reinterpret_cast<ChannelBag **>(this->channelbag_array),
+                                     this->channelbag_array_num};
 }
 blender::MutableSpan<ChannelBag *> KeyframeStrip::channelbags()
 {
   return blender::MutableSpan<ChannelBag *>{
-      reinterpret_cast<ChannelBag **>(this->channelbags_array), this->channelbags_array_num};
+      reinterpret_cast<ChannelBag **>(this->channelbag_array), this->channelbag_array_num};
 }
 const ChannelBag *KeyframeStrip::channelbag(const int64_t index) const
 {
-  return &this->channelbags_array[index]->wrap();
+  return &this->channelbag_array[index]->wrap();
 }
 ChannelBag *KeyframeStrip::channelbag(const int64_t index)
 {
-  return &this->channelbags_array[index]->wrap();
+  return &this->channelbag_array[index]->wrap();
 }
-const ChannelBag *KeyframeStrip::channelbag_for_binding(
-    const binding_handle_t binding_handle) const
+const ChannelBag *KeyframeStrip::channelbag_for_slot(const slot_handle_t slot_handle) const
 {
   for (const ChannelBag *channels : this->channelbags()) {
-    if (channels->binding_handle == binding_handle) {
+    if (channels->slot_handle == slot_handle) {
       return channels;
     }
   }
   return nullptr;
 }
-ChannelBag *KeyframeStrip::channelbag_for_binding(const binding_handle_t binding_handle)
+int64_t KeyframeStrip::find_channelbag_index(const ChannelBag &channelbag) const
+{
+  for (int64_t index = 0; index < this->channelbag_array_num; index++) {
+    if (this->channelbag(index) == &channelbag) {
+      return index;
+    }
+  }
+  return -1;
+}
+ChannelBag *KeyframeStrip::channelbag_for_slot(const slot_handle_t slot_handle)
 {
   const auto *const_this = const_cast<const KeyframeStrip *>(this);
-  const auto *const_channels = const_this->channelbag_for_binding(binding_handle);
+  const auto *const_channels = const_this->channelbag_for_slot(slot_handle);
   return const_cast<ChannelBag *>(const_channels);
 }
-const ChannelBag *KeyframeStrip::channelbag_for_binding(const Binding &binding) const
+const ChannelBag *KeyframeStrip::channelbag_for_slot(const Slot &slot) const
 {
-  return this->channelbag_for_binding(binding.handle);
+  return this->channelbag_for_slot(slot.handle);
 }
-ChannelBag *KeyframeStrip::channelbag_for_binding(const Binding &binding)
+ChannelBag *KeyframeStrip::channelbag_for_slot(const Slot &slot)
 {
-  return this->channelbag_for_binding(binding.handle);
+  return this->channelbag_for_slot(slot.handle);
 }
 
-ChannelBag &KeyframeStrip::channelbag_for_binding_add(const Binding &binding)
+ChannelBag &KeyframeStrip::channelbag_for_slot_add(const Slot &slot)
 {
-  BLI_assert_msg(channelbag_for_binding(binding) == nullptr,
-                 "Cannot add chans-for-binding for already-registered binding");
+  BLI_assert_msg(channelbag_for_slot(slot) == nullptr,
+                 "Cannot add chans-for-slot for already-registered slot");
 
   ChannelBag &channels = MEM_new<ActionChannelBag>(__func__)->wrap();
-  channels.binding_handle = binding.handle;
+  channels.slot_handle = slot.handle;
 
   grow_array_and_append<ActionChannelBag *>(
-      &this->channelbags_array, &this->channelbags_array_num, &channels);
+      &this->channelbag_array, &this->channelbag_array_num, &channels);
 
   return channels;
 }
 
-FCurve *KeyframeStrip::fcurve_find(const Binding &binding,
-                                   const StringRefNull rna_path,
-                                   const int array_index)
+ChannelBag &KeyframeStrip::channelbag_for_slot_ensure(const Slot &slot)
 {
-  ChannelBag *channels = this->channelbag_for_binding(binding);
-  if (channels == nullptr) {
-    return nullptr;
+  ChannelBag *channel_bag = this->channelbag_for_slot(slot);
+  if (channel_bag != nullptr) {
+    return *channel_bag;
   }
-
-  /* Copy of the logic in BKE_fcurve_find(), but then compatible with our array-of-FCurves
-   * instead of ListBase. */
-
-  for (FCurve *fcu : channels->fcurves()) {
-    /* Check indices first, much cheaper than a string comparison. */
-    /* Simple string-compare (this assumes that they have the same root...) */
-    if (fcu->array_index == array_index && fcu->rna_path && StringRef(fcu->rna_path) == rna_path) {
-      return fcu;
-    }
-  }
-  return nullptr;
+  return this->channelbag_for_slot_add(slot);
 }
 
-FCurve &KeyframeStrip::fcurve_find_or_create(const Binding &binding,
-                                             const StringRefNull rna_path,
-                                             const int array_index,
-                                             const std::optional<PropertySubType> prop_subtype)
+static void channelbag_ptr_destructor(ActionChannelBag **dna_channelbag_ptr)
 {
-  if (FCurve *existing_fcurve = this->fcurve_find(binding, rna_path, array_index)) {
+  ChannelBag &channelbag = (*dna_channelbag_ptr)->wrap();
+  MEM_delete(&channelbag);
+};
+
+bool KeyframeStrip::channelbag_remove(ChannelBag &channelbag_to_remove)
+{
+  const int64_t channelbag_index = this->find_channelbag_index(channelbag_to_remove);
+  if (channelbag_index < 0) {
+    return false;
+  }
+
+  dna::array::remove_index(&this->channelbag_array,
+                           &this->channelbag_array_num,
+                           nullptr,
+                           channelbag_index,
+                           channelbag_ptr_destructor);
+
+  return true;
+}
+
+const FCurve *ChannelBag::fcurve_find(const FCurveDescriptor fcurve_descriptor) const
+{
+  return animrig::fcurve_find(this->fcurves(), fcurve_descriptor);
+}
+
+FCurve *ChannelBag::fcurve_find(const FCurveDescriptor fcurve_descriptor)
+{
+  /* Intermediate variable needed to disambiguate const/non-const overloads. */
+  Span<FCurve *> fcurves = this->fcurves();
+  return animrig::fcurve_find(fcurves, fcurve_descriptor);
+}
+
+FCurve &ChannelBag::fcurve_ensure(Main *bmain, const FCurveDescriptor fcurve_descriptor)
+{
+  if (FCurve *existing_fcurve = this->fcurve_find(fcurve_descriptor)) {
     return *existing_fcurve;
   }
+  return this->fcurve_create(bmain, fcurve_descriptor);
+}
 
-  FCurve *new_fcurve = create_fcurve_for_channel(rna_path.c_str(), array_index, prop_subtype);
-
-  ChannelBag *channels = this->channelbag_for_binding(binding);
-  if (channels == nullptr) {
-    channels = &this->channelbag_for_binding_add(binding);
+FCurve *ChannelBag::fcurve_create_unique(Main *bmain, FCurveDescriptor fcurve_descriptor)
+{
+  if (this->fcurve_find(fcurve_descriptor)) {
+    return nullptr;
   }
+  return &this->fcurve_create(bmain, fcurve_descriptor);
+}
 
-  if (channels->fcurve_array_num == 0) {
+FCurve &ChannelBag::fcurve_create(Main *bmain, FCurveDescriptor fcurve_descriptor)
+{
+  FCurve *new_fcurve = create_fcurve_for_channel(fcurve_descriptor);
+
+  if (this->fcurve_array_num == 0) {
     new_fcurve->flag |= FCURVE_ACTIVE; /* First curve is added active. */
   }
 
-  grow_array_and_append(&channels->fcurve_array, &channels->fcurve_array_num, new_fcurve);
+  grow_array_and_append(&this->fcurve_array, &this->fcurve_array_num, new_fcurve);
+
+  if (bmain) {
+    DEG_relations_tag_update(bmain);
+  }
+
   return *new_fcurve;
 }
 
-SingleKeyingResult KeyframeStrip::keyframe_insert(
-    const Binding &binding,
-    const StringRefNull rna_path,
-    const int array_index,
-    const std::optional<PropertySubType> prop_subtype,
-    const float2 time_value,
-    const KeyframeSettings &settings,
-    const eInsertKeyFlags insert_key_flags)
+static void fcurve_ptr_destructor(FCurve **fcurve_ptr)
+{
+  BKE_fcurve_free(*fcurve_ptr);
+};
+
+bool ChannelBag::fcurve_remove(FCurve &fcurve_to_remove)
+{
+  const int64_t fcurve_index = this->fcurves().as_span().first_index_try(&fcurve_to_remove);
+  if (fcurve_index < 0) {
+    return false;
+  }
+
+  dna::array::remove_index(
+      &this->fcurve_array, &this->fcurve_array_num, nullptr, fcurve_index, fcurve_ptr_destructor);
+
+  /* As an optimization, this function could call `DEG_relations_tag_update(bmain)` to prune any
+   * relationships that are now no longer necessary. This is not needed for correctness of the
+   * depsgraph evaluation results though. */
+
+  return true;
+}
+
+void ChannelBag::fcurves_clear()
+{
+  dna::array::clear(&this->fcurve_array, &this->fcurve_array_num, nullptr, fcurve_ptr_destructor);
+}
+
+SingleKeyingResult KeyframeStrip::keyframe_insert(Main *bmain,
+                                                  const Slot &slot,
+                                                  const FCurveDescriptor fcurve_descriptor,
+                                                  const float2 time_value,
+                                                  const KeyframeSettings &settings,
+                                                  const eInsertKeyFlags insert_key_flags)
 {
   /* Get the fcurve, or create one if it doesn't exist and the keying flags
    * allow. */
-  FCurve *fcurve = key_insertion_may_create_fcurve(insert_key_flags) ?
-                       &this->fcurve_find_or_create(binding, rna_path, array_index, prop_subtype) :
-                       this->fcurve_find(binding, rna_path, array_index);
+  FCurve *fcurve = nullptr;
+  if (key_insertion_may_create_fcurve(insert_key_flags)) {
+    fcurve = &this->channelbag_for_slot_ensure(slot).fcurve_ensure(bmain, fcurve_descriptor);
+  }
+  else {
+    ChannelBag *channels = this->channelbag_for_slot(slot);
+    if (channels != nullptr) {
+      fcurve = channels->fcurve_find(fcurve_descriptor);
+    }
+  }
+
   if (!fcurve) {
     std::fprintf(stderr,
-                 "FCurve %s[%d] for binding %s was not created due to either the Only Insert "
+                 "FCurve %s[%d] for slot %s was not created due to either the Only Insert "
                  "Available setting or Replace keyframing mode.\n",
-                 rna_path.c_str(),
-                 array_index,
-                 binding.name);
+                 fcurve_descriptor.rna_path.c_str(),
+                 fcurve_descriptor.array_index,
+                 slot.name);
     return SingleKeyingResult::CANNOT_CREATE_FCURVE;
   }
 
   if (!BKE_fcurve_is_keyframable(fcurve)) {
     /* TODO: handle this properly, in a way that can be communicated to the user. */
     std::fprintf(stderr,
-                 "FCurve %s[%d] for binding %s doesn't allow inserting keys.\n",
-                 rna_path.c_str(),
-                 array_index,
-                 binding.name);
+                 "FCurve %s[%d] for slot %s doesn't allow inserting keys.\n",
+                 fcurve_descriptor.rna_path.c_str(),
+                 fcurve_descriptor.array_index,
+                 slot.name);
     return SingleKeyingResult::FCURVE_NOT_KEYFRAMEABLE;
   }
 
@@ -990,10 +1244,10 @@ SingleKeyingResult KeyframeStrip::keyframe_insert(
 
   if (insert_vert_result != SingleKeyingResult::SUCCESS) {
     std::fprintf(stderr,
-                 "Could not insert key into FCurve %s[%d] for binding %s.\n",
-                 rna_path.c_str(),
-                 array_index,
-                 binding.name);
+                 "Could not insert key into FCurve %s[%d] for slot %s.\n",
+                 fcurve_descriptor.rna_path.c_str(),
+                 fcurve_descriptor.array_index,
+                 slot.name);
     return insert_vert_result;
   }
 
@@ -1004,7 +1258,7 @@ SingleKeyingResult KeyframeStrip::keyframe_insert(
 
 ChannelBag::ChannelBag(const ChannelBag &other)
 {
-  this->binding_handle = other.binding_handle;
+  this->slot_handle = other.slot_handle;
   this->fcurve_array_num = other.fcurve_array_num;
 
   this->fcurve_array = MEM_cnew_array<FCurve *>(other.fcurve_array_num, __func__);
@@ -1040,32 +1294,21 @@ FCurve *ChannelBag::fcurve(const int64_t index)
   return this->fcurve_array[index];
 }
 
-const FCurve *ChannelBag::fcurve_find(const StringRefNull rna_path, const int array_index) const
-{
-  for (const FCurve *fcu : this->fcurves()) {
-    /* Check indices first, much cheaper than a string comparison. */
-    if (fcu->array_index == array_index && fcu->rna_path && StringRef(fcu->rna_path) == rna_path) {
-      return fcu;
-    }
-  }
-  return nullptr;
-}
-
 /* Utility function implementations. */
 
-static const animrig::ChannelBag *channelbag_for_animation(const Action &anim,
-                                                           const binding_handle_t binding_handle)
+static const animrig::ChannelBag *channelbag_for_action_slot(const Action &action,
+                                                             const slot_handle_t slot_handle)
 {
-  if (binding_handle == Binding::unassigned) {
+  if (slot_handle == Slot::unassigned) {
     return nullptr;
   }
 
-  for (const animrig::Layer *layer : anim.layers()) {
+  for (const animrig::Layer *layer : action.layers()) {
     for (const animrig::Strip *strip : layer->strips()) {
       switch (strip->type()) {
         case animrig::Strip::Type::Keyframe: {
           const animrig::KeyframeStrip &key_strip = strip->as<animrig::KeyframeStrip>();
-          const animrig::ChannelBag *bag = key_strip.channelbag_for_binding(binding_handle);
+          const animrig::ChannelBag *bag = key_strip.channelbag_for_slot(slot_handle);
           if (bag) {
             return bag;
           }
@@ -1077,27 +1320,28 @@ static const animrig::ChannelBag *channelbag_for_animation(const Action &anim,
   return nullptr;
 }
 
-static animrig::ChannelBag *channelbag_for_animation(Action &anim,
-                                                     const binding_handle_t binding_handle)
+static animrig::ChannelBag *channelbag_for_action_slot(Action &action,
+                                                       const slot_handle_t slot_handle)
 {
-  const animrig::ChannelBag *const_bag = channelbag_for_animation(const_cast<const Action &>(anim),
-                                                                  binding_handle);
+  const animrig::ChannelBag *const_bag = channelbag_for_action_slot(
+      const_cast<const Action &>(action), slot_handle);
   return const_cast<animrig::ChannelBag *>(const_bag);
 }
 
-Span<FCurve *> fcurves_for_animation(Action &anim, const binding_handle_t binding_handle)
+Span<FCurve *> fcurves_for_action_slot(Action &action, const slot_handle_t slot_handle)
 {
-  animrig::ChannelBag *bag = channelbag_for_animation(anim, binding_handle);
+  assert_baklava_phase_1_invariants(action);
+  animrig::ChannelBag *bag = channelbag_for_action_slot(action, slot_handle);
   if (!bag) {
     return {};
   }
   return bag->fcurves();
 }
 
-Span<const FCurve *> fcurves_for_animation(const Action &anim,
-                                           const binding_handle_t binding_handle)
+Span<const FCurve *> fcurves_for_action_slot(const Action &action, const slot_handle_t slot_handle)
 {
-  const animrig::ChannelBag *bag = channelbag_for_animation(anim, binding_handle);
+  assert_baklava_phase_1_invariants(action);
+  const animrig::ChannelBag *bag = channelbag_for_action_slot(action, slot_handle);
   if (!bag) {
     return {};
   }
@@ -1163,30 +1407,74 @@ Vector<const FCurve *> fcurves_all(const Action &action)
                           const ChannelBag>(action);
 }
 
-FCurve *action_fcurve_find(bAction *act, const char rna_path[], const int array_index)
+FCurve *action_fcurve_find(bAction *act, FCurveDescriptor fcurve_descriptor)
 {
-  if (ELEM(nullptr, act, rna_path)) {
+  if (act == nullptr) {
     return nullptr;
   }
-  return BKE_fcurve_find(&act->curves, rna_path, array_index);
+#ifdef WITH_ANIM_BAKLAVA
+  BLI_assert(act->wrap().is_action_legacy());
+#endif
+  return BKE_fcurve_find(
+      &act->curves, fcurve_descriptor.rna_path.c_str(), fcurve_descriptor.array_index);
 }
 
 FCurve *action_fcurve_ensure(Main *bmain,
                              bAction *act,
                              const char group[],
                              PointerRNA *ptr,
-                             const char rna_path[],
-                             const int array_index)
+                             FCurveDescriptor fcurve_descriptor)
 {
-  if (ELEM(nullptr, act, rna_path)) {
+  if (act == nullptr) {
     return nullptr;
+  }
+  Action &action = act->wrap();
+
+  if (USER_EXPERIMENTAL_TEST(&U, use_animation_baklava) && action.is_action_layered()) {
+    /* NOTE: for layered actions we require the following:
+     *
+     * - `ptr` is non-null.
+     * - `ptr` has an `owner_id` that already uses `act`.
+     *
+     * This isn't for any principled reason, but rather is because adding
+     * support for layered actions to this function was a fix to make Follow
+     * Path animation work properly with layered actions (see PR #124353), and
+     * those are the requirements the Follow Path code conveniently met.
+     * Moreover those requirements were also already met by the other call sites
+     * that potentially call this function with layered actions.
+     *
+     * Trying to puzzle out what "should" happen when these requirements don't
+     * hold, or if this is even the best place to handle the layered action
+     * cases at all, was leading to discussion of larger changes than made sense
+     * to tackle at that point. */
+    BLI_assert(ptr != nullptr);
+    if (ptr == nullptr) {
+      return nullptr;
+    }
+    AnimData *adt = BKE_animdata_from_id(ptr->owner_id);
+    BLI_assert(adt != nullptr && adt->action == act);
+    if (adt == nullptr || adt->action != act) {
+      return nullptr;
+    }
+
+    /* Ensure the id has an assigned slot. */
+    Slot &slot = action.slot_ensure_for_id(*ptr->owner_id);
+    action.assign_id(&slot, *ptr->owner_id);
+
+    action.layer_keystrip_ensure();
+
+    assert_baklava_phase_1_invariants(action);
+    KeyframeStrip &strip = action.layer(0)->strip(0)->as<KeyframeStrip>();
+
+    return &strip.channelbag_for_slot_ensure(slot).fcurve_ensure(bmain, fcurve_descriptor);
   }
 
   /* Try to find f-curve matching for this setting.
    * - add if not found and allowed to add one
    *   TODO: add auto-grouping support? how this works will need to be resolved
    */
-  FCurve *fcu = BKE_fcurve_find(&act->curves, rna_path, array_index);
+  FCurve *fcu = BKE_fcurve_find(
+      &act->curves, fcurve_descriptor.rna_path.c_str(), fcurve_descriptor.array_index);
 
   if (fcu != nullptr) {
     return fcu;
@@ -1199,13 +1487,17 @@ FCurve *action_fcurve_ensure(Main *bmain,
     PointerRNA resolved_ptr;
     PointerRNA id_ptr = RNA_id_pointer_create(ptr->owner_id);
     const bool resolved = RNA_path_resolve_property(
-        &id_ptr, rna_path, &resolved_ptr, &resolved_prop);
+        &id_ptr, fcurve_descriptor.rna_path.c_str(), &resolved_ptr, &resolved_prop);
     if (resolved) {
       prop_subtype = RNA_property_subtype(resolved_prop);
     }
   }
 
-  fcu = create_fcurve_for_channel(rna_path, array_index, prop_subtype);
+  BLI_assert_msg(!fcurve_descriptor.prop_subtype.has_value(),
+                 "Did not expect a prop_subtype to be passed in. This is fine, but does need some "
+                 "changes to action_fcurve_ensure() to deal with it");
+  fcu = create_fcurve_for_channel(
+      {fcurve_descriptor.rna_path, fcurve_descriptor.array_index, prop_subtype});
 
   if (BLI_listbase_is_empty(&act->curves)) {
     fcu->flag |= FCURVE_ACTIVE;
@@ -1237,4 +1529,135 @@ FCurve *action_fcurve_ensure(Main *bmain,
 
   return fcu;
 }
+
+bool action_fcurve_remove(Action &action, FCurve &fcu)
+{
+  for (Layer *layer : action.layers()) {
+    for (Strip *strip : layer->strips()) {
+      if (!(strip->type() == Strip::Type::Keyframe)) {
+        continue;
+      }
+      KeyframeStrip &key_strip = strip->template as<KeyframeStrip>();
+      for (ChannelBag *bag : key_strip.channelbags()) {
+        const bool removed = bag->fcurve_remove(fcu);
+        if (removed) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+ID *action_slot_get_id_for_keying(Main &bmain,
+                                  Action &action,
+                                  const slot_handle_t slot_handle,
+                                  ID *primary_id)
+{
+  if (action.is_action_legacy()) {
+    if (primary_id && get_action(*primary_id) == &action) {
+      return primary_id;
+    }
+    return nullptr;
+  }
+
+  Slot *slot = action.slot_for_handle(slot_handle);
+  if (slot == nullptr) {
+    return nullptr;
+  }
+
+  blender::Span<ID *> users = slot->users(bmain);
+  if (users.size() == 1) {
+    /* We only do this for `users.size() == 1` and not `users.size() >= 1`
+     * because when there's more than one user it's ambiguous which user we
+     * should return, and that would be unpredictable for end users of Blender.
+     * We also expect that to be a corner case anyway.  So instead we let that
+     * case either get disambiguated by the primary ID in the case below, or
+     * return null. */
+    return users[0];
+  }
+  if (users.contains(primary_id)) {
+    return primary_id;
+  }
+
+  return nullptr;
+}
+
+ID *action_slot_get_id_best_guess(Main &bmain, Slot &slot, ID *primary_id)
+{
+  blender::Span<ID *> users = slot.users(bmain);
+  if (users.is_empty()) {
+    return 0;
+  }
+  if (users.contains(primary_id)) {
+    return primary_id;
+  }
+  return users[0];
+}
+
+void assert_baklava_phase_1_invariants(const Action &action)
+{
+  if (action.is_action_legacy()) {
+    return;
+  }
+  if (action.layers().is_empty()) {
+    return;
+  }
+  BLI_assert(action.layers().size() == 1);
+
+  assert_baklava_phase_1_invariants(*action.layer(0));
+}
+
+void assert_baklava_phase_1_invariants(const Layer &layer)
+{
+  if (layer.strips().is_empty()) {
+    return;
+  }
+  BLI_assert(layer.strips().size() == 1);
+
+  assert_baklava_phase_1_invariants(*layer.strip(0));
+}
+
+void assert_baklava_phase_1_invariants(const Strip &strip)
+{
+  UNUSED_VARS_NDEBUG(strip);
+  BLI_assert(strip.type() == Strip::Type::Keyframe);
+  BLI_assert(strip.is_infinite());
+  BLI_assert(strip.frame_offset == 0.0);
+}
+
+Action *convert_to_layered_action(Main &bmain, const Action &legacy_action)
+{
+  if (!legacy_action.is_action_legacy()) {
+    return nullptr;
+  }
+
+  std::string suffix = "_layered";
+  /* In case the legacy action has a long name it is shortened to make space for the suffix. */
+  char legacy_name[MAX_ID_NAME - 10];
+  /* Offsetting the id.name to remove the ID prefix (AC) which gets added back later. */
+  STRNCPY_UTF8(legacy_name, legacy_action.id.name + 2);
+
+  const std::string layered_action_name = std::string(legacy_name) + suffix;
+  bAction *dna_action = BKE_action_add(&bmain, layered_action_name.c_str());
+
+  Action &converted_action = dna_action->wrap();
+  Slot &slot = converted_action.slot_add();
+  Layer &layer = converted_action.layer_add(legacy_action.id.name);
+  KeyframeStrip &strip = layer.strip_add<KeyframeStrip>();
+  BLI_assert(strip.channelbag_array_num == 0);
+  ChannelBag *bag = &strip.channelbag_for_slot_add(slot);
+
+  const int fcu_count = BLI_listbase_count(&legacy_action.curves);
+  bag->fcurve_array = MEM_cnew_array<FCurve *>(fcu_count, "Convert to layered action");
+  bag->fcurve_array_num = fcu_count;
+
+  int i = 0;
+  LISTBASE_FOREACH_INDEX (FCurve *, fcu, &legacy_action.curves, i) {
+    bag->fcurve_array[i] = BKE_fcurve_copy(fcu);
+  }
+
+  return &converted_action;
+}
+
 }  // namespace blender::animrig

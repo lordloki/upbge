@@ -51,6 +51,8 @@
 
 #include "action_intern.hh"
 
+using namespace blender;
+
 /* -------------------------------------------------------------------- */
 /** \name Keyframes Stuff
  * \{ */
@@ -115,6 +117,14 @@ static void actkeys_list_element_to_keylist(bAnimContext *ac,
       case ALE_ACTION_LAYERED: {
         bAction *action = (bAction *)ale->key_data;
         action_to_keylist(adt, action, keylist, 0, range);
+        break;
+      }
+      case ALE_ACTION_SLOT: {
+        animrig::Action *action = static_cast<animrig::Action *>(ale->key_data);
+        animrig::Slot *slot = static_cast<animrig::Slot *>(ale->data);
+        BLI_assert(action);
+        BLI_assert(slot);
+        action_slot_to_keylist(adt, *action, slot->handle, keylist, 0, range);
         break;
       }
       case ALE_ACT: {
@@ -1190,7 +1200,7 @@ static void columnselect_action_keys(bAnimContext *ac, short mode)
       break;
 
     case ACTKEYS_COLUMNSEL_MARKERS_COLUMN: /* list of selected markers */
-      ED_markers_make_cfra_list(ac->markers, &ked.list, SELECT);
+      ED_markers_make_cfra_list(ac->markers, &ked.list, true);
       break;
 
     default: /* invalid option */
@@ -1985,6 +1995,14 @@ static int mouse_action_keys(bAnimContext *ac,
             bGPDlayer *gpl = static_cast<bGPDlayer *>(ale->data);
 
             ED_gpencil_set_active_channel(gpd, gpl);
+          }
+          else if (ale->type == ANIMTYPE_ACTION_SLOT) {
+            BLI_assert_msg(GS(ale->fcurve_owner_id->name) == ID_AC,
+                           "fcurve_owner_id of an Action Slot should be an Action");
+            animrig::Action *action = reinterpret_cast<animrig::Action *>(ale->fcurve_owner_id);
+            animrig::Slot *slot = static_cast<animrig::Slot *>(ale->data);
+            slot->set_selected(true);
+            action->slot_active_set(slot->handle);
           }
         }
       }

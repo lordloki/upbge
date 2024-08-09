@@ -738,7 +738,7 @@ static void curvemap_make_table(const CurveMapping *cumap, CurveMap *cuma)
   /* Process middle elements */
   for (int a = 0; a < bezt_totpoint; a++) {
     bezt_next = (a != bezt_totpoint - 1) ? &bezt[a + 1] : bezt_post_ptr;
-    calchandle_curvemap(&bezt[a], (bezt_prev) ? bezt_prev : &bezt[0], bezt_next);
+    calchandle_curvemap(&bezt[a], bezt_prev, bezt_next);
     bezt_prev = &bezt[a];
   }
 
@@ -1954,6 +1954,8 @@ void BKE_color_managed_view_settings_copy(ColorManagedViewSettings *new_settings
   new_settings->flag = settings->flag;
   new_settings->exposure = settings->exposure;
   new_settings->gamma = settings->gamma;
+  new_settings->temperature = settings->temperature;
+  new_settings->tint = settings->tint;
 
   if (settings->curve_mapping) {
     new_settings->curve_mapping = BKE_curvemapping_copy(settings->curve_mapping);

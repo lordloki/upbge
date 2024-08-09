@@ -179,6 +179,14 @@ enum eTSnap {
 };
 ENUM_OPERATORS(eTSnap, SNAP_MULTI_POINTS)
 
+/** #TransSnap.direction */
+enum eSnapDir {
+  DIR_GLOBAL_X = (1 << 0),
+  DIR_GLOBAL_Y = (1 << 1),
+  DIR_GLOBAL_Z = (1 << 2),
+};
+ENUM_OPERATORS(eSnapDir, DIR_GLOBAL_Z)
+
 /** #TransCon.mode, #TransInfo.con.mode */
 enum eTConstraint {
   /** When set constraints are in use. */
@@ -311,6 +319,8 @@ struct TransSnap {
   /* Snapped Element Type (currently for objects only). */
   eSnapMode source_type;
   eSnapMode target_type;
+  /* For independent snapping in different directions (currently used only by VSE preview). */
+  eSnapDir direction;
   /** Snapping from this point (in global-space). */
   float snap_source[3];
   /** To this point (in global-space). */
@@ -754,7 +764,7 @@ void transform_input_update(TransInfo *t, const float fac);
 void transform_input_virtual_mval_reset(TransInfo *t);
 void transform_input_reset(TransInfo *t, const blender::float2 &mval);
 
-void setCustomPoints(TransInfo *t, MouseInput *mi, const int start[2], const int end[2]);
+void setCustomPoints(TransInfo *t, MouseInput *mi, const int mval_start[2], const int mval_end[2]);
 void setCustomPointsFromDirection(TransInfo *t, MouseInput *mi, const blender::float2 &dir);
 void setInputPostFct(MouseInput *mi, void (*post)(TransInfo *t, float values[3]));
 

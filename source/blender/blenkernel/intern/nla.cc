@@ -43,7 +43,7 @@
 #include "BLO_read_write.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "nla_private.h"
 
@@ -587,9 +587,6 @@ void BKE_nla_strip_foreach_id(NlaStrip *strip, LibraryForeachIDData *data)
   LISTBASE_FOREACH (FCurve *, fcu, &strip->fcurves) {
     BKE_LIB_FOREACHID_PROCESS_FUNCTION_CALL(data, BKE_fcurve_foreach_id(fcu, data));
   }
-
-  BKE_LIB_FOREACHID_PROCESS_FUNCTION_CALL(data,
-                                          BKE_fmodifiers_foreach_id(&strip->modifiers, data));
 
   LISTBASE_FOREACH (NlaStrip *, substrip, &strip->strips) {
     BKE_LIB_FOREACHID_PROCESS_FUNCTION_CALL(data, BKE_nla_strip_foreach_id(substrip, data));
@@ -1845,16 +1842,16 @@ void BKE_nlastrip_validate_name(AnimData *adt, NlaStrip *strip)
   if (strip->name[0] == 0) {
     switch (strip->type) {
       case NLASTRIP_TYPE_CLIP: /* act-clip */
-        STRNCPY(strip->name, (strip->act) ? (strip->act->id.name + 2) : ("<No Action>"));
+        STRNCPY(strip->name, (strip->act) ? (strip->act->id.name + 2) : DATA_("<No Action>"));
         break;
       case NLASTRIP_TYPE_TRANSITION: /* transition */
-        STRNCPY(strip->name, "Transition");
+        STRNCPY(strip->name, DATA_("Transition"));
         break;
       case NLASTRIP_TYPE_META: /* meta */
-        STRNCPY(strip->name, "Meta");
+        STRNCPY(strip->name, DATA_("Meta"));
         break;
       default:
-        STRNCPY(strip->name, "NLA Strip");
+        STRNCPY(strip->name, DATA_("NLA Strip"));
         break;
     }
   }

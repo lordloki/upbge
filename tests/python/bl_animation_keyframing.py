@@ -178,6 +178,19 @@ class InsertKeyTest(AbstractKeyframingTest, unittest.TestCase):
         _fcurve_paths_match(keyed_object.animation_data.action.fcurves, keyed_rna_paths)
         bpy.data.objects.remove(keyed_object, do_unlink=True)
 
+    def test_key_selection_state(self):
+        keyed_object = _create_animation_object()
+        bpy.context.preferences.edit.key_insert_channels = {"LOCATION"}
+        with bpy.context.temp_override(**_get_view3d_context()):
+            bpy.ops.anim.keyframe_insert()
+            bpy.context.scene.frame_set(5)
+            bpy.ops.anim.keyframe_insert()
+
+        for fcurve in keyed_object.animation_data.action.fcurves:
+            self.assertEqual(len(fcurve.keyframe_points), 2)
+            self.assertFalse(fcurve.keyframe_points[0].select_control_point)
+            self.assertTrue(fcurve.keyframe_points[1].select_control_point)
+
 
 class VisualKeyingTest(AbstractKeyframingTest, unittest.TestCase):
     """ Check if visual keying produces the correct keyframe values. """
@@ -367,6 +380,20 @@ class AutoKeyframingTest(AbstractKeyframingTest, unittest.TestCase):
         bone_path = f"pose.bones[\"{_BONE_NAME}\"]"
         expected_paths = [f"{bone_path}.location", f"{bone_path}.rotation_euler", f"{bone_path}.scale"]
         _fcurve_paths_match(action.fcurves, expected_paths)
+
+    def test_key_selection_state(self):
+        armature_obj = _create_armature()
+        bpy.ops.object.mode_set(mode='POSE')
+        bpy.ops.transform.translate(value=(1, 0, 0))
+        bpy.context.scene.frame_set(5)
+        bpy.ops.transform.translate(value=(0, 1, 0))
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        action = armature_obj.animation_data.action
+        for fcurve in action.fcurves:
+            self.assertEqual(len(fcurve.keyframe_points), 2)
+            self.assertFalse(fcurve.keyframe_points[0].select_control_point)
+            self.assertTrue(fcurve.keyframe_points[1].select_control_point)
 
 
 class InsertAvailableTest(AbstractKeyframingTest, unittest.TestCase):
@@ -659,6 +686,42 @@ class NlaInsertTest(AbstractKeyframingTest, unittest.TestCase):
         self.assertAlmostEqual(nla_anim_object.location.x, 2.0, 8)
         fcurve_loc_x = base_action.fcurves.find("location", index=0)
         self.assertAlmostEqual(fcurve_loc_x.keyframe_points[-1].co[1], 1.0, 8)
+
+
+class KeyframeDeleteTest(AbstractKeyframingTest, unittest.TestCase):
+
+    def test_delete_in_v3d_pose_mode(self):
+        armature = _create_armature()
+        bpy.context.scene.frame_set(1)
+        with bpy.context.temp_override(**_get_view3d_context()):
+            bpy.ops.anim.keyframe_insert_by_name(type="Location")
+        self.assertTrue(armature.animation_data is not None)
+        self.assertTrue(armature.animation_data.action is not None)
+        action = armature.animation_data.action
+        self.assertEqual(len(action.fcurves), 3)
+
+        bpy.ops.object.mode_set(mode='POSE')
+        with bpy.context.temp_override(**_get_view3d_context()):
+            bpy.ops.anim.keyframe_insert_by_name(type="Location")
+            bpy.context.scene.frame_set(5)
+            bpy.ops.anim.keyframe_insert_by_name(type="Location")
+            # This should have added new FCurves for the pose bone.
+            self.assertEqual(len(action.fcurves), 6)
+
+            bpy.ops.anim.keyframe_delete_v3d()
+            # No Fcurves should yet be deleted.
+            self.assertEqual(len(action.fcurves), 6)
+            self.assertEqual(len(action.fcurves[0].keyframe_points), 1)
+            bpy.context.scene.frame_set(1)
+            bpy.ops.anim.keyframe_delete_v3d()
+            # This should leave the object level keyframes of the armature
+            self.assertEqual(len(action.fcurves), 3)
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        with bpy.context.temp_override(**_get_view3d_context()):
+            bpy.ops.anim.keyframe_delete_v3d()
+        # The last FCurves should be deleted from the object now.
+        self.assertEqual(len(action.fcurves), 0)
 
 
 def main():

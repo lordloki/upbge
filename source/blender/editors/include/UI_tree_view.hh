@@ -93,6 +93,7 @@ class TreeViewItemContainer {
 
  protected:
   void foreach_item_recursive(ItemIterFn iter_fn, IterOptions options = IterOptions::None) const;
+  void foreach_parent(ItemIterFn iter_fn) const;
 };
 
 ENUM_OPERATORS(TreeViewItemContainer::IterOptions,
@@ -187,6 +188,8 @@ class AbstractTreeViewItem : public AbstractViewItem, public TreeViewItemContain
 
   virtual void build_row(uiLayout &row) = 0;
 
+  /* virtual */ std::optional<std::string> debug_name() const override;
+
   std::unique_ptr<DropTargetInterface> create_item_drop_target() final;
   virtual std::unique_ptr<TreeViewItemDropTarget> create_drop_target();
 
@@ -227,6 +230,8 @@ class AbstractTreeViewItem : public AbstractViewItem, public TreeViewItemContain
    */
   bool is_collapsed() const;
   bool is_collapsible() const;
+
+  int count_parents() const;
 
   /**
    * Called when the view changes an item's state from expanded to collapsed, or vice versa. Will
@@ -304,7 +309,6 @@ class AbstractTreeViewItem : public AbstractViewItem, public TreeViewItemContain
   void add_rename_button(uiLayout &row);
 
   bool has_active_child() const;
-  int count_parents() const;
 };
 
 /** \} */
@@ -390,7 +394,10 @@ class TreeViewItemDropTarget : public DropTargetInterface {
 
 class TreeViewBuilder {
  public:
-  static void build_tree_view(AbstractTreeView &tree_view, uiLayout &layout);
+  static void build_tree_view(AbstractTreeView &tree_view,
+                              uiLayout &layout,
+                              std::optional<StringRef> search_string = {},
+                              bool add_box = true);
 
  private:
   static void ensure_min_rows_items(AbstractTreeView &tree_view);

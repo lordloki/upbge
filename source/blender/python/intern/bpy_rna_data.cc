@@ -26,7 +26,7 @@
 #include "BKE_main.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "bpy_rna.h"
 #include "bpy_rna_data.h"
@@ -37,7 +37,7 @@ struct BPy_DataContext {
   char filepath[1024];
 };
 
-static PyObject *bpy_rna_data_temp_data(PyObject *self, PyObject *args, PyObject *kwds);
+static PyObject *bpy_rna_data_temp_data(PyObject *self, PyObject *args, PyObject *kw);
 static PyObject *bpy_rna_data_context_enter(BPy_DataContext *self);
 static PyObject *bpy_rna_data_context_exit(BPy_DataContext *self, PyObject *args);
 

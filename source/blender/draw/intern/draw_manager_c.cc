@@ -665,6 +665,11 @@ DefaultTextureList *DRW_viewport_texture_list_get()
   return DRW_view_data_default_texture_list_get(DST.view_data_active);
 }
 
+blender::draw::TextureFromPool &DRW_viewport_pass_texture_get(const char *pass_name)
+{
+  return DRW_view_data_pass_texture_get(DST.view_data_active, pass_name);
+}
+
 void DRW_viewport_request_redraw()
 {
   if (DST.viewport) {
@@ -1235,8 +1240,12 @@ static void drw_engines_enable_editors()
   }
 }
 
-static bool is_compositor_enabled()
+bool DRW_is_viewport_compositor_enabled()
 {
+  if (!DST.draw_ctx.v3d) {
+    return false;
+  }
+
   if (DST.draw_ctx.v3d->shading.use_compositor == V3D_SHADING_USE_COMPOSITOR_DISABLED) {
     return false;
   }
@@ -1250,6 +1259,10 @@ static bool is_compositor_enabled()
   }
 
   if (!DST.draw_ctx.scene->nodetree) {
+    return false;
+  }
+
+  if (!DST.draw_ctx.rv3d) {
     return false;
   }
 
@@ -1275,7 +1288,7 @@ static void drw_engines_enable(ViewLayer * /*view_layer*/,
     use_drw_engine(&draw_engine_gpencil_type);
   }
 
-  if (is_compositor_enabled()) {
+  if (DRW_is_viewport_compositor_enabled()) {
     use_drw_engine(&draw_engine_compositor_type);
   }
 
@@ -3721,21 +3734,15 @@ void DRW_game_render_loop(bContext *C,
   drw_manager_init(&DST, viewport, NULL);
 
   bool gpencil_engine_needed = drw_gpencil_engine_needed(depsgraph, v3d);
-  bool is_vulkan_backend = GPU_backend_get_type() == GPU_BACKEND_VULKAN;
 
-  if (!is_vulkan_backend) {
-    use_drw_engine(&draw_engine_eevee_next_type);
+  use_drw_engine(&draw_engine_eevee_next_type);
 
-    if (gpencil_engine_needed) {
-      use_drw_engine(&draw_engine_gpencil_type);
-    }
-    /* Add realtime compositor for test in custom bge loop (not tested) */
-    if (is_compositor_enabled()) {
-      use_drw_engine(&draw_engine_compositor_type);
-    }
+  if (gpencil_engine_needed) {
+    use_drw_engine(&draw_engine_gpencil_type);
   }
-  else {
-    use_drw_engine(DRW_engine_viewport_workbench_type.draw_engine);
+  /* Add realtime compositor for test in custom bge loop (not tested) */
+  if (DRW_is_viewport_compositor_enabled()) {
+    use_drw_engine(&draw_engine_compositor_type);
   }
 
   const int object_type_exclude_viewport = v3d->object_type_exclude_viewport;

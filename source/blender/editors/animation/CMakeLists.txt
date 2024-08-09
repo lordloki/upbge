@@ -11,7 +11,7 @@ set(INC
   ../../sequencer
   ../../windowmanager
   ../../../../extern/fmtlib/include
-  # RNA_prototypes.h
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -61,11 +61,12 @@ endif()
 
 blender_add_lib(bf_editor_animation "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_editor_animation bf_rna)
 
 if(WITH_GTESTS)
   set(TEST_SRC
+    anim_filter_test.cc
     keyframes_keylist_test.cc
   )
   set(TEST_INC

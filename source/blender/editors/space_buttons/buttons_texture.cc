@@ -30,7 +30,6 @@
 #include "DNA_windowmanager_types.h"
 
 #include "BKE_context.hh"
-#include "BKE_gpencil_modifier_legacy.h"
 #include "BKE_layer.hh"
 #include "BKE_linestyle.h"
 #include "BKE_modifier.hh"
@@ -39,7 +38,7 @@
 #include "BKE_particle.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
 #include "UI_resources.hh"
@@ -111,6 +110,8 @@ static void buttons_texture_user_node_add(ListBase *users,
                                           ID *id,
                                           bNodeTree *ntree,
                                           bNode *node,
+                                          PointerRNA ptr,
+                                          PropertyRNA *prop,
                                           const char *category,
                                           int icon,
                                           const char *name)
@@ -120,6 +121,8 @@ static void buttons_texture_user_node_add(ListBase *users,
   user->id = id;
   user->ntree = ntree;
   user->node = node;
+  user->ptr = ptr;
+  user->prop = prop;
   user->category = category;
   user->icon = icon;
   user->name = name;
@@ -135,13 +138,23 @@ static void buttons_texture_users_find_nodetree(ListBase *users,
 {
   if (ntree) {
     LISTBASE_FOREACH (bNode *, node, &ntree->nodes) {
-      if (node->typeinfo->nclass == NODE_CLASS_TEXTURE) {
+      if (node->type == CMP_NODE_TEXTURE) {
         PointerRNA ptr = RNA_pointer_create(&ntree->id, &RNA_Node, node);
-        // PropertyRNA *prop; /* UNUSED */
-        // prop = RNA_struct_find_property(&ptr, "texture"); /* UNUSED */
-
+        PropertyRNA *prop = RNA_struct_find_property(&ptr, "texture");
         buttons_texture_user_node_add(
-            users, id, ntree, node, category, RNA_struct_ui_icon(ptr.type), node->name);
+            users, id, ntree, node, ptr, prop, category, RNA_struct_ui_icon(ptr.type), node->name);
+      }
+      else if (node->typeinfo->nclass == NODE_CLASS_TEXTURE) {
+        PointerRNA ptr = RNA_pointer_create(&ntree->id, &RNA_Node, node);
+        buttons_texture_user_node_add(users,
+                                      id,
+                                      ntree,
+                                      node,
+                                      {nullptr},
+                                      nullptr,
+                                      category,
+                                      RNA_struct_ui_icon(ptr.type),
+                                      node->name);
       }
       else if (node->type == NODE_GROUP && node->id) {
         buttons_texture_users_find_nodetree(users, id, (bNodeTree *)node->id, category);
@@ -220,26 +233,6 @@ static void buttons_texture_modifier_foreach(void *user_data,
   }
 }
 
-static void buttons_texture_modifier_gpencil_foreach(void *user_data,
-                                                     Object *ob,
-                                                     GpencilModifierData *md,
-                                                     const char *propname)
-{
-  PropertyRNA *prop;
-  ListBase *users = static_cast<ListBase *>(user_data);
-
-  PointerRNA ptr = RNA_pointer_create(&ob->id, &RNA_GpencilModifier, md);
-  prop = RNA_struct_find_property(&ptr, propname);
-
-  buttons_texture_user_property_add(users,
-                                    &ob->id,
-                                    ptr,
-                                    prop,
-                                    N_("Grease Pencil Modifiers"),
-                                    RNA_struct_ui_icon(ptr.type),
-                                    md->name);
-}
-
 static void buttons_texture_users_from_context(ListBase *users,
                                                const bContext *C,
                                                SpaceProperties *sbuts)
@@ -286,6 +279,10 @@ static void buttons_texture_users_from_context(ListBase *users,
   /* fill users */
   BLI_listbase_clear(users);
 
+  if (scene && scene->nodetree) {
+    buttons_texture_users_find_nodetree(users, &scene->id, scene->nodetree, N_("Compositor"));
+  }
+
   if (linestyle && !limited_mode) {
     buttons_texture_users_find_nodetree(
         users, &linestyle->id, linestyle->nodetree, N_("Line Style"));
@@ -298,9 +295,6 @@ static void buttons_texture_users_from_context(ListBase *users,
 
     /* modifiers */
     BKE_modifiers_foreach_tex_link(ob, buttons_texture_modifier_foreach, users);
-
-    /* grease pencil modifiers */
-    BKE_gpencil_modifiers_foreach_tex_link(ob, buttons_texture_modifier_gpencil_foreach, users);
 
     /* particle systems */
     if (psys && !limited_mode) {

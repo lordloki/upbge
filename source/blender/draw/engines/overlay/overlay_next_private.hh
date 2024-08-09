@@ -73,16 +73,46 @@ class ShapeCache {
 
  public:
   BatchPtr quad_wire;
+  BatchPtr quad_solid;
   BatchPtr plain_axes;
   BatchPtr single_arrow;
   BatchPtr cube;
   BatchPtr circle;
   BatchPtr empty_sphere;
   BatchPtr empty_cone;
+  BatchPtr cylinder;
+  BatchPtr capsule_body;
+  BatchPtr capsule_cap;
   BatchPtr arrows;
   BatchPtr metaball_wire_circle;
 
   BatchPtr speaker;
+
+  BatchPtr camera_distances;
+  BatchPtr camera_frame;
+  BatchPtr camera_tria_wire;
+  BatchPtr camera_tria;
+
+  BatchPtr camera_volume;
+  BatchPtr camera_volume_wire;
+
+  BatchPtr sphere_low_detail;
+
+  BatchPtr ground_line;
+
+  BatchPtr light_icon_outer_lines;
+  BatchPtr light_icon_inner_lines;
+  BatchPtr light_icon_sun_rays;
+  BatchPtr light_point_lines;
+  BatchPtr light_sun_lines;
+  BatchPtr light_spot_lines;
+  BatchPtr light_area_disk_lines;
+  BatchPtr light_area_square_lines;
+  BatchPtr light_spot_volume;
+
+  BatchPtr lightprobe_cube;
+  BatchPtr lightprobe_planar;
+  BatchPtr lightprobe_grid;
 
   ShapeCache();
 };
@@ -113,11 +143,18 @@ class ShaderModule {
   ShaderPtr grid = shader("overlay_grid");
   ShaderPtr background_fill = shader("overlay_background");
   ShaderPtr background_clip_bound = shader("overlay_clipbound");
+  ShaderPtr anti_aliasing = shader("overlay_antialiasing");
 
   /** Selectable Shaders */
   ShaderPtr armature_sphere_outline;
   ShaderPtr depth_mesh;
+  ShaderPtr extra_grid;
   ShaderPtr extra_shape;
+  ShaderPtr extra_wire_object;
+  ShaderPtr extra_wire;
+  ShaderPtr extra_ground_line;
+  ShaderPtr lattice_points;
+  ShaderPtr lattice_wire;
 
   ShaderModule(const SelectionType selection_type, const bool clipping_enabled);
 
@@ -144,8 +181,15 @@ struct Resources : public select::SelectMap {
   Framebuffer overlay_color_only_fb = {"overlay_color_only_fb"};
   Framebuffer overlay_line_fb = {"overlay_line_fb"};
   Framebuffer overlay_line_in_front_fb = {"overlay_line_in_front_fb"};
+  Framebuffer overlay_output_fb = {"overlay_output_fb"};
 
+  /* Target containing line direction and data for line expansion and anti-aliasing. */
   TextureFromPool line_tx = {"line_tx"};
+  /* Target containing overlay color before anti-aliasing. */
+  TextureFromPool overlay_tx = {"overlay_tx"};
+
+  /* Texture that are usually allocated inside. These are fallback when they aren't.
+   * They are then wrapped inside the #TextureRefs below. */
   TextureFromPool depth_in_front_alloc_tx = {"overlay_depth_in_front_tx"};
   TextureFromPool color_overlay_alloc_tx = {"overlay_color_overlay_alloc_tx"};
   TextureFromPool color_render_alloc_tx = {"overlay_color_render_alloc_tx"};
@@ -155,6 +199,8 @@ struct Resources : public select::SelectMap {
   GlobalsUboStorage theme_settings;
   /* References, not owned. */
   GPUUniformBuf *globals_buf;
+  TextureRef weight_ramp_tx;
+  /* Wrappers around #DefaultTextureList members. */
   TextureRef depth_tx;
   TextureRef depth_in_front_tx;
   TextureRef color_overlay_tx;
@@ -258,7 +304,7 @@ template<typename InstanceDataT> struct ShapeInstanceBuf : private select::Selec
     data_buf.append(data);
   }
 
-  void end_sync(PassSimple &pass, gpu::Batch *shape)
+  void end_sync(PassSimple::Sub &pass, gpu::Batch *shape)
   {
     if (data_buf.is_empty()) {
       return;
@@ -267,6 +313,49 @@ template<typename InstanceDataT> struct ShapeInstanceBuf : private select::Selec
     data_buf.push_update();
     pass.bind_ssbo("data_buf", &data_buf);
     pass.draw(shape, data_buf.size());
+  }
+};
+
+struct LineInstanceBuf : private select::SelectBuf {
+
+  StorageVectorBuffer<PointData> data_buf;
+  int color_id = 0;
+
+  LineInstanceBuf(const SelectionType selection_type, const char *name = nullptr)
+      : select::SelectBuf(selection_type), data_buf(name){};
+
+  void clear()
+  {
+    this->select_clear();
+    data_buf.clear();
+    color_id = 0;
+  }
+
+  void append(const float3 &start, const float3 &end, const float4 &color, select::ID select_id)
+  {
+    this->select_append(select_id);
+    data_buf.append({float4{start}, color});
+    data_buf.append({float4{end}, color});
+  }
+
+  void append(const float3 &start, const float3 &end, const int color_id, select::ID select_id)
+  {
+    this->color_id = color_id;
+    this->select_append(select_id);
+    data_buf.append({float4{start}, float4{}});
+    data_buf.append({float4{end}, float4{}});
+  }
+
+  void end_sync(PassSimple::Sub &pass)
+  {
+    if (data_buf.is_empty()) {
+      return;
+    }
+    this->select_bind(pass);
+    data_buf.push_update();
+    pass.bind_ssbo("data_buf", &data_buf);
+    pass.push_constant("colorid", color_id);
+    pass.draw_procedural(GPU_PRIM_LINES, 1, data_buf.size());
   }
 };
 

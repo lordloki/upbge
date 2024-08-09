@@ -51,6 +51,10 @@
 
 #include "CLG_log.h"
 
+#ifdef WITH_ANIM_BAKLAVA
+#  include "ANIM_action.hh"
+#endif  // WITH_ANIM_BAKLAVA
+
 static CLG_LogRef LOG = {"bke.anim_sys"};
 
 /* ***************************************** */
@@ -184,6 +188,8 @@ bool BKE_animdata_set_tmpact(ReportList *reports, ID *id, bAction *act)
 /* Action Setter --------------------------------------- */
 bool BKE_animdata_set_action(ReportList *reports, ID *id, bAction *act)
 {
+  using namespace blender;
+
   AnimData *adt = BKE_animdata_from_id(id);
 
   if (adt == nullptr) {
@@ -197,7 +203,16 @@ bool BKE_animdata_set_action(ReportList *reports, ID *id, bAction *act)
     return false;
   }
 
+#ifdef WITH_ANIM_BAKLAVA
+  if (!act) {
+    animrig::unassign_action(*id);
+    return true;
+  }
+  animrig::Action &action = act->wrap();
+  return animrig::assign_action(action, *id);
+#else
   return animdata_set_action(reports, id, &adt->action, act);
+#endif  // WITH_ANIM_BAKLAVA
 }
 
 bool BKE_animdata_action_editable(const AnimData *adt)
@@ -243,11 +258,22 @@ void BKE_animdata_free(ID *id, const bool do_id_user)
   if (do_id_user) {
     /* unlink action (don't free, as it's in its own list) */
     if (adt->action) {
+#ifdef WITH_ANIM_BAKLAVA
+      blender::animrig::unassign_action(*id);
+#else
       id_us_min(&adt->action->id);
+#endif
     }
     /* same goes for the temporarily displaced action */
     if (adt->tmpact) {
+#ifdef WITH_ANIM_BAKLAVA
+      /* TODO: Linked Actions do not support usage in the NLA yet, so work around this and cleanly
+       * unassign the Action by moving it back to `adt->action`.  */
+      adt->action = adt->tmpact;
+      blender::animrig::unassign_action(*id);
+#else
       id_us_min(&adt->tmpact->id);
+#endif
     }
   }
 
@@ -281,7 +307,7 @@ bool BKE_animdata_id_is_animated(const ID *id)
 
   if (adt->action) {
     const blender::animrig::Action &action = adt->action->wrap();
-    if (action.is_action_layered() && action.is_binding_animated(adt->binding_handle)) {
+    if (action.is_action_layered() && action.is_slot_animated(adt->slot_handle)) {
       return true;
     }
     if (action.is_action_legacy() && !BLI_listbase_is_empty(&action.curves)) {
@@ -373,6 +399,22 @@ AnimData *BKE_animdata_copy_in_lib(Main *bmain,
 
   /* don't copy overrides */
   BLI_listbase_clear(&dadt->overrides);
+
+  const bool is_main = (flag & LIB_ID_CREATE_NO_MAIN) == 0;
+  if (is_main) {
+    /* Action references were changed, so the Slot-to-user map is incomplete now. Only necessary
+     * when this happens in the main database though, as the user cache only tracks original IDs,
+     * not evaluated copies.
+     *
+     * This function does not have access to the animated ID, so it cannot just add that ID to the
+     * slot's users, hence the invalidation of the users map.
+     *
+     * TODO: refactor to pass the owner ID to this function, and just add it to the Slot's
+     * users. */
+    if (bmain) {
+      blender::animrig::Slot::users_invalidate(*bmain);
+    }
+  }
 
   /* return */
   return dadt;
@@ -747,14 +789,22 @@ static char *rna_path_rename_fix(ID *owner_id,
                                  bool verify_paths)
 {
   char *prefixPtr = strstr(oldpath, prefix);
+  if (prefixPtr == nullptr) {
+    return oldpath;
+  }
+
   char *oldNamePtr = strstr(oldpath, oldName);
+  if (oldNamePtr == nullptr) {
+    return oldpath;
+  }
+
   int prefixLen = strlen(prefix);
   int oldNameLen = strlen(oldName);
 
   /* only start fixing the path if the prefix and oldName feature in the path,
    * and prefix occurs immediately before oldName
    */
-  if ((prefixPtr && oldNamePtr) && (prefixPtr + prefixLen == oldNamePtr)) {
+  if (prefixPtr + prefixLen == oldNamePtr) {
     /* if we haven't aren't able to resolve the path now, try again after fixing it */
     if (!verify_paths || check_rna_path_is_valid(owner_id, oldpath) == 0) {
       DynStr *ds = BLI_dynstr_new();

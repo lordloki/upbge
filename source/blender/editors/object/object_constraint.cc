@@ -54,7 +54,7 @@
 #include "RNA_define.hh"
 #include "RNA_enum_types.hh"
 #include "RNA_path.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "ED_object.hh"
 #include "ED_screen.hh"
@@ -255,21 +255,21 @@ static void set_constraint_nth_target(bConstraint *con,
 {
   ListBase targets = {nullptr, nullptr};
   bConstraintTarget *ct;
-  int num_targets, i;
+  int targets_num, i;
 
   if (BKE_constraint_targets_get(con, &targets)) {
-    num_targets = BLI_listbase_count(&targets);
+    targets_num = BLI_listbase_count(&targets);
 
     if (index < 0) {
-      if (abs(index) < num_targets) {
-        index = num_targets - abs(index);
+      if (abs(index) < targets_num) {
+        index = targets_num - abs(index);
       }
       else {
-        index = num_targets - 1;
+        index = targets_num - 1;
       }
     }
-    else if (index >= num_targets) {
-      index = num_targets - 1;
+    else if (index >= targets_num) {
+      index = targets_num - 1;
     }
 
     for (ct = static_cast<bConstraintTarget *>(targets.first), i = 0; ct; ct = ct->next, i++) {
@@ -1074,7 +1074,8 @@ static int followpath_path_animate_exec(bContext *C, wmOperator *op)
     {
       /* create F-Curve for path animation */
       act = animrig::id_action_ensure(bmain, &cu->id);
-      fcu = animrig::action_fcurve_ensure(bmain, act, nullptr, nullptr, "eval_time", 0);
+      PointerRNA id_ptr = RNA_id_pointer_create(&cu->id);
+      fcu = animrig::action_fcurve_ensure(bmain, act, nullptr, &id_ptr, {"eval_time", 0});
 
       /* standard vertical range - 1:1 = 100 frames */
       standardRange = 100.0f;
@@ -1094,10 +1095,12 @@ static int followpath_path_animate_exec(bContext *C, wmOperator *op)
     prop = RNA_struct_find_property(&ptr, "offset_factor");
 
     const std::optional<std::string> path = RNA_path_from_ID_to_property(&ptr, prop);
+    BLI_assert(path.has_value());
 
     /* create F-Curve for constraint */
     act = animrig::id_action_ensure(bmain, &ob->id);
-    fcu = animrig::action_fcurve_ensure(bmain, act, nullptr, nullptr, path->c_str(), 0);
+    PointerRNA id_ptr = RNA_id_pointer_create(&ob->id);
+    fcu = animrig::action_fcurve_ensure(bmain, act, nullptr, &id_ptr, {path->c_str(), 0});
 
     /* standard vertical range - 0.0 to 1.0 */
     standardRange = 1.0f;

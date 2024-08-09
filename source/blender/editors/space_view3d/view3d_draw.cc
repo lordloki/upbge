@@ -85,7 +85,7 @@ using blender::float4;
 
 #define M_GOLDEN_RATIO_CONJUGATE 0.618033988749895f
 
-#define VIEW3D_OVERLAY_LINEHEIGHT (UI_style_get()->widgetlabel.points * UI_SCALE_FAC * 1.6f)
+#define VIEW3D_OVERLAY_LINEHEIGHT (UI_style_get()->widget.points * UI_SCALE_FAC * 1.6f)
 
 /* -------------------------------------------------------------------- */
 /** \name General Functions
@@ -390,7 +390,7 @@ static void view3d_camera_border(const Scene *scene,
   /* get viewport viewplane */
   BKE_camera_params_init(&params);
   BKE_camera_params_from_view3d(&params, depsgraph, v3d, rv3d);
-  if (no_zoom || scene->flag & SCE_INTERACTIVE) { // UPBGE for compositing
+  if (no_zoom) {
     params.zoom = 1.0f;
   }
   BKE_camera_params_compute_viewplane(&params, region->winx, region->winy, 1.0f, 1.0f);
@@ -1496,7 +1496,7 @@ void view3d_draw_region_info(const bContext *C, ARegion *region)
     int xoffset = rect->xmin + (0.5f * U.widget_unit);
     int yoffset = rect->ymax - (0.1f * U.widget_unit);
 
-    const uiFontStyle *fstyle = UI_FSTYLE_WIDGET_LABEL;
+    const uiFontStyle *fstyle = UI_FSTYLE_WIDGET;
     UI_fontstyle_set(fstyle);
     BLF_default_size(fstyle->points);
     BLF_set_default();
@@ -1540,7 +1540,7 @@ void view3d_draw_region_info(const bContext *C, ARegion *region)
     }
 
     /* Set the size back to the default hard-coded size. Otherwise anyone drawing after this,
-     * without setting explicit size, will draw with widgetlabel size. That is probably ideal,
+     * without setting explicit size, will draw with widget size. That is probably ideal,
      * but size should be set at the calling site not just carried over from here. */
     BLF_default_size(UI_DEFAULT_TEXT_POINTS);
     BLF_disable(font_id, BLF_SHADOW);
@@ -1831,6 +1831,9 @@ void ED_view3d_draw_offscreen_simple(Depsgraph *depsgraph,
     }
     if (draw_flags & V3D_OFSDRAW_XR_SHOW_CUSTOM_OVERLAYS) {
       v3d.flag2 |= V3D_XR_SHOW_CUSTOM_OVERLAYS;
+    }
+    if (draw_flags & V3D_OFSDRAW_XR_SHOW_PASSTHROUGH) {
+      v3d.flag2 |= V3D_XR_SHOW_PASSTHROUGH;
     }
     /* Disable other overlays (set all available _HIDE_ flags). */
     v3d.overlay.flag |= V3D_OVERLAY_HIDE_CURSOR | V3D_OVERLAY_HIDE_TEXT |

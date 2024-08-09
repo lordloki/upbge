@@ -34,12 +34,42 @@ WM_EXTENSIONS_UPDATE_CHECKING = -1
 # Internal Utilities
 
 def sync_status_count_outdated_extensions(repos_notify):
-    from . import repo_stats_calc_outdated_for_repo_directory
+    from . import (
+        repo_cache_store_ensure,
+        repo_stats_calc_outdated_for_repo_directory,
+    )
+    from .bl_extension_ops import (
+        repo_cache_store_refresh_from_prefs,
+    )
+
+    repo_cache_store = repo_cache_store_ensure()
+
+    # NOTE: while this shouldn't happen frequently, preferences may have changed since the notification started.
+    # Some UI interactions can reliably cause this, for example - changing the URL which triggers a notification,
+    # then disabling immediately after for example. It can also happen when notifications are enabled on startup
+    # and the user disables a repository quickly after Blender opens.
+    # Whatever the cause, this should not raise an unhandled exception so check
+    # directories are still valid before calculating their outdated packages.
+    #
+    # This could be handled a few different ways, ignore the outcome entirely or calculate what's left.
+    # Opt for calculating what we can since ignoring the results entirely might mean updated aren't displayed
+    # in the status bar when they should be, accepting that a new notification might need to be calculated
+    # again for a correct result (repositories may have been enabled for example too).
+    repos = repo_cache_store_refresh_from_prefs(repo_cache_store)
+    repo_directories = {repo_directory for repo_directory, _repo_url in repos}
 
     package_count = 0
 
     for repo_item in repos_notify:
-        package_count += repo_stats_calc_outdated_for_repo_directory(repo_item.directory)
+        repo_directory = repo_item.directory
+
+        # Print as this is a corner case (if it happens often it's likely a bug).
+        if repo_directory not in repo_directories:
+            if bpy.app.debug:
+                print("Extension notify:", repo_directory, "no longer exists, skipping!")
+            continue
+
+        package_count += repo_stats_calc_outdated_for_repo_directory(repo_cache_store, repo_directory)
 
     return package_count
 
@@ -190,6 +220,7 @@ def sync_status_generator(repos_and_do_online):
             timeout=network_timeout,
             # Never sleep while there is no input, as this blocks Blender.
             use_idle=False,
+            python_args=bpy.app.python_args,
             # Needed so the user can exit blender without warnings about a broken pipe.
             # TODO: write to a temporary location, once done:
             # There is no chance of corrupt data as the data isn't written directly to the target JSON.
@@ -435,7 +466,7 @@ def _ui_refresh_apply():
     _region_refresh_registered()
 
 
-def _ui_refresh_timer():
+def _ui_refresh_timer_impl():
     wm = bpy.context.window_manager
 
     # Ensure the first item is running, skipping any items that have no work.
@@ -485,6 +516,24 @@ def _ui_refresh_timer():
         wm.extensions_updates = update_count
 
     return default_wait
+
+
+def _ui_refresh_timer():
+    result = _ui_refresh_timer_impl()
+
+    # Ensure blocked packages are counted before finishing.
+    if result is None:
+        from . import (
+            repo_cache_store_ensure,
+            repo_stats_calc_blocked,
+        )
+        wm = bpy.context.window_manager
+        repo_cache_store = repo_cache_store_ensure()
+        extensions_blocked = repo_stats_calc_blocked(repo_cache_store)
+        if extensions_blocked != wm.extensions_blocked:
+            wm.extensions_blocked = extensions_blocked
+
+    return result
 
 
 # -----------------------------------------------------------------------------

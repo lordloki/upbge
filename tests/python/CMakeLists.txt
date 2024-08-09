@@ -194,6 +194,11 @@ add_blender_test(
   --python ${CMAKE_CURRENT_LIST_DIR}/bl_pyapi_text.py
 )
 
+add_blender_test(
+  script_pyapi_grease_pencil
+  --python ${CMAKE_CURRENT_LIST_DIR}/bl_pyapi_grease_pencil.py
+)
+
 # ------------------------------------------------------------------------------
 # DATA MANAGEMENT TESTS
 
@@ -683,9 +688,9 @@ if(WITH_CYCLES OR WITH_GPU_RENDER_TESTS)
 
     # Cycles
     if(WITH_CYCLES)
-      set(_cycles_blacklist "")
+      set(_cycles_blocklist "")
       if(NOT WITH_CYCLES_OSL)
-        set(_cycles_blacklist OSL)
+        set(_cycles_blocklist OSL)
       endif()
       foreach(_cycles_device ${CYCLES_TEST_DEVICES})
         string(TOLOWER "${_cycles_device}" _cycles_device_lower)
@@ -699,7 +704,7 @@ if(WITH_CYCLES OR WITH_GPU_RENDER_TESTS)
             -testdir "${TEST_SRC_DIR}/render/${render_test}"
             -outdir "${TEST_OUT_DIR}/cycles"
             -device ${_cycles_device}
-            -blacklist ${_cycles_blacklist}
+            -blocklist ${_cycles_blocklist}
           )
 
           if(NOT ("${_cycles_device_lower}" STREQUAL "cpu"))
@@ -708,7 +713,7 @@ if(WITH_CYCLES OR WITH_GPU_RENDER_TESTS)
           unset(_cycles_test_name)
         endforeach()
       endforeach()
-      unset(_cycles_blacklist)
+      unset(_cycles_blocklist)
     endif()
 
     if(WITH_GPU_RENDER_TESTS)

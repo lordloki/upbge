@@ -211,15 +211,17 @@ bool attribute_set_poll(bContext &C, const ID &object_data)
 
 static bool geometry_attributes_poll(bContext *C)
 {
+  using namespace blender::bke;
   const Object *ob = object::context_object(C);
   const Main *bmain = CTX_data_main(C);
-  ID *data = (ob) ? static_cast<ID *>(ob->data) : nullptr;
-  AttributeOwner owner = AttributeOwner::from_id(data);
-  if (!owner.is_valid()) {
+  if (!ob || !BKE_id_is_editable(bmain, &ob->id)) {
     return false;
   }
-  return (ob && BKE_id_is_editable(bmain, &ob->id) && data && BKE_id_is_editable(bmain, data)) &&
-         BKE_attributes_supported(owner);
+  const ID *data = (ob) ? static_cast<const ID *>(ob->data) : nullptr;
+  if (!data || !BKE_id_is_editable(bmain, data)) {
+    return false;
+  }
+  return AttributeAccessor::from_id(*data).has_value();
 }
 
 static bool geometry_attributes_remove_poll(bContext *C)
@@ -252,7 +254,8 @@ static const EnumPropertyItem *geometry_attribute_domain_itemf(bContext *C,
     return rna_enum_dummy_NULL_items;
   }
 
-  return rna_enum_attribute_domain_itemf(static_cast<ID *>(ob->data), false, r_free);
+  const AttributeOwner owner = AttributeOwner::from_id(static_cast<ID *>(ob->data));
+  return rna_enum_attribute_domain_itemf(owner, false, r_free);
 }
 
 static int geometry_attribute_add_exec(bContext *C, wmOperator *op)
@@ -920,7 +923,8 @@ bool ED_geometry_attribute_convert(Mesh *mesh,
   const GVArray varray = *attributes.lookup_or_default(name_copy, dst_domain, dst_type);
 
   const CPPType &cpp_type = varray.type();
-  void *new_data = MEM_malloc_arrayN(varray.size(), cpp_type.size(), __func__);
+  void *new_data = MEM_mallocN_aligned(
+      varray.size() * cpp_type.size(), cpp_type.alignment(), __func__);
   varray.materialize_to_uninitialized(new_data);
   attributes.remove(name_copy);
   if (!attributes.add(name_copy, dst_domain, dst_type, bke::AttributeInitMoveArray(new_data))) {

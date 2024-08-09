@@ -30,7 +30,7 @@
 #include "UI_resources.hh"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_types.hh" /* For UI free bake operator. */
 
@@ -442,7 +442,7 @@ static Mesh *doOcean(ModifierData *md, const ModifierEvalContext *ctx, Mesh *mes
     }
   }
 
-  mesh->tag_positions_changed();
+  result->tag_positions_changed();
 
   if (allocated_ocean) {
     BKE_ocean_free(omd->ocean);

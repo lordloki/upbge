@@ -44,7 +44,7 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_path.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -188,6 +188,7 @@ static int node_group_edit_exec(bContext *C, wmOperator *op)
   }
 
   WM_event_add_notifier(C, NC_SCENE | ND_NODES, nullptr);
+  WM_event_add_notifier(C, NC_NODE | ND_NODE_GIZMO, nullptr);
 
   return OPERATOR_FINISHED;
 }

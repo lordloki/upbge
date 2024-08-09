@@ -186,13 +186,24 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
     else if (type == LIGHT_SPOT) {
       measure.bcone.theta_o = 0;
 
-      const float unscaled_theta_e = lamp->get_spot_angle() * 0.5f;
+      float theta_e = min(lamp->get_spot_angle() * 0.5f, M_PI_2_F);
       const float len_u = len(lamp->get_axisu());
       const float len_v = len(lamp->get_axisv());
       const float len_w = len(lamp->get_dir());
 
-      measure.bcone.theta_e = fast_atanf(fast_tanf(unscaled_theta_e) * fmaxf(len_u, len_v) /
-                                         len_w);
+      /* As `theta_e` approaches `pi/2`, the behavior of `atan(tan(theta_e))` can become quite
+       * unpredictable as `tan(x)` has an asymptote at `x = pi/2`. To avoid this, we skip the back
+       * and forward conversion.
+       * The conversion is required to deal with scaled lights, but near `pi/2` the scaling does
+       * not make a big difference in the angle, so we can skip the conversion without worrying
+       * about overestimation. */
+      if (fabsf(M_PI_2_F - theta_e) < 1e-6f) {
+        theta_e = M_PI_2_F;
+      }
+      else {
+        theta_e = fast_atanf(fast_tanf(theta_e) * fmaxf(len_u, len_v) / len_w);
+      }
+      measure.bcone.theta_e = theta_e;
 
       /* Point and spot lights can emit light from any point within its radius. */
       const float3 radius = make_float3(size);
@@ -427,7 +438,7 @@ LightTreeNode *LightTree::build(Scene *scene, DeviceScene *dscene)
   root_->light_link = root_->get_inner().children[left]->light_link +
                       root_->get_inner().children[right]->light_link;
 
-  /* Root nodes are never meant to be be shared, even if the local and distant lights are from the
+  /* Root nodes are never meant to be shared, even if the local and distant lights are from the
    * same light linking set. Attempting to sharing it will make it so the specialized tree will
    * try to use the same root as the default tree. */
   root_->light_link.shareable = false;

@@ -11,7 +11,6 @@
 #include "BKE_curves.hh"
 #include "BKE_gpencil_geom_legacy.h"
 #include "BKE_gpencil_legacy.h"
-#include "BKE_gpencil_modifier_legacy.h"
 #include "BKE_grease_pencil.h"
 #include "BKE_grease_pencil.hh"
 #include "BKE_lib_id.hh"
@@ -716,7 +715,7 @@ static GPENCIL_tObject *grease_pencil_object_cache_populate(GPENCIL_PrivateData 
     const Layer &layer = *layers[info.layer_index];
 
     const bke::CurvesGeometry &curves = info.drawing.strokes();
-    const OffsetIndices<int> points_by_curve = curves.points_by_curve();
+    const OffsetIndices<int> points_by_curve = curves.evaluated_points_by_curve();
     const bke::AttributeAccessor attributes = curves.attributes();
     const VArray<bool> cyclic = *attributes.lookup_or_default<bool>(
         "cyclic", bke::AttrDomain::Curve, false);
@@ -790,7 +789,10 @@ static GPENCIL_tObject *grease_pencil_object_cache_populate(GPENCIL_PrivateData 
 
     visible_strokes.foreach_index([&](const int stroke_i, const int pos) {
       const IndexRange points = points_by_curve[stroke_i];
-      const int material_index = stroke_materials[stroke_i];
+      /* The material index is allowed to be negative as it's stored as a generic attribute. We
+       * clamp it here to avoid crashing in the rendering code. Any stroke with a material < 0 will
+       * use the first material in the first material slot.*/
+      const int material_index = std::max(stroke_materials[stroke_i], 0);
       const MaterialGPencilStyle *gp_style = BKE_gpencil_material_settings(ob, material_index + 1);
 
       const bool hide_material = (gp_style->flag & GP_MATERIAL_HIDE) != 0;
@@ -903,17 +905,8 @@ void GPENCIL_cache_populate(void *ved, Object *ob)
     /* When render in background the active frame could not be properly set due thread priority,
      * better set again. This is not required in viewport. */
     if (txl->render_depth_tx) {
-      const bool time_remap = BKE_gpencil_has_time_modifiers(ob);
-      const DRWContextState *draw_ctx = DRW_context_state_get();
-
       LISTBASE_FOREACH (bGPDlayer *, gpl, &gpd->layers) {
-        /* If there is a time modifier, need remap the time before. */
-        if (time_remap) {
-          gpl->actframe = BKE_gpencil_frame_retime_get(draw_ctx->depsgraph, pd->scene, ob, gpl);
-        }
-        else {
-          gpl->actframe = BKE_gpencil_layer_frame_get(gpl, pd->cfra, GP_GETFRAME_USE_PREV);
-        }
+        gpl->actframe = BKE_gpencil_layer_frame_get(gpl, pd->cfra, GP_GETFRAME_USE_PREV);
       }
     }
 

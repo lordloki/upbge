@@ -100,48 +100,43 @@ def use_cpu(context):
     return (get_device_type(context) == 'NONE' or cscene.device == 'CPU' or not backend_has_active_gpu(context))
 
 
-def use_metal(context):
+def use_gpu(context):
     cscene = context.scene.cycles
 
-    return (get_device_type(context) == 'METAL' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+    return (get_device_type(context) != 'NONE' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+
+
+def use_metal(context):
+    return (get_device_type(context) == 'METAL' and use_gpu(context))
 
 
 def use_cuda(context):
-    cscene = context.scene.cycles
-
-    return (get_device_type(context) == 'CUDA' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+    return (get_device_type(context) == 'CUDA' and use_gpu(context))
 
 
 def use_hip(context):
-    cscene = context.scene.cycles
-
-    return (get_device_type(context) == 'HIP' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+    return (get_device_type(context) == 'HIP' and use_gpu(context))
 
 
 def use_optix(context):
-    cscene = context.scene.cycles
-
-    return (get_device_type(context) == 'OPTIX' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+    return (get_device_type(context) == 'OPTIX' and use_gpu(context))
 
 
 def use_oneapi(context):
-    cscene = context.scene.cycles
-
-    return (get_device_type(context) == 'ONEAPI' and cscene.device == 'GPU' and backend_has_active_gpu(context))
+    return (get_device_type(context) == 'ONEAPI' and use_gpu(context))
 
 
 def use_multi_device(context):
-    cscene = context.scene.cycles
-    if cscene.device != 'GPU':
-        return False
-    return context.preferences.addons[__package__].preferences.has_multi_device()
+    if use_gpu(context):
+        return context.preferences.addons[__package__].preferences.has_multi_device()
+    return False
 
 
 def show_device_active(context):
     cscene = context.scene.cycles
-    if cscene.device != 'GPU':
+    if cscene.device == 'CPU':
         return True
-    return backend_has_active_gpu(context)
+    return use_gpu(context)
 
 
 def show_preview_denoise_active(context):
@@ -178,7 +173,7 @@ def get_effective_preview_denoiser(context, has_oidn_gpu):
     if has_oidn_gpu:
         return 'OPENIMAGEDENOISE'
 
-    if context.preferences.addons[__package__].preferences.get_devices_for_type('OPTIX'):
+    if has_optixdenoiser_gpu_devices(context):
         return 'OPTIX'
 
     return 'OPENIMAGEDENOISE'
@@ -1110,13 +1105,17 @@ class CYCLES_CAMERA_PT_dof(CyclesButtonsPanel, Panel):
         split = layout.split()
 
         col = split.column()
-        col.prop(dof, "focus_object", text="Focus Object")
+        col.prop(dof, "focus_object", text="Focus on Object")
         if dof.focus_object and dof.focus_object.type == 'ARMATURE':
             col.prop_search(dof, "focus_subtarget", dof.focus_object.data, "bones", text="Focus Bone")
 
         sub = col.row()
         sub.active = dof.focus_object is None
-        sub.prop(dof, "focus_distance", text="Distance")
+        sub.prop(dof, "focus_distance", text="Focus Distance")
+        sub.operator(
+            "ui.eyedropper_depth",
+            icon='EYEDROPPER',
+            text="").prop_data_path = "scene.camera.data.dof.focus_distance"
 
 
 class CYCLES_CAMERA_PT_dof_aperture(CyclesButtonsPanel, Panel):

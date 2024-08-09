@@ -17,7 +17,7 @@ set(INC
   ../sequencer
   ../windowmanager
 
-  # RNA_prototypes.h
+  # RNA_prototypes.hh
   ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
@@ -69,6 +69,7 @@ set(LIB
   PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
   PRIVATE bf::extern::fmtlib
+  PRIVATE bf::intern::memutil
 )
 
 if(WITH_BUILDINFO)
@@ -98,12 +99,6 @@ if(WITH_GAMEENGINE_BPPLAYER)
   add_definitions(-DWITH_GAMEENGINE_BPPLAYER)
 endif()
 
-if(WITH_TBB)
-  list(APPEND INC_SYS
-    ${TBB_INCLUDE_DIRS}
-  )
-  add_definitions(-DWITH_TBB)
-endif()
 
 if(WIN32)
   add_definitions(-DNOMINMAX)
@@ -111,7 +106,7 @@ endif()
 
 blender_add_lib(bf_blenloader "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
-# RNA_prototypes.h
+# RNA_prototypes.hh
 add_dependencies(bf_blenloader bf_rna)
 
 if(WITH_GTESTS)

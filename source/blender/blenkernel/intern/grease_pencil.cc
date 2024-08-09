@@ -12,6 +12,7 @@
 #include "BKE_action.h"
 #include "BKE_anim_data.hh"
 #include "BKE_animsys.h"
+#include "BKE_bake_data_block_id.hh"
 #include "BKE_curves.hh"
 #include "BKE_customdata.hh"
 #include "BKE_deform.hh"
@@ -69,6 +70,8 @@ using blender::float3;
 using blender::Span;
 using blender::uint3;
 using blender::VectorSet;
+
+static const char *ATTR_POSITION = "position";
 
 /* Forward declarations. */
 static void read_drawing_array(GreasePencil &grease_pencil, BlendDataReader *reader);
@@ -134,6 +137,11 @@ static void grease_pencil_copy_data(Main * /*bmain*/,
 
   /* Make sure the runtime pointer exists. */
   grease_pencil_dst->runtime = MEM_new<bke::GreasePencilRuntime>(__func__);
+
+  if (grease_pencil_src->runtime->bake_materials) {
+    grease_pencil_dst->runtime->bake_materials = std::make_unique<bke::bake::BakeMaterialsList>(
+        *grease_pencil_src->runtime->bake_materials);
+  }
 }
 
 static void grease_pencil_free_data(ID *id)
@@ -214,7 +222,9 @@ static void grease_pencil_blend_read_data(BlendDataReader *reader, ID *id)
   CustomData_blend_read(reader, &grease_pencil->layers_data, grease_pencil->layers().size());
 
   /* Read materials. */
-  BLO_read_pointer_array(reader, reinterpret_cast<void **>(&grease_pencil->material_array));
+  BLO_read_pointer_array(reader,
+                         grease_pencil->material_array_num,
+                         reinterpret_cast<void **>(&grease_pencil->material_array));
   /* Read vertex group names. */
   BLO_read_struct_list(reader, bDeformGroup, &grease_pencil->vertex_group_names);
 
@@ -371,8 +381,9 @@ Span<uint3> Drawing::triangles() const
   };
   this->runtime->triangles_cache.ensure([&](Vector<uint3> &r_data) {
     const CurvesGeometry &curves = this->strokes();
-    const Span<float3> positions = curves.positions();
-    const OffsetIndices<int> points_by_curve = curves.points_by_curve();
+    const Span<float3> positions = curves.evaluated_positions();
+    const Span<float3> normals = this->curve_plane_normals();
+    const OffsetIndices<int> points_by_curve = curves.evaluated_points_by_curve();
 
     int total_triangles = 0;
     Array<int> tris_offests(curves.curves_num());
@@ -402,7 +413,7 @@ Span<uint3> Drawing::triangles() const
             BLI_memarena_alloc(pf_arena, sizeof(*projverts) * size_t(points.size())));
 
         float3x3 axis_mat;
-        axis_dominant_v3_to_m3(axis_mat.ptr(), float3(0.0f, -1.0f, 0.0f));
+        axis_dominant_v3_to_m3(axis_mat.ptr(), normals[curve_i]);
 
         for (const int i : IndexRange(points.size())) {
           mul_v2_m3v3(projverts[i], axis_mat.ptr(), positions[points[i]]);
@@ -451,9 +462,9 @@ Span<float3> Drawing::curve_plane_normals() const
         /* Check for degenerate case where the points are on a line. */
         if (math::is_zero(length)) {
           for (const int point_i : points.drop_back(1)) {
-            float3 segment_vec = math::normalize(positions[point_i] - positions[point_i + 1]);
+            float3 segment_vec = positions[point_i] - positions[point_i + 1];
             if (math::length_squared(segment_vec) != 0.0f) {
-              normal = float3(segment_vec.y, -segment_vec.x, 0.0f);
+              normal = math::normalize(float3(segment_vec.y, -segment_vec.x, 0.0f));
               break;
             }
           }
@@ -745,6 +756,7 @@ void Drawing::tag_positions_changed()
 void Drawing::tag_topology_changed()
 {
   this->tag_positions_changed();
+  this->strokes_for_write().tag_topology_changed();
 }
 
 DrawingReference::DrawingReference()
@@ -1125,7 +1137,7 @@ Layer::SortedKeysIterator Layer::sorted_keys_iterator_at(const int frame_number)
   if (frame_number < sorted_keys.first()) {
     return nullptr;
   }
-  /* After or at the the last frame, return iterator to last. */
+  /* After or at the last frame, return iterator to last. */
   if (frame_number >= sorted_keys.last()) {
     return std::prev(sorted_keys.end());
   }
@@ -1343,6 +1355,14 @@ float4x4 Layer::local_transform() const
 {
   return math::from_loc_rot_scale<float4x4, math::EulerXYZ>(
       float3(this->translation), float3(this->rotation), float3(this->scale));
+}
+
+void Layer::set_local_transform(const float4x4 &transform)
+{
+  math::to_loc_rot_scale_safe<true>(transform,
+                                    *reinterpret_cast<float3 *>(this->translation),
+                                    *reinterpret_cast<math::EulerXYZ *>(this->rotation),
+                                    *reinterpret_cast<float3 *>(this->scale));
 }
 
 StringRefNull Layer::view_layer_name() const
@@ -1699,6 +1719,9 @@ void LayerGroup::update_from_dna_read()
 
 namespace blender::bke {
 
+GreasePencilRuntime::GreasePencilRuntime() = default;
+GreasePencilRuntime::~GreasePencilRuntime() = default;
+
 std::optional<Span<float3>> GreasePencilDrawingEditHints::positions() const
 {
   if (!this->positions_data.has_value()) {
@@ -1734,6 +1757,12 @@ std::optional<MutableSpan<float3>> GreasePencilDrawingEditHints::positions_for_w
 /* ------------------------------------------------------------------- */
 /** \name Grease Pencil kernel functions
  * \{ */
+
+bool BKE_grease_pencil_drawing_attribute_required(const GreasePencilDrawing * /*drawing*/,
+                                                  const char *name)
+{
+  return STREQ(name, ATTR_POSITION);
+}
 
 void *BKE_grease_pencil_add(Main *bmain, const char *name)
 {
@@ -2394,6 +2423,23 @@ bool GreasePencil::remove_frames(blender::bke::greasepencil::Layer &layer,
   return false;
 }
 
+void GreasePencil::add_layers_with_empty_drawings_for_eval(const int num)
+{
+  using namespace blender;
+  using namespace blender::bke::greasepencil;
+  const int old_drawings_num = this->drawing_array_num;
+  this->add_empty_drawings(num);
+  for (const int i : IndexRange(num)) {
+    const int drawing_i = old_drawings_num + i;
+    Drawing &drawing = reinterpret_cast<GreasePencilDrawing *>(this->drawing(drawing_i))->wrap();
+    Layer &layer = this->add_layer(std::to_string(i));
+    GreasePencilFrame *frame = layer.add_frame(this->runtime->eval_frame);
+    BLI_assert(frame);
+    frame->drawing_index = drawing_i;
+    drawing.add_user();
+  }
+}
+
 void GreasePencil::remove_drawings_with_no_users()
 {
   using namespace blender;
@@ -2450,7 +2496,10 @@ void GreasePencil::remove_drawings_with_no_users()
   }
 
   /* Tail range of unused drawings that can be removed. */
-  const IndexRange drawings_to_remove = drawings.index_range().drop_front(last_used_drawing + 1);
+  const IndexRange drawings_to_remove = (first_unused_drawing > 0) ?
+                                            drawings.index_range().drop_front(last_used_drawing +
+                                                                              1) :
+                                            drawings.index_range();
   if (drawings_to_remove.is_empty()) {
     return;
   }
@@ -3365,7 +3414,9 @@ void GreasePencil::print_layer_tree()
 
 static void read_drawing_array(GreasePencil &grease_pencil, BlendDataReader *reader)
 {
-  BLO_read_pointer_array(reader, reinterpret_cast<void **>(&grease_pencil.drawing_array));
+  BLO_read_pointer_array(reader,
+                         grease_pencil.drawing_array_num,
+                         reinterpret_cast<void **>(&grease_pencil.drawing_array));
   for (int i = 0; i < grease_pencil.drawing_array_num; i++) {
     BLO_read_struct(reader, GreasePencilDrawingBase, &grease_pencil.drawing_array[i]);
     GreasePencilDrawingBase *drawing_base = grease_pencil.drawing_array[i];

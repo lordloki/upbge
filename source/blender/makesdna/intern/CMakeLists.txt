@@ -18,6 +18,7 @@ set(INC_SYS
 set(LIB
   PRIVATE bf::intern::atomic
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::dependencies::optional::tbb
 )
 
 add_definitions(-DWITH_DNA_GHASH)
@@ -104,6 +105,7 @@ add_custom_command(
     ${CMAKE_CURRENT_BINARY_DIR}/dna_type_offsets.h
     ${CMAKE_CURRENT_BINARY_DIR}/dna_verify.c
   COMMAND
+    ${CMAKE_COMMAND} -E env ${PLATFORM_ENV_BUILD}
     "$<TARGET_FILE:makesdna>"
     ${CMAKE_CURRENT_BINARY_DIR}/dna.c
     ${CMAKE_CURRENT_BINARY_DIR}/dna_type_offsets.h
@@ -154,11 +156,13 @@ set(INC_SYS
 set(SRC
   ${SRC_BLENLIB}
   ${SRC_DNA_DEFAULTS_INC}
+  ${SRC_DNA_OTHER_INC}
 )
 
 set(LIB
   PRIVATE bf::intern::atomic
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::dependencies::optional::tbb
 )
 
 blender_add_lib(bf_dna_blenlib "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")

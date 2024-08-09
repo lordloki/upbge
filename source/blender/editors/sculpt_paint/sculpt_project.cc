@@ -6,16 +6,21 @@
  * \ingroup edsculpt
  */
 
+#include "BLI_array_utils.hh"
+#include "BLI_enumerable_thread_specific.hh"
 #include "BLI_math_geom.h"
 #include "BLI_math_matrix.h"
 #include "BLI_math_vector.h"
 
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
+#include "BKE_mesh.hh"
+#include "BKE_subdiv_ccg.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
 
+#include "mesh_brush_common.hh"
 #include "sculpt_intern.hh"
 
 namespace blender::ed::sculpt_paint::project {
@@ -31,66 +36,173 @@ static void gesture_begin(bContext &C, wmOperator &op, gesture::GestureData &ges
   undo::push_begin(*gesture_data.vc.obact, &op);
 }
 
-static void apply_projection(gesture::GestureData &gesture_data, PBVHNode *node)
+struct LocalData {
+  Vector<float3> positions;
+  Vector<float3> normals;
+  Vector<float> factors;
+  Vector<float> distances;
+  Vector<float3> translations;
+};
+
+static void apply_projection_mesh(const Sculpt &sd,
+                                  const gesture::GestureData &gesture_data,
+                                  const Span<float3> positions_eval,
+                                  const Span<float3> vert_normals,
+                                  const bke::pbvh::Node &node,
+                                  Object &object,
+                                  LocalData &tls,
+                                  const MutableSpan<float3> positions_orig)
 {
-  PBVHVertexIter vd;
-  bool any_updated = false;
+  Mesh &mesh = *static_cast<Mesh *>(object.data);
 
-  undo::push_node(*gesture_data.vc.obact, node, undo::Type::Position);
+  const Span<int> verts = bke::pbvh::node_unique_verts(node);
+  const MutableSpan positions = gather_data_mesh(positions_eval, verts, tls.positions);
+  const MutableSpan normals = gather_data_mesh(vert_normals, verts, tls.normals);
 
-  BKE_pbvh_vertex_iter_begin (*gesture_data.ss->pbvh, node, vd, PBVH_ITER_UNIQUE) {
-    const float *co = SCULPT_vertex_co_get(*gesture_data.ss, vd.vertex);
-    float3 vertex_normal = SCULPT_vertex_normal_get(*gesture_data.ss, vd.vertex);
-    if (!gesture::is_affected(gesture_data, co, vertex_normal)) {
-      continue;
-    }
+  tls.factors.resize(verts.size());
+  const MutableSpan<float> factors = tls.factors;
+  fill_factor_from_hide_and_mask(mesh, verts, factors);
 
-    float projected_pos[3];
-    closest_to_plane_v3(projected_pos, gesture_data.line.plane, vd.co);
+  gesture::filter_factors(gesture_data, positions, normals, factors);
 
-    float disp[3];
-    sub_v3_v3v3(disp, projected_pos, vd.co);
-    const float mask = vd.mask;
-    mul_v3_fl(disp, 1.0f - mask);
-    if (is_zero_v3(disp)) {
-      continue;
-    }
-    add_v3_v3(vd.co, disp);
-    any_updated = true;
-  }
-  BKE_pbvh_vertex_iter_end;
+  tls.translations.resize(verts.size());
+  const MutableSpan<float3> translations = tls.translations;
+  calc_translations_to_plane(positions, gesture_data.line.plane, translations);
+  scale_translations(translations, factors);
 
-  if (any_updated) {
-    BKE_pbvh_node_mark_positions_update(node);
-  }
+  write_translations(sd, object, positions_eval, verts, translations, positions_orig);
 }
 
-static void gesture_apply_for_symmetry_pass(bContext & /*C*/, gesture::GestureData &gesture_data)
+static void apply_projection_grids(const Sculpt &sd,
+                                   const gesture::GestureData &gesture_data,
+                                   const bke::pbvh::Node &node,
+                                   Object &object,
+                                   LocalData &tls)
 {
+  SculptSession &ss = *object.sculpt;
+
+  SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
+
+  const Span<int> grids = bke::pbvh::node_grid_indices(node);
+  const MutableSpan positions = gather_grids_positions(subdiv_ccg, grids, tls.positions);
+
+  tls.normals.resize(positions.size());
+  const MutableSpan<float3> normals = tls.normals;
+  gather_grids_normals(subdiv_ccg, grids, normals);
+
+  tls.factors.resize(positions.size());
+  const MutableSpan<float> factors = tls.factors;
+  fill_factor_from_hide_and_mask(subdiv_ccg, grids, factors);
+
+  gesture::filter_factors(gesture_data, positions, normals, factors);
+
+  tls.translations.resize(positions.size());
+  const MutableSpan<float3> translations = tls.translations;
+  calc_translations_to_plane(positions, gesture_data.line.plane, translations);
+  scale_translations(translations, factors);
+
+  clip_and_lock_translations(sd, ss, positions, translations);
+  apply_translations(translations, grids, subdiv_ccg);
+}
+
+static void apply_projection_bmesh(const Sculpt &sd,
+                                   const gesture::GestureData &gesture_data,
+                                   bke::pbvh::Node &node,
+                                   Object &object,
+                                   LocalData &tls)
+{
+  const SculptSession &ss = *object.sculpt;
+
+  const Set<BMVert *, 0> &verts = BKE_pbvh_bmesh_node_unique_verts(&node);
+  const MutableSpan positions = gather_bmesh_positions(verts, tls.positions);
+
+  tls.normals.resize(verts.size());
+  const MutableSpan<float3> normals = tls.normals;
+  gather_bmesh_normals(verts, normals);
+
+  tls.factors.resize(verts.size());
+  const MutableSpan<float> factors = tls.factors;
+  fill_factor_from_hide_and_mask(*ss.bm, verts, factors);
+
+  gesture::filter_factors(gesture_data, positions, normals, factors);
+
+  tls.translations.resize(verts.size());
+  const MutableSpan<float3> translations = tls.translations;
+  calc_translations_to_plane(positions, gesture_data.line.plane, translations);
+  scale_translations(translations, factors);
+
+  clip_and_lock_translations(sd, ss, positions, translations);
+  apply_translations(translations, verts);
+}
+
+static void gesture_apply_for_symmetry_pass(bContext &C, gesture::GestureData &gesture_data)
+{
+  Object &object = *gesture_data.vc.obact;
+  SculptSession &ss = *object.sculpt;
+  bke::pbvh::Tree &pbvh = *ss.pbvh;
+  const Sculpt &sd = *CTX_data_tool_settings(&C)->sculpt;
+  const Span<bke::pbvh::Node *> nodes = gesture_data.nodes;
+
+  threading::EnumerableThreadSpecific<LocalData> all_tls;
   switch (gesture_data.shape_type) {
     case gesture::ShapeType::Line:
-      threading::parallel_for(gesture_data.nodes.index_range(), 1, [&](const IndexRange range) {
-        for (const int i : range) {
-          apply_projection(gesture_data, gesture_data.nodes[i]);
+      switch (pbvh.type()) {
+        case bke::pbvh::Type::Mesh: {
+          Mesh &mesh = *static_cast<Mesh *>(object.data);
+          const Span<float3> positions_eval = BKE_pbvh_get_vert_positions(pbvh);
+          const Span<float3> vert_normals = BKE_pbvh_get_vert_normals(pbvh);
+          MutableSpan<float3> positions_orig = mesh.vert_positions_for_write();
+          undo::push_nodes(object, nodes, undo::Type::Position);
+          threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+            LocalData &tls = all_tls.local();
+            for (const int i : range) {
+              apply_projection_mesh(sd,
+                                    gesture_data,
+                                    positions_eval,
+                                    vert_normals,
+                                    *nodes[i],
+                                    object,
+                                    tls,
+                                    positions_orig);
+              BKE_pbvh_node_mark_positions_update(nodes[i]);
+            }
+          });
+          break;
         }
-      });
+        case bke::pbvh::Type::BMesh: {
+          undo::push_nodes(object, nodes, undo::Type::Position);
+          threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+            LocalData &tls = all_tls.local();
+            for (const int i : range) {
+              apply_projection_grids(sd, gesture_data, *nodes[i], object, tls);
+              BKE_pbvh_node_mark_positions_update(nodes[i]);
+            }
+          });
+          break;
+        }
+        case bke::pbvh::Type::Grids: {
+          undo::push_nodes(object, nodes, undo::Type::Position);
+          threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+            LocalData &tls = all_tls.local();
+            for (const int i : range) {
+              apply_projection_bmesh(sd, gesture_data, *nodes[i], object, tls);
+              BKE_pbvh_node_mark_positions_update(nodes[i]);
+            }
+          });
+          break;
+        }
+      }
       break;
     case gesture::ShapeType::Lasso:
     case gesture::ShapeType::Box:
       /* Gesture shape projection not implemented yet. */
-      BLI_assert(false);
+      BLI_assert_unreachable();
       break;
   }
 }
 
 static void gesture_end(bContext &C, gesture::GestureData &gesture_data)
 {
-  SculptSession &ss = *gesture_data.ss;
-  const Sculpt &sd = *CTX_data_tool_settings(&C)->sculpt;
-  if (ss.deform_modifiers_active || ss.shapekey_active) {
-    SCULPT_flush_stroke_deform(sd, *gesture_data.vc.obact, true);
-  }
-
   flush_update_step(&C, UpdateType::Position);
   flush_update_done(&C, *gesture_data.vc.obact, UpdateType::Position);
   undo::push_end(*gesture_data.vc.obact);

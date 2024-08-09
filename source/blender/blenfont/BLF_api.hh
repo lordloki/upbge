@@ -110,6 +110,12 @@ void BLF_size(int fontid, float size);
  */
 void BLF_character_weight(int fontid, int weight);
 
+/* Return the font's default design weight (100-900). */
+int BLF_default_weight(int fontid) ATTR_WARN_UNUSED_RESULT;
+
+/* Return true if the font has a variable (multiple master) weight axis. */
+bool BLF_has_variable_weight(int fontid) ATTR_WARN_UNUSED_RESULT;
+
 /* Goal: small but useful color API. */
 
 void BLF_color4ubv(int fontid, const unsigned char rgba[4]);
@@ -140,8 +146,13 @@ void BLF_draw(int fontid, const char *str, size_t str_len, ResultBLF *r_info = n
 int BLF_draw_mono(int fontid, const char *str, size_t str_len, int cwidth, int tab_columns)
     ATTR_NONNULL(2);
 
-void BLF_draw_svg_icon(
-    uint icon_id, float x, float y, float size, float color[4], float outline_alpha);
+void BLF_draw_svg_icon(uint icon_id,
+                       float x,
+                       float y,
+                       float size,
+                       float color[4] = nullptr,
+                       float outline_alpha = 1.0f,
+                       bool multicolor = false);
 
 blender::Array<uchar> BLF_svg_icon_bitmap(uint icon_id, float size, int *r_width, int *r_height);
 

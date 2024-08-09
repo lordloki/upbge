@@ -67,6 +67,7 @@ Depsgraph::Depsgraph(Main *bmain, Scene *scene, ViewLayer *view_layer, eEvaluati
 {
   BLI_spin_init(&lock);
   memset(id_type_updated, 0, sizeof(id_type_updated));
+  memset(id_type_updated_backup, 0, sizeof(id_type_updated_backup));
   memset(id_type_exist, 0, sizeof(id_type_exist));
   memset(physics_relations, 0, sizeof(physics_relations));
 
@@ -108,7 +109,7 @@ IDNode *Depsgraph::find_id_node(const ID *id) const
 
 IDNode *Depsgraph::add_id_node(ID *id, ID *id_cow_hint)
 {
-  BLI_assert((id->tag & LIB_TAG_COPIED_ON_EVAL) == 0);
+  BLI_assert((id->tag & ID_TAG_COPIED_ON_EVAL) == 0);
   IDNode *id_node = find_id_node(id);
   if (!id_node) {
     DepsNodeFactory *factory = type_get_factory(NodeType::ID_REF);
@@ -248,7 +249,7 @@ ID *Depsgraph::get_cow_id(const ID *id_orig) const
      *
      * We try to enforce that in debug builds, for release we play a bit
      * safer game here. */
-    if ((id_orig->tag & LIB_TAG_COPIED_ON_EVAL) == 0) {
+    if ((id_orig->tag & ID_TAG_COPIED_ON_EVAL) == 0) {
       /* TODO(sergey): This is nice sanity check to have, but it fails
        * in following situations:
        *

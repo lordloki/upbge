@@ -22,6 +22,7 @@ int SEQ_retiming_keys_count(const Sequence *seq);
 bool SEQ_retiming_is_active(const Sequence *seq);
 void SEQ_retiming_data_ensure(Sequence *seq);
 void SEQ_retiming_data_clear(Sequence *seq);
+void SEQ_retiming_reset(Scene *scene, Sequence *seq);
 bool SEQ_retiming_is_allowed(const Sequence *seq);
 /**
  * Add new retiming key.
@@ -67,7 +68,8 @@ bool SEQ_retiming_key_is_freeze_frame(const SeqRetimingKey *key);
 bool SEQ_retiming_selection_clear(const Editing *ed);
 void SEQ_retiming_selection_append(SeqRetimingKey *key);
 void SEQ_retiming_selection_remove(SeqRetimingKey *key);
-void SEQ_retiming_remove_multiple_keys(Sequence *seq, blender::Vector<SeqRetimingKey *> &keys);
+void SEQ_retiming_remove_multiple_keys(Sequence *seq,
+                                       blender::Vector<SeqRetimingKey *> &keys_to_remove);
 bool SEQ_retiming_selection_contains(const Editing *ed, const SeqRetimingKey *key);
 bool SEQ_retiming_selection_has_whole_transition(const Editing *ed, SeqRetimingKey *key);
 bool SEQ_retiming_data_is_editable(const Sequence *seq);

@@ -93,8 +93,8 @@ typedef struct uiStyle {
 
   uiFontStyle paneltitle;
   uiFontStyle grouplabel;
-  uiFontStyle widgetlabel;
   uiFontStyle widget;
+  uiFontStyle tooltip;
 
   float panelzoom;
 
@@ -299,6 +299,7 @@ typedef struct ThemeSpace {
   unsigned char bone_solid[4], bone_pose[4], bone_pose_active[4], bone_locked_weight[4];
   unsigned char strip[4], strip_select[4];
   unsigned char cframe[4];
+  unsigned char before_current_frame[4], after_current_frame[4];
   unsigned char time_keyframe[4], time_gp_keyframe[4];
   unsigned char freestyle_edge_mark[4], freestyle_face_mark[4];
   unsigned char time_scrub_background[4];
@@ -742,6 +743,7 @@ typedef struct UserDef_Experimental {
   char use_viewport_debug;
   char use_all_linked_data_direct;
   char use_extensions_debug;
+  char use_recompute_usercount_on_save_debug;
   char SANITIZE_AFTER_HERE;
   /* The following options are automatically sanitized (set to 0)
    * when the release cycle is not alpha. */
@@ -755,7 +757,9 @@ typedef struct UserDef_Experimental {
   char use_new_file_import_nodes;
   char use_shader_node_previews;
   char use_animation_baklava;
-  char _pad[4];
+  char use_docking;
+  char enable_new_cpu_compositor;
+  char _pad[1];
   /** `makesdna` does not allow empty structs. */
 } UserDef_Experimental;
 

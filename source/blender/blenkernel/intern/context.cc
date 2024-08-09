@@ -44,7 +44,7 @@
 #include "RE_engine.h"
 
 #include "RNA_access.hh"
-#include "RNA_prototypes.h"
+#include "RNA_prototypes.hh"
 
 #include "CLG_log.h"
 
@@ -113,7 +113,7 @@ bContext *CTX_create()
 
 bContext *CTX_copy(const bContext *C)
 {
-  bContext *newC = MEM_new<bContext>(__func__);
+  bContext *newC = MEM_cnew<bContext>(__func__);
   *newC = *C;
 
   memset(&newC->wm.operator_poll_msg_dyn_params, 0, sizeof(newC->wm.operator_poll_msg_dyn_params));

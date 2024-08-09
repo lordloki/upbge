@@ -531,7 +531,7 @@ static int grab_clone_invoke(bContext *C, wmOperator *op, const wmEvent *event)
   Brush *brush = image_paint_brush(C);
   GrabClone *cmv;
 
-  cmv = MEM_new<GrabClone>("GrabClone");
+  cmv = MEM_cnew<GrabClone>("GrabClone");
   copy_v2_v2(cmv->startoffset, brush->clone.offset);
   cmv->startx = event->xy[0];
   cmv->starty = event->xy[1];
@@ -901,7 +901,7 @@ void ED_object_texture_paint_mode_enter_ex(Main &bmain,
 
   BKE_paint_init(&bmain, &scene, PaintMode::Texture3D, PAINT_CURSOR_TEXTURE_PAINT);
 
-  BKE_paint_brush_validate(&bmain, &imapaint.paint);
+  BKE_paint_brushes_validate(&bmain, &imapaint.paint);
 
   if (U.glreslimit != 0) {
     BKE_image_free_all_gputextures(&bmain);

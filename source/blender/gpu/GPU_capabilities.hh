@@ -56,7 +56,7 @@ bool GPU_texture_view_support();
 bool GPU_stencil_export_support();
 
 bool GPU_mem_stats_supported();
-void GPU_mem_stats_get(int *totalmem, int *freemem);
+void GPU_mem_stats_get(int *r_totalmem, int *r_freemem);
 
 /**
  * Return support for the active context + window.
@@ -65,3 +65,6 @@ bool GPU_stereo_quadbuffer_support();
 
 int GPU_minimum_per_vertex_stride();
 bool GPU_transform_feedback_support();
+
+/** WARNING: Should only be called at startup from creator_args. Never call it at runtime. */
+void GPU_compilation_subprocess_override_set(int count);

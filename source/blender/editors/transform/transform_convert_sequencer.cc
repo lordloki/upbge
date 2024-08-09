@@ -286,7 +286,7 @@ static ListBase *seqbase_active_get(const TransInfo *t)
   return SEQ_active_seqbase_get(ed);
 }
 
-static bool seq_transform_check_overlap(blender::Span<Sequence *> transformed_strips)
+bool seq_transform_check_overlap(blender::Span<Sequence *> transformed_strips)
 {
   for (Sequence *seq : transformed_strips) {
     if (seq->flag & SEQ_OVERLAP) {
@@ -576,13 +576,15 @@ static void flushTransSeq(TransInfo *t)
    * recalculation, hierarchy is not taken into account. */
   int max_offset = 0;
 
+  float edge_pan_offset[2] = {0.0f, 0.0f};
+  view2d_edge_pan_loc_compensate(t, edge_pan_offset, edge_pan_offset);
+
   /* Flush to 2D vector from internally used 3D vector. */
   for (a = 0, td = tc->data, td2d = tc->data_2d; a < tc->data_len; a++, td++, td2d++) {
     tdsq = (TransDataSeq *)td->extra;
     seq = tdsq->seq;
-    float loc[2];
-    view2d_edge_pan_loc_compensate(t, td->loc, loc);
-    new_frame = round_fl_to_int(loc[0]);
+
+    new_frame = round_fl_to_int(td->loc[0] + edge_pan_offset[0]);
 
     switch (tdsq->sel_flag) {
       case SELECT: {
@@ -593,7 +595,7 @@ static void flushTransSeq(TransInfo *t)
             max_offset = offset;
           }
         }
-        seq->machine = round_fl_to_int(loc[1]);
+        seq->machine = round_fl_to_int(td->loc[1] + edge_pan_offset[1]);
         CLAMP(seq->machine, 1, MAXSEQ);
         break;
       }

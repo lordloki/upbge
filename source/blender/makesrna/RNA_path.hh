@@ -27,11 +27,14 @@ struct IDProperty;
  * An RNA path to a property, including an optional key/index for array and
  * collection properties.
  *
- * If both a key and index are specified, they indicate redundant ways to access
- * the same array/collection element. This redundancy can be used when
- * referencing an item in an RNA collection: items are generally referenced by
- * name, but indices may be used as a fall-back in case the name of the item is
- * changed.
+ * The semantics around the key and index fields are specific:
+ * - If a key is specified, that indicates an element of a key-based array
+ *   property. If an index is *also* specified alongside the key then the index
+ *   is just a fallback.
+ * - If an index is specified but *not* a key, that indicates an element of an
+ *   index-based array property.
+ * - If neither the key nor index are specified, that indicates a property as a
+ *   whole.
  *
  * This type is intended to be convenient to construct with initializer lists:
  *
@@ -62,6 +65,16 @@ struct RNAPath {
   std::optional<std::string> key = std::nullopt;
   std::optional<int> index = std::nullopt;
 };
+
+/**
+ * NOTE: equality is defined in a specific way here to reflect the semantic
+ * meaning of `RNAPath`. Since the key existing indicates a key-based array
+ * element, with the index then only serving as a fallback, the index only
+ * affects the equality result if *neither* `RNAPath` has a key specified.
+ * (See the main `RNAPath` documentation above for the specific semantics of
+ * key and index.)
+ */
+bool operator==(const RNAPath &left, const RNAPath &right);
 
 char *RNA_path_append(
     const char *path, const PointerRNA *ptr, PropertyRNA *prop, int intkey, const char *strkey);

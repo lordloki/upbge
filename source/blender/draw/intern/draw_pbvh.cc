@@ -5,8 +5,8 @@
 /** \file
  * \ingroup gpu
  *
- * PBVH drawing.
- * Embeds GPU meshes inside of PBVH nodes, used by mesh sculpt mode.
+ * bke::pbvh::Tree drawing.
+ * Embeds GPU meshes inside of bke::pbvh::Tree nodes, used by mesh sculpt mode.
  */
 
 #include <algorithm>
@@ -65,7 +65,7 @@ static bool pbvh_attr_supported(const AttributeRequest &request)
   }
   const GenericRequest &attr = std::get<GenericRequest>(request);
   if (!ELEM(attr.domain, bke::AttrDomain::Point, bke::AttrDomain::Face, bke::AttrDomain::Corner)) {
-    /* PBVH drawing does not support edge domain attributes. */
+    /* blender::bke::pbvh::Tree drawing does not support edge domain attributes. */
     return false;
   }
   bool type_supported = false;
@@ -337,7 +337,7 @@ struct PBVHBatches {
   Map<std::string, PBVHBatch> batches;
   gpu::IndexBuf *tri_index = nullptr;
   gpu::IndexBuf *lines_index = nullptr;
-  int faces_count = 0; /* Used by PBVH_BMESH and PBVH_GRIDS */
+  int faces_count = 0; /* Used by bke::pbvh::Type::BMesh and bke::pbvh::Type::Grids */
   bool use_flat_layout = false;
 
   int material_index = 0;
@@ -346,7 +346,6 @@ struct PBVHBatches {
   gpu::IndexBuf *tri_index_coarse = nullptr;
   gpu::IndexBuf *lines_index_coarse = nullptr;
   int coarse_level = 0; /* Coarse multires depth. */
-  int tris_count_coarse = 0, lines_count_coarse = 0;
 
   PBVHBatches(const PBVH_GPU_Args &args);
   ~PBVHBatches();
@@ -381,15 +380,15 @@ static int count_visible_tris_bmesh(const Set<BMFace *, 0> &faces)
 static int count_faces(const PBVH_GPU_Args &args)
 {
   switch (args.pbvh_type) {
-    case PBVH_FACES:
+    case bke::pbvh::Type::Mesh:
       return count_visible_tris_mesh(args.prim_indices, args.tri_faces, args.hide_poly);
-    case PBVH_GRIDS:
+    case bke::pbvh::Type::Grids:
       return bke::pbvh::count_grid_quads(args.subdiv_ccg->grid_hidden,
                                          args.grid_indices,
                                          args.ccg_key.grid_size,
                                          args.ccg_key.grid_size);
 
-    case PBVH_BMESH:
+    case bke::pbvh::Type::BMesh:
       return count_visible_tris_bmesh(*args.bm_faces);
   }
   BLI_assert_unreachable();
@@ -1084,13 +1083,13 @@ void PBVHBatches::update(const PBVH_GPU_Args &args)
   }
   for (PBVHVbo &vbo : this->vbos) {
     switch (args.pbvh_type) {
-      case PBVH_FACES:
+      case bke::pbvh::Type::Mesh:
         fill_vbo_faces(vbo, args);
         break;
-      case PBVH_GRIDS:
+      case bke::pbvh::Type::Grids:
         fill_vbo_grids(vbo, args, this->use_flat_layout);
         break;
-      case PBVH_BMESH:
+      case bke::pbvh::Type::BMesh:
         fill_vbo_bmesh(vbo, args);
         break;
     }
@@ -1147,13 +1146,13 @@ int PBVHBatches::create_vbo(const AttributeRequest &request, const PBVH_GPU_Args
   vbos.append_as(request);
   vbos.last().vert_buf = GPU_vertbuf_create_with_format_ex(format, GPU_USAGE_STATIC);
   switch (args.pbvh_type) {
-    case PBVH_FACES:
+    case bke::pbvh::Type::Mesh:
       fill_vbo_faces(vbos.last(), args);
       break;
-    case PBVH_GRIDS:
+    case bke::pbvh::Type::Grids:
       fill_vbo_grids(vbos.last(), args, use_flat_layout);
       break;
-    case PBVH_BMESH:
+    case bke::pbvh::Type::BMesh:
       fill_vbo_bmesh(vbos.last(), args);
       break;
   }
@@ -1163,7 +1162,7 @@ int PBVHBatches::create_vbo(const AttributeRequest &request, const PBVH_GPU_Args
 
 void PBVHBatches::update_pre(const PBVH_GPU_Args &args)
 {
-  if (args.pbvh_type == PBVH_BMESH) {
+  if (args.pbvh_type == bke::pbvh::Type::BMesh) {
     int count = count_faces(args);
 
     if (faces_count != count) {
@@ -1381,7 +1380,7 @@ static void create_grids_index_flat_layout(const PBVH_GPU_Args &args,
 static int material_index_get(const PBVH_GPU_Args &args)
 {
   switch (args.pbvh_type) {
-    case PBVH_FACES: {
+    case bke::pbvh::Type::Mesh: {
       if (args.prim_indices.is_empty()) {
         return 0;
       }
@@ -1390,7 +1389,7 @@ static int material_index_get(const PBVH_GPU_Args &args)
           "material_index", bke::AttrDomain::Face, 0);
       return material_indices[args.tri_faces[args.prim_indices.first()]];
     }
-    case PBVH_GRIDS: {
+    case bke::pbvh::Type::Grids: {
       if (args.grid_indices.is_empty()) {
         return 0;
       }
@@ -1400,7 +1399,7 @@ static int material_index_get(const PBVH_GPU_Args &args)
       return material_indices[BKE_subdiv_ccg_grid_to_face_index(*args.subdiv_ccg,
                                                                 args.grid_indices.first())];
     }
-    case PBVH_BMESH:
+    case bke::pbvh::Type::BMesh:
       return 0;
   }
   BLI_assert_unreachable();
@@ -1461,8 +1460,6 @@ static void create_index_grids(const PBVH_GPU_Args &args,
   if (do_coarse) {
     batches.tri_index_coarse = GPU_indexbuf_build(&elb);
     batches.lines_index_coarse = GPU_indexbuf_build(&elb_lines);
-    batches.tris_count_coarse = visible_quad_len;
-    batches.lines_count_coarse = totgrid * display_gridsize * (display_gridsize - 1);
   }
   else {
     batches.tri_index = GPU_indexbuf_build(&elb);
@@ -1473,7 +1470,7 @@ static void create_index_grids(const PBVH_GPU_Args &args,
 void PBVHBatches::create_index(const PBVH_GPU_Args &args)
 {
   switch (args.pbvh_type) {
-    case PBVH_FACES:
+    case bke::pbvh::Type::Mesh:
       lines_index = create_index_faces(args.mesh->edges(),
                                        args.corner_verts,
                                        args.corner_edges,
@@ -1482,10 +1479,10 @@ void PBVHBatches::create_index(const PBVH_GPU_Args &args)
                                        args.hide_poly,
                                        args.prim_indices);
       break;
-    case PBVH_BMESH:
+    case bke::pbvh::Type::BMesh:
       lines_index = create_index_bmesh(args, faces_count);
       break;
-    case PBVH_GRIDS:
+    case bke::pbvh::Type::Grids:
       create_index_grids(args, false, *this);
       if (args.ccg_key.level > coarse_level) {
         create_index_grids(args, true, *this);
@@ -1586,7 +1583,7 @@ gpu::Batch *tris_get(PBVHBatches *batches,
                      const PBVH_GPU_Args &args,
                      bool do_coarse_grids)
 {
-  do_coarse_grids &= args.pbvh_type == PBVH_GRIDS;
+  do_coarse_grids &= args.pbvh_type == bke::pbvh::Type::Grids;
   PBVHBatch &batch = ensure_batch(*batches, attrs, args, do_coarse_grids);
   return batch.tris;
 }
@@ -1596,7 +1593,7 @@ gpu::Batch *lines_get(PBVHBatches *batches,
                       const PBVH_GPU_Args &args,
                       bool do_coarse_grids)
 {
-  do_coarse_grids &= args.pbvh_type == PBVH_GRIDS;
+  do_coarse_grids &= args.pbvh_type == bke::pbvh::Type::Grids;
   PBVHBatch &batch = ensure_batch(*batches, attrs, args, do_coarse_grids);
   return batch.lines;
 }

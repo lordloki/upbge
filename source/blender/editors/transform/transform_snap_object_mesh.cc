@@ -374,7 +374,12 @@ eSnapMode snap_polygon_mesh(SnapObjectContext *sctx,
 
   const blender::IndexRange face = mesh_eval->faces()[face_index];
 
-  if (snap_to_flag & SCE_SNAP_TO_EDGE) {
+  if (snap_to_flag &
+      (SCE_SNAP_TO_EDGE | SCE_SNAP_TO_EDGE_MIDPOINT | SCE_SNAP_TO_EDGE_PERPENDICULAR))
+  {
+    /* We return 'Snap to Edge' even if the intent is 'Snap to Edge Midpoitnt' or 'Snap to Edge
+     * Perpendicular'. This avoids complexity. These snap points will be tested in
+     * `snap_edge_points`. */
     elem = SCE_SNAP_TO_EDGE;
     BLI_assert(nearest2d.edges != nullptr);
     const int *face_edges = &nearest2d.corner_edges[face.start()];
@@ -413,11 +418,11 @@ eSnapMode snap_edge_points_mesh(SnapObjectContext *sctx,
                                 const Object *ob_eval,
                                 const ID *id,
                                 const float4x4 &obmat,
-                                float dist_pex_sq_orig,
-                                int edge)
+                                float dist_px_sq_orig,
+                                int edge_index)
 {
   SnapData_Mesh nearest2d(sctx, reinterpret_cast<const Mesh *>(id), obmat);
-  eSnapMode elem = nearest2d.snap_edge_points_impl(sctx, edge, dist_pex_sq_orig);
+  eSnapMode elem = nearest2d.snap_edge_points_impl(sctx, edge_index, dist_px_sq_orig);
   if (nearest2d.nearest_point.index != -2) {
     nearest2d.register_result(sctx, ob_eval, id);
   }

@@ -62,11 +62,11 @@
 
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
-#include "BKE_action.h" /* pose functions */
+#include "BKE_action.hh" /* pose functions */
 #include "BKE_animsys.h"
 #include "BKE_appdir.hh"
 #include "BKE_armature.hh"

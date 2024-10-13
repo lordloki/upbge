@@ -107,7 +107,7 @@ struct tGPsdata {
   /** For operations that require occlusion testing. */
   ViewDepths *depths;
   /** for using the camera rect within the 3d view. */
-  rctf *subrect;
+  const rctf *subrect;
   rctf subrect_data;
 
   /** settings to pass to gp_points_to_xy(). */
@@ -1635,7 +1635,7 @@ static void annotation_paint_initstroke(tGPsdata *p,
       if (rv3d->persp == RV3D_CAMOB) {
         /* no shift */
         ED_view3d_calc_camera_border(
-            p->scene, depsgraph, p->region, v3d, rv3d, &p->subrect_data, true);
+            p->scene, depsgraph, p->region, v3d, rv3d, true, &p->subrect_data);
         p->subrect = &p->subrect_data;
       }
     }
@@ -2519,7 +2519,8 @@ static int annotation_draw_modal(bContext *C, wmOperator *op, const wmEvent *eve
        * - Since this operator is non-modal, we can just call it here, and keep going...
        * - This operator is especially useful when animating
        */
-      WM_operator_name_call(C, "GPENCIL_OT_blank_frame_add", WM_OP_EXEC_DEFAULT, nullptr, event);
+      WM_operator_name_call(
+          C, "GPENCIL_OT_layer_annotation_add", WM_OP_EXEC_DEFAULT, nullptr, event);
       estate = OPERATOR_RUNNING_MODAL;
     }
     else {

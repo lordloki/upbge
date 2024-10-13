@@ -44,7 +44,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .max(6500.0f)
       .subtype(PROP_COLOR_TEMPERATURE);
   b.add_input<decl::String>("Temperature Attribute").default_value("temperature");
-  b.add_input<decl::Float>("Weight").unavailable();
+  b.add_input<decl::Float>("Weight").available(false);
   b.add_output<decl::Shader>("Volume").translation_context(BLT_I18NCONTEXT_ID_ID);
 }
 
@@ -169,5 +169,5 @@ void register_node_type_sh_volume_principled()
   blender::bke::node_type_size_preset(&ntype, blender::bke::eNodeSizePreset::Large);
   ntype.gpu_fn = file_ns::node_shader_gpu_volume_principled;
 
-  blender::bke::nodeRegisterType(&ntype);
+  blender::bke::node_register_type(&ntype);
 }

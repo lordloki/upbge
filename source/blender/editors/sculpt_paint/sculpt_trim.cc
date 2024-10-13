@@ -38,7 +38,10 @@
 #include "tools/bmesh_intersect.hh"
 
 #include "paint_intern.hh"
+#include "sculpt_face_set.hh"
+#include "sculpt_gesture.hh"
 #include "sculpt_intern.hh"
+#include "sculpt_islands.hh"
 
 namespace blender::ed::sculpt_paint::trim {
 
@@ -217,7 +220,7 @@ static void calculate_depth(gesture::GestureData &gesture_data,
   float depth_front = FLT_MAX;
   float depth_back = -FLT_MAX;
 
-  const Span<float3> positions = BKE_pbvh_get_vert_positions(*ss.pbvh);
+  const Span<float3> positions = bke::pbvh::vert_positions_eval(*vc.depsgraph, *vc.obact);
   const float4x4 &object_to_world = vc.obact->object_to_world();
 
   for (const int i : positions.index_range()) {
@@ -505,10 +508,12 @@ static void generate_geometry(gesture::GestureData &gesture_data)
 
 static void gesture_begin(bContext &C, wmOperator &op, gesture::GestureData &gesture_data)
 {
+  const Scene &scene = *CTX_data_scene(&C);
   Object *object = gesture_data.vc.obact;
   SculptSession &ss = *object->sculpt;
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(*object);
 
-  switch (ss.pbvh->type()) {
+  switch (pbvh.type()) {
     case bke::pbvh::Type::Mesh:
       face_set::create_face_sets_mesh(*object);
       break;
@@ -520,7 +525,7 @@ static void gesture_begin(bContext &C, wmOperator &op, gesture::GestureData &ges
   generate_geometry(gesture_data);
   islands::invalidate(ss);
   BKE_sculpt_update_object_for_edit(depsgraph, gesture_data.vc.obact, false);
-  undo::geometry_begin(*gesture_data.vc.obact, &op);
+  undo::geometry_begin(scene, *gesture_data.vc.obact, &op);
 }
 
 static int bm_face_isect_pair(BMFace *f, void * /*user_data*/)
@@ -656,6 +661,7 @@ static void gesture_end(bContext & /*C*/, gesture::GestureData &gesture_data)
   free_geometry(gesture_data);
 
   undo::geometry_end(*object);
+  BKE_sculptsession_free_pbvh(*object);
   BKE_mesh_batch_cache_dirty_tag(mesh, BKE_MESH_BATCH_DIRTY_ALL);
   DEG_id_tag_update(&gesture_data.vc.obact->id, ID_RECALC_GEOMETRY);
 }
@@ -756,14 +762,14 @@ static void report_invalid_mode(const blender::bke::pbvh::Type pbvh_type, Report
 static bool can_exec(const bContext &C, ReportList &reports)
 {
   const Object &object = *CTX_data_active_object(&C);
-  const SculptSession &ss = *object.sculpt;
-  if (ss.pbvh->type() != bke::pbvh::Type::Mesh) {
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
+  if (pbvh.type() != bke::pbvh::Type::Mesh) {
     /* Not supported in Multires and Dyntopo. */
-    report_invalid_mode(ss.pbvh->type(), reports);
+    report_invalid_mode(pbvh.type(), reports);
     return false;
   }
 
-  if (ss.totvert == 0) {
+  if (static_cast<const Mesh *>(object.data)->faces_num == 0) {
     /* No geometry to trim or to detect a valid position for the trimming shape. */
     return false;
   }
@@ -775,10 +781,9 @@ static void initialize_cursor_info(bContext &C,
                                    const wmOperator &op,
                                    gesture::GestureData &gesture_data)
 {
-  const Object &ob = *CTX_data_active_object(&C);
-  SculptSession &ss = *ob.sculpt;
+  Object &ob = *CTX_data_active_object(&C);
 
-  SCULPT_vertex_random_access_ensure(ss);
+  SCULPT_vertex_random_access_ensure(ob);
 
   int mval[2];
   RNA_int_get_array(op.ptr, "location", mval);

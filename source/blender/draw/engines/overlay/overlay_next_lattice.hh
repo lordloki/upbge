@@ -28,11 +28,11 @@ class Lattices {
   void begin_sync(Resources &res, const State &state)
   {
     const DRWState pass_state = DRW_STATE_WRITE_COLOR | DRW_STATE_WRITE_DEPTH |
-                                DRW_STATE_DEPTH_LESS_EQUAL | state.clipping_state;
+                                DRW_STATE_DEPTH_LESS_EQUAL;
 
     auto create_sub_pass = [&](const char *name, GPUShader *shader, bool add_weight_tex) {
       PassMain::Sub &sub_pass = ps_.sub(name);
-      sub_pass.state_set(pass_state);
+      sub_pass.state_set(pass_state, state.clipping_plane_count);
       sub_pass.shader_set(shader);
       sub_pass.bind_ubo("globalsBlock", &res.globals_buf);
       if (add_weight_tex) {
@@ -52,19 +52,14 @@ class Lattices {
 
   void edit_object_sync(Manager &manager, const ObjectRef &ob_ref, Resources &res)
   {
+    ResourceHandle res_handle = manager.unique_handle(ob_ref);
     {
       gpu::Batch *geom = DRW_cache_lattice_wire_get(ob_ref.object, true);
-      if (geom) {
-        ResourceHandle res_handle = manager.resource_handle(ob_ref);
-        edit_lattice_wire_ps_->draw(geom, res_handle, res.select_id(ob_ref).get());
-      }
+      edit_lattice_wire_ps_->draw(geom, res_handle, res.select_id(ob_ref).get());
     }
     {
       gpu::Batch *geom = DRW_cache_lattice_vert_overlay_get(ob_ref.object);
-      if (geom) {
-        ResourceHandle res_handle = manager.resource_handle(ob_ref);
-        edit_lattice_point_ps_->draw(geom, res_handle, res.select_id(ob_ref).get());
-      }
+      edit_lattice_point_ps_->draw(geom, res_handle, res.select_id(ob_ref).get());
     }
   }
 

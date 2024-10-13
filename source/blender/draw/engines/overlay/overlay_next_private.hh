@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "BKE_movieclip.h"
+
 #include "BLI_function_ref.hh"
 
 #include "GPU_matrix.hh"
@@ -21,6 +23,8 @@
 
 #include "../select/select_instance.hh"
 #include "overlay_shader_shared.h"
+
+#include "draw_common.hh"
 
 /* Needed for BoneInstanceData. */
 #include "overlay_private.hh"
@@ -40,24 +44,39 @@ struct State {
   const ViewLayer *view_layer;
   const Scene *scene;
   const View3D *v3d;
+  const SpaceLink *space_data;
+  const ARegion *region;
   const RegionView3D *rv3d;
   const Base *active_base;
+  DRWTextStore *dt;
   View3DOverlay overlay;
   float pixelsize;
-  enum eSpace_Type space_type;
-  enum eContextObjectMode ctx_mode;
-  enum eObjectMode object_mode;
+  eSpace_Type space_type;
+  eContextObjectMode ctx_mode;
+  eObjectMode object_mode;
+  const Object *object_active;
   bool clear_in_front;
   bool use_in_front;
   bool is_wireframe_mode;
   bool hide_overlays;
   bool xray_enabled;
   bool xray_enabled_and_not_wire;
+  /* Brings the active pose armature in front of all objects. */
+  bool do_pose_xray;
+  /* Add a veil on top of all surfaces to make the active pose armature pop out. */
+  bool do_pose_fade_geom;
   float xray_opacity;
   short v3d_flag;     /* TODO: move to #View3DOverlay. */
   short v3d_gridflag; /* TODO: move to #View3DOverlay. */
   int cfra;
-  DRWState clipping_state;
+  float3 camera_position;
+  float3 camera_forward;
+  int clipping_plane_count;
+
+  /* Active Image properties. Only valid image space only. */
+  int2 image_size;
+  float2 image_uv_aspect;
+  float2 image_aspect;
 
   float view_dist_get(const float4x4 &winmat) const
   {
@@ -91,6 +110,21 @@ class ShapeCache {
   using BatchPtr = std::unique_ptr<gpu::Batch, BatchDeleter>;
 
  public:
+  BatchPtr bone_box;
+  BatchPtr bone_box_wire;
+  BatchPtr bone_envelope;
+  BatchPtr bone_envelope_wire;
+  BatchPtr bone_octahedron;
+  BatchPtr bone_octahedron_wire;
+  BatchPtr bone_sphere;
+  BatchPtr bone_sphere_wire;
+  BatchPtr bone_stick;
+
+  BatchPtr bone_degrees_of_freedom;
+  BatchPtr bone_degrees_of_freedom_wire;
+
+  BatchPtr grid;
+
   BatchPtr quad_wire;
   BatchPtr quad_solid;
   BatchPtr plain_axes;
@@ -167,10 +201,30 @@ class ShaderModule {
 
  public:
   /** Shaders */
+  ShaderPtr attribute_viewer_mesh;
+  ShaderPtr attribute_viewer_pointcloud;
+  ShaderPtr attribute_viewer_curve;
+  ShaderPtr attribute_viewer_curves;
+
   ShaderPtr anti_aliasing = shader("overlay_antialiasing");
+  ShaderPtr armature_degrees_of_freedom;
   ShaderPtr background_fill = shader("overlay_background");
   ShaderPtr background_clip_bound = shader("overlay_clipbound");
+  ShaderPtr curve_edit_points;
+  ShaderPtr curve_edit_line;
+  ShaderPtr curve_edit_handles = shader("overlay_edit_curves_handle_next");
+  ShaderPtr extra_point;
+  ShaderPtr facing;
   ShaderPtr grid = shader("overlay_grid");
+  ShaderPtr grid_background;
+  ShaderPtr grid_grease_pencil = shader("overlay_gpencil_canvas");
+  ShaderPtr grid_image;
+  ShaderPtr legacy_curve_edit_wires;
+  ShaderPtr legacy_curve_edit_normals = shader("overlay_edit_curve_normals");
+  ShaderPtr legacy_curve_edit_handles = shader("overlay_edit_curve_handle_next");
+  ShaderPtr legacy_curve_edit_points;
+  ShaderPtr motion_path_line = shader("overlay_motion_path_line_next");
+  ShaderPtr motion_path_vert = shader("overlay_motion_path_point");
   ShaderPtr mesh_analysis;
   ShaderPtr mesh_edit_depth;
   ShaderPtr mesh_edit_edge = shader("overlay_edit_mesh_edge_next");
@@ -181,18 +235,73 @@ class ShaderModule {
   ShaderPtr mesh_face_normal, mesh_face_normal_subdiv;
   ShaderPtr mesh_loop_normal, mesh_loop_normal_subdiv;
   ShaderPtr mesh_vert_normal;
+  ShaderPtr outline_prepass_mesh;
+  ShaderPtr outline_prepass_wire = shader("overlay_outline_prepass_wire_next");
+  ShaderPtr outline_prepass_curves;
+  ShaderPtr outline_prepass_pointcloud;
+  ShaderPtr outline_prepass_gpencil;
+  ShaderPtr outline_detect = shader("overlay_outline_detect");
+  ShaderPtr particle_edit_vert;
+  ShaderPtr particle_edit_edge;
+  ShaderPtr paint_region_edge;
+  ShaderPtr paint_region_face;
+  ShaderPtr paint_region_vert;
+  ShaderPtr paint_texture;
+  ShaderPtr paint_weight;
+  ShaderPtr paint_weight_fake_shading; /* TODO(fclem): Specialization constant. */
+  ShaderPtr sculpt_mesh;
+  ShaderPtr sculpt_curves;
+  ShaderPtr sculpt_curves_cage;
+  ShaderPtr uniform_color;
+  ShaderPtr uniform_color_batch;
+  ShaderPtr uv_analysis_stretch_angle;
+  ShaderPtr uv_analysis_stretch_area;
+  ShaderPtr uv_brush_stencil;
+  ShaderPtr uv_edit_edge = shader("overlay_edit_uv_edges_next");
+  ShaderPtr uv_edit_face;
+  ShaderPtr uv_edit_facedot;
+  ShaderPtr uv_edit_vert;
+  ShaderPtr uv_image_borders;
+  ShaderPtr uv_paint_mask;
+  ShaderPtr uv_wireframe = shader("overlay_wireframe_uv");
+  ShaderPtr xray_fade;
 
   /** Selectable Shaders */
+  ShaderPtr armature_envelope_fill;
+  ShaderPtr armature_envelope_outline;
+  ShaderPtr armature_shape_outline;
+  ShaderPtr armature_shape_fill;
+  ShaderPtr armature_shape_wire;
   ShaderPtr armature_sphere_outline;
-  ShaderPtr depth_mesh;
+  ShaderPtr armature_sphere_fill;
+  ShaderPtr armature_stick;
+  ShaderPtr armature_wire;
+  ShaderPtr depth_curves = selectable_shader("overlay_depth_curves");
+  ShaderPtr depth_grease_pencil = selectable_shader("overlay_depth_gpencil");
+  ShaderPtr depth_mesh = selectable_shader("overlay_depth_mesh");
+  ShaderPtr depth_mesh_conservative = selectable_shader("overlay_depth_mesh_conservative");
+  ShaderPtr depth_point_cloud = selectable_shader("overlay_depth_pointcloud");
   ShaderPtr extra_grid;
   ShaderPtr extra_shape;
   ShaderPtr extra_wire_object;
   ShaderPtr extra_wire;
   ShaderPtr extra_loose_points;
   ShaderPtr extra_ground_line;
+  ShaderPtr fluid_grid_lines_flags;
+  ShaderPtr fluid_grid_lines_flat;
+  ShaderPtr fluid_grid_lines_range;
+  ShaderPtr fluid_velocity_streamline;
+  ShaderPtr fluid_velocity_mac;
+  ShaderPtr fluid_velocity_needle;
+  ShaderPtr image_plane;
   ShaderPtr lattice_points;
   ShaderPtr lattice_wire;
+  ShaderPtr particle_dot;
+  ShaderPtr particle_shape;
+  ShaderPtr particle_hair;
+  ShaderPtr wireframe_mesh;
+  ShaderPtr wireframe_curve;
+  ShaderPtr wireframe_points; /* Draw objects without edges for the wireframe overlay. */
 
   ShaderModule(const SelectionType selection_type, const bool clipping_enabled);
 
@@ -216,17 +325,33 @@ class ShaderModule {
 struct Resources : public select::SelectMap {
   ShaderModule &shaders;
 
-  Framebuffer overlay_fb = {"overlay_fb"};
-  Framebuffer overlay_in_front_fb = {"overlay_in_front_fb"};
+  /* Overlay Color. */
   Framebuffer overlay_color_only_fb = {"overlay_color_only_fb"};
+  /* Overlay Color, Line Data. */
+  Framebuffer overlay_line_only_fb = {"overlay_line_only_fb"};
+  /* Depth, Overlay Color. */
+  Framebuffer overlay_fb = {"overlay_fb"};
+  /* Depth, Overlay Color, Line Data. */
   Framebuffer overlay_line_fb = {"overlay_line_fb"};
+  /* Depth In-Front, Overlay Color. */
+  Framebuffer overlay_in_front_fb = {"overlay_in_front_fb"};
+  /* Depth In-Front, Overlay Color, Line Data. */
   Framebuffer overlay_line_in_front_fb = {"overlay_line_in_front_fb"};
+
+  /* Output Color. */
   Framebuffer overlay_output_fb = {"overlay_output_fb"};
+
+  /* Render Frame-buffers. Only used for multiplicative blending on top of the render. */
+  /* TODO(fclem): Remove the usage of these somehow. This is against design. */
+  GPUFrameBuffer *render_fb = nullptr;
+  GPUFrameBuffer *render_in_front_fb = nullptr;
 
   /* Target containing line direction and data for line expansion and anti-aliasing. */
   TextureFromPool line_tx = {"line_tx"};
   /* Target containing overlay color before anti-aliasing. */
   TextureFromPool overlay_tx = {"overlay_tx"};
+  /* Target containing depth of overlays when xray is enabled. */
+  TextureFromPool xray_depth_tx = {"xray_depth_tx"};
 
   /* Texture that are usually allocated inside. These are fallback when they aren't.
    * They are then wrapped inside the #TextureRefs below. */
@@ -243,13 +368,40 @@ struct Resources : public select::SelectMap {
   GPUUniformBuf *globals_buf;
   TextureRef weight_ramp_tx;
   /* Wrappers around #DefaultTextureList members. */
-  TextureRef depth_tx;
   TextureRef depth_in_front_tx;
   TextureRef color_overlay_tx;
   TextureRef color_render_tx;
+  /**
+   * Scene depth buffer that can also be used as render target for overlays.
+   *
+   * Can only be bound as a texture if either:
+   * - the current frame-buffer has no depth buffer attached.
+   * - `state.xray_enabled` is true.
+   */
+  TextureRef depth_tx;
+  /**
+   * Depth target.
+   * Can either be default depth buffer texture from #DefaultTextureList
+   * or `xray_depth_tx` if X-ray is enabled.
+   */
+  TextureRef depth_target_tx;
+  TextureRef depth_target_in_front_tx;
+
+  Vector<MovieClip *> bg_movie_clips;
 
   Resources(const SelectionType selection_type_, ShaderModule &shader_module)
       : select::SelectMap(selection_type_), shaders(shader_module){};
+
+  ~Resources()
+  {
+    free_movieclips_textures();
+  }
+
+  void begin_sync()
+  {
+    SelectMap::begin_sync();
+    free_movieclips_textures();
+  }
 
   ThemeColorID object_wire_theme_id(const ObjectRef &ob_ref, const State &state) const
   {
@@ -335,6 +487,29 @@ struct Resources : public select::SelectMap {
     ThemeColorID theme_id = object_wire_theme_id(ob_ref, state);
     return background_blend_color(theme_id);
   }
+
+  float4 background_color_get(const State &state)
+  {
+    if (state.v3d->shading.background_type == V3D_SHADING_BACKGROUND_WORLD) {
+      if (state.scene->world) {
+        return float4(float3(&state.scene->world->horr));
+      }
+    }
+    else if (state.v3d->shading.background_type == V3D_SHADING_BACKGROUND_VIEWPORT) {
+      return state.v3d->shading.background_color;
+    }
+    float4 color;
+    UI_GetThemeColor3fv(TH_BACK, color);
+    return color;
+  }
+
+  void free_movieclips_textures()
+  {
+    /* Free Movie clip textures after rendering */
+    for (MovieClip *clip : bg_movie_clips) {
+      BKE_movieclip_free_gputexture(clip);
+    }
+  }
 };
 
 /**
@@ -368,6 +543,21 @@ template<typename InstanceDataT> struct ShapeInstanceBuf : private select::Selec
     data_buf.push_update();
     pass.bind_ssbo("data_buf", &data_buf);
     pass.draw(shape, data_buf.size());
+  }
+
+  void end_sync(PassSimple::Sub &pass,
+                gpu::Batch *shape,
+                GPUPrimType primitive_type,
+                uint primitive_len)
+  {
+    if (data_buf.is_empty()) {
+      return;
+    }
+    this->select_bind(pass);
+    data_buf.push_update();
+    pass.bind_ssbo("data_buf", &data_buf);
+    pass.draw_expand(
+        shape, primitive_type, primitive_len, data_buf.size(), ResourceHandle(0), uint(0));
   }
 };
 
@@ -414,15 +604,12 @@ struct PointPrimitiveBuf : public VertexPrimitiveBuf {
   {
   }
 
-  void append(const float3 &position, const float4 &color)
-  {
-    VertexPrimitiveBuf::append(position, color);
-  }
-
-  void append(const float3 &position, const float4 &color, select::ID select_id)
+  void append(const float3 &position,
+              const float4 &color,
+              select::ID select_id = select::SelectMap::select_invalid_id())
   {
     select_buf.select_append(select_id);
-    append(position, color);
+    VertexPrimitiveBuf::append(position, color);
   }
 
   void append(const float3 &position, const int color_id, select::ID select_id)
@@ -445,19 +632,20 @@ struct LinePrimitiveBuf : public VertexPrimitiveBuf {
   {
   }
 
-  void append(const float3 &start, const float3 &end, const float4 &color)
+  void append(const float3 &start,
+              const float3 &end,
+              const float4 &color,
+              select::ID select_id = select::SelectMap::select_invalid_id())
   {
+    select_buf.select_append(select_id);
     VertexPrimitiveBuf::append(start, color);
     VertexPrimitiveBuf::append(end, color);
   }
 
-  void append(const float3 &start, const float3 &end, const float4 &color, select::ID select_id)
-  {
-    select_buf.select_append(select_id);
-    append(start, end, color);
-  }
-
-  void append(const float3 &start, const float3 &end, const int color_id, select::ID select_id)
+  void append(const float3 &start,
+              const float3 &end,
+              const int color_id,
+              select::ID select_id = select::SelectMap::select_invalid_id())
   {
     this->color_id = color_id;
     append(start, end, float4(), select_id);

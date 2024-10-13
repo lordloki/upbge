@@ -165,7 +165,7 @@ void imapaint_image_update(
 
   /* When buffer is partial updated the planes should be set to a larger value than 8. This will
    * make sure that partial updating is working but uses more GPU memory as the gpu texture will
-   * have 4 channels. When so the whole texture needs to be reuploaded to the GPU using the new
+   * have 4 channels. When so the whole texture needs to be re-uploaded to the GPU using the new
    * texture format. */
   if (ibuf != nullptr && ibuf->planes == 8) {
     ibuf->planes = 32;
@@ -329,7 +329,7 @@ static bool image_paint_2d_clone_poll(bContext *C)
   Brush *brush = image_paint_brush(C);
 
   if (!CTX_wm_region_view3d(C) && ED_image_tools_paint_poll(C)) {
-    if (brush && (brush->imagepaint_tool == PAINT_TOOL_CLONE)) {
+    if (brush && (brush->image_brush_type == IMAGE_PAINT_BRUSH_TYPE_CLONE)) {
       if (brush->clone.image) {
         return true;
       }
@@ -349,8 +349,10 @@ bool paint_use_opacity_masking(Brush *brush)
 {
   return ((brush->flag & BRUSH_AIRBRUSH) || (brush->flag & BRUSH_DRAG_DOT) ||
                   (brush->flag & BRUSH_ANCHORED) ||
-                  ELEM(brush->imagepaint_tool, PAINT_TOOL_SMEAR, PAINT_TOOL_SOFTEN) ||
-                  (brush->imagepaint_tool == PAINT_TOOL_FILL) ||
+                  ELEM(brush->image_brush_type,
+                       IMAGE_PAINT_BRUSH_TYPE_SMEAR,
+                       IMAGE_PAINT_BRUSH_TYPE_SOFTEN) ||
+                  (brush->image_brush_type == IMAGE_PAINT_BRUSH_TYPE_FILL) ||
                   (brush->flag & BRUSH_USE_GRADIENT) ||
                   (brush->mtex.tex && !ELEM(brush->mtex.brush_map_mode,
                                             MTEX_MAP_MODE_TILED,
@@ -366,11 +368,11 @@ void paint_brush_color_get(Scene *scene,
                            bool invert,
                            float distance,
                            float pressure,
-                           float color[3],
-                           ColorManagedDisplay *display)
+                           ColorManagedDisplay *display,
+                           float r_color[3])
 {
   if (invert) {
-    copy_v3_v3(color, BKE_brush_secondary_color_get(scene, br));
+    copy_v3_v3(r_color, BKE_brush_secondary_color_get(scene, br));
   }
   else {
     if (br->flag & BRUSH_USE_GRADIENT) {
@@ -391,14 +393,14 @@ void paint_brush_color_get(Scene *scene,
       }
       /* Gradient / Color-band colors are not considered #PROP_COLOR_GAMMA.
        * Brush colors are expected to be in sRGB though. */
-      IMB_colormanagement_scene_linear_to_srgb_v3(color, color_gr);
+      IMB_colormanagement_scene_linear_to_srgb_v3(r_color, color_gr);
     }
     else {
-      copy_v3_v3(color, BKE_brush_color_get(scene, br));
+      copy_v3_v3(r_color, BKE_brush_color_get(scene, br));
     }
   }
   if (color_correction) {
-    IMB_colormanagement_display_to_scene_linear_v3(color, display);
+    IMB_colormanagement_display_to_scene_linear_v3(r_color, display);
   }
 }
 
@@ -516,6 +518,7 @@ static void grab_clone_apply(bContext *C, wmOperator *op)
 
   RNA_float_get_array(op->ptr, "delta", delta);
   add_v2_v2(brush->clone.offset, delta);
+  BKE_brush_tag_unsaved_changes(brush);
   ED_region_tag_redraw(CTX_wm_region(C));
 }
 
@@ -567,6 +570,7 @@ static int grab_clone_modal(bContext *C, wmOperator *op, const wmEvent *event)
       RNA_float_set_array(op->ptr, "delta", delta);
 
       copy_v2_v2(brush->clone.offset, cmv->startoffset);
+      BKE_brush_tag_unsaved_changes(brush);
 
       grab_clone_apply(C, op);
       break;
@@ -1036,6 +1040,7 @@ static int brush_colors_flip_exec(bContext *C, wmOperator * /*op*/)
   }
   else if (br) {
     swap_v3_v3(br->rgb, br->secondary_rgb);
+    BKE_brush_tag_unsaved_changes(br);
   }
   else {
     return OPERATOR_CANCELLED;
@@ -1050,7 +1055,7 @@ static bool brush_colors_flip_poll(bContext *C)
 {
   if (ED_image_tools_paint_poll(C)) {
     Brush *br = image_paint_brush(C);
-    if (ELEM(br->imagepaint_tool, PAINT_TOOL_DRAW, PAINT_TOOL_FILL)) {
+    if (ELEM(br->image_brush_type, IMAGE_PAINT_BRUSH_TYPE_DRAW, IMAGE_PAINT_BRUSH_TYPE_FILL)) {
       return true;
     }
   }
@@ -1058,6 +1063,11 @@ static bool brush_colors_flip_poll(bContext *C)
     Object *ob = CTX_data_active_object(C);
     if (ob != nullptr) {
       if (ob->mode & (OB_MODE_VERTEX_PAINT | OB_MODE_TEXTURE_PAINT | OB_MODE_SCULPT)) {
+        return true;
+      }
+      if (blender::ed::greasepencil::grease_pencil_painting_poll(C) ||
+          blender::ed::greasepencil::grease_pencil_vertex_painting_poll(C))
+      {
         return true;
       }
     }
@@ -1086,7 +1096,7 @@ void PAINT_OT_brush_colors_flip(wmOperatorType *ot)
 /** \name Texture Paint Bucket Fill Operator
  * \{ */
 
-void ED_imapaint_bucket_fill(bContext *C, float color[3], wmOperator *op, const int mouse[2])
+void ED_imapaint_bucket_fill(bContext *C, float const color[3], wmOperator *op, const int mouse[2])
 {
   SpaceImage *sima = CTX_wm_space_image(C);
 

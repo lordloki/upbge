@@ -19,7 +19,7 @@
 
 #include <Python.h>
 
-#include "../mathutils/mathutils.h"
+#include "../mathutils/mathutils.hh"
 
 #include "DNA_meshdata_types.h"
 
@@ -33,10 +33,10 @@
 #include "BKE_deform.hh"
 
 #include "bmesh.hh"
-#include "bmesh_py_types_meshdata.h"
+#include "bmesh_py_types_meshdata.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 /* Mesh Loop UV
  * ************ */
@@ -731,7 +731,7 @@ static PyObject *bpy_bmdeformvert_get(BPy_BMDeformVert *self, PyObject *args)
     return PyFloat_FromDouble(dw->weight);
   }
 
-  return Py_INCREF_RET(def);
+  return Py_NewRef(def);
 }
 
 PyDoc_STRVAR(

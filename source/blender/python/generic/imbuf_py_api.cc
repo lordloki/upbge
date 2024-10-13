@@ -14,12 +14,12 @@
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
-#include "py_capi_utils.h"
+#include "py_capi_utils.hh"
 
-#include "python_compat.h"
-#include "python_utildefines.h"
+#include "python_compat.hh"
+#include "python_utildefines.hh"
 
-#include "imbuf_py_api.h" /* own include */
+#include "imbuf_py_api.hh" /* own include */
 
 #include "../../imbuf/IMB_imbuf.hh"
 #include "../../imbuf/IMB_imbuf_types.hh"
@@ -117,10 +117,10 @@ static PyObject *py_imbuf_resize(Py_ImBuf *self, PyObject *args, PyObject *kw)
   }
 
   if (method.value_found == FAST) {
-    IMB_scalefastImBuf(self->ibuf, UNPACK2(size));
+    IMB_scale(self->ibuf, UNPACK2(size), IMBScaleFilter::Nearest, false);
   }
   else if (method.value_found == BILINEAR) {
-    IMB_scaleImBuf(self->ibuf, UNPACK2(size));
+    IMB_scale(self->ibuf, UNPACK2(size), IMBScaleFilter::Box, false);
   }
   else {
     BLI_assert_unreachable();

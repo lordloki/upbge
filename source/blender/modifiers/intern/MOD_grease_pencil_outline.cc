@@ -149,7 +149,8 @@ static bke::CurvesGeometry reorder_cyclic_curve_points(const bke::CurvesGeometry
    * source indices are not ordered. */
   bke::CurvesGeometry dst_curves(src_curves);
   bke::MutableAttributeAccessor dst_attributes = dst_curves.attributes_for_write();
-  bke::gather_attributes(src_attributes, bke::AttrDomain::Point, {}, {}, indices, dst_attributes);
+  bke::gather_attributes(
+      src_attributes, bke::AttrDomain::Point, bke::AttrDomain::Point, {}, indices, dst_attributes);
 
   return dst_curves;
 }
@@ -257,7 +258,7 @@ static void modify_geometry_set(ModifierData *md,
   const Vector<LayerDrawingInfo> drawings = modifier::greasepencil::get_drawing_infos_by_layer(
       grease_pencil, layer_mask, frame);
   threading::parallel_for_each(drawings, [&](const LayerDrawingInfo &info) {
-    const Layer &layer = *grease_pencil.layer(info.layer_index);
+    const Layer &layer = grease_pencil.layer(info.layer_index);
     const float4x4 viewmat = viewinv * layer.to_world_space(*ctx->object);
     modify_drawing(omd, *ctx, *info.drawing, viewmat);
   });

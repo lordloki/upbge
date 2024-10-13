@@ -49,7 +49,7 @@
 #include "CLG_log.h"
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 using blender::Vector;
@@ -548,7 +548,7 @@ int /*eContextResult*/ CTX_data_get(const bContext *C,
     *r_type = result.type;
   }
   else {
-    memset(r_ptr, 0, sizeof(*r_ptr));
+    *r_ptr = {};
     r_lb->clear();
     *r_str = "";
     *r_type = 0;
@@ -1235,7 +1235,7 @@ enum eContextObjectMode CTX_data_mode_enum_ex(const Object *obedit,
       if (object_mode & OB_MODE_PARTICLE_EDIT) {
         return CTX_MODE_PARTICLE;
       }
-      if (object_mode & OB_MODE_PAINT_GPENCIL_LEGACY) {
+      if (object_mode & OB_MODE_PAINT_GREASE_PENCIL) {
         if (ob->type == OB_GPENCIL_LEGACY) {
           return CTX_MODE_PAINT_GPENCIL_LEGACY;
         }
@@ -1246,7 +1246,7 @@ enum eContextObjectMode CTX_data_mode_enum_ex(const Object *obedit,
       if (object_mode & OB_MODE_EDIT_GPENCIL_LEGACY) {
         return CTX_MODE_EDIT_GPENCIL_LEGACY;
       }
-      if (object_mode & OB_MODE_SCULPT_GPENCIL_LEGACY) {
+      if (object_mode & OB_MODE_SCULPT_GREASE_PENCIL) {
         if (ob->type == OB_GPENCIL_LEGACY) {
           return CTX_MODE_SCULPT_GPENCIL_LEGACY;
         }
@@ -1254,7 +1254,7 @@ enum eContextObjectMode CTX_data_mode_enum_ex(const Object *obedit,
           return CTX_MODE_SCULPT_GREASE_PENCIL;
         }
       }
-      if (object_mode & OB_MODE_WEIGHT_GPENCIL_LEGACY) {
+      if (object_mode & OB_MODE_WEIGHT_GREASE_PENCIL) {
         if (ob->type == OB_GPENCIL_LEGACY) {
           return CTX_MODE_WEIGHT_GPENCIL_LEGACY;
         }
@@ -1262,8 +1262,13 @@ enum eContextObjectMode CTX_data_mode_enum_ex(const Object *obedit,
           return CTX_MODE_WEIGHT_GREASE_PENCIL;
         }
       }
-      if (object_mode & OB_MODE_VERTEX_GPENCIL_LEGACY) {
-        return CTX_MODE_VERTEX_GPENCIL_LEGACY;
+      if (object_mode & OB_MODE_VERTEX_GREASE_PENCIL) {
+        if (ob->type == OB_GPENCIL_LEGACY) {
+          return CTX_MODE_VERTEX_GPENCIL_LEGACY;
+        }
+        if (ob->type == OB_GREASE_PENCIL) {
+          return CTX_MODE_VERTEX_GREASE_PENCIL;
+        }
       }
       if (object_mode & OB_MODE_SCULPT_CURVES) {
         return CTX_MODE_SCULPT_CURVES;
@@ -1313,6 +1318,7 @@ static const char *data_mode_strings[] = {
     "grease_pencil_paint",
     "grease_pencil_sculpt",
     "grease_pencil_weight",
+    "grease_pencil_vertex",
     nullptr,
 };
 BLI_STATIC_ASSERT(ARRAY_SIZE(data_mode_strings) == CTX_MODE_NUM + 1,
@@ -1497,36 +1503,6 @@ bool CTX_data_selected_pose_bones_from_active_object(const bContext *C,
 bool CTX_data_visible_pose_bones(const bContext *C, blender::Vector<PointerRNA> *list)
 {
   return ctx_data_collection_get(C, "visible_pose_bones", list);
-}
-
-bGPdata *CTX_data_gpencil_data(const bContext *C)
-{
-  return static_cast<bGPdata *>(ctx_data_pointer_get(C, "gpencil_data"));
-}
-
-bGPDlayer *CTX_data_active_gpencil_layer(const bContext *C)
-{
-  return static_cast<bGPDlayer *>(ctx_data_pointer_get(C, "active_gpencil_layer"));
-}
-
-bGPDframe *CTX_data_active_gpencil_frame(const bContext *C)
-{
-  return static_cast<bGPDframe *>(ctx_data_pointer_get(C, "active_gpencil_frame"));
-}
-
-bool CTX_data_visible_gpencil_layers(const bContext *C, blender::Vector<PointerRNA> *list)
-{
-  return ctx_data_collection_get(C, "visible_gpencil_layers", list);
-}
-
-bool CTX_data_editable_gpencil_layers(const bContext *C, blender::Vector<PointerRNA> *list)
-{
-  return ctx_data_collection_get(C, "editable_gpencil_layers", list);
-}
-
-bool CTX_data_editable_gpencil_strokes(const bContext *C, blender::Vector<PointerRNA> *list)
-{
-  return ctx_data_collection_get(C, "editable_gpencil_strokes", list);
 }
 
 const AssetLibraryReference *CTX_wm_asset_library_ref(const bContext *C)

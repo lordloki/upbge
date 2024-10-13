@@ -144,7 +144,7 @@ def _fake_module(mod_name, mod_path, speedy=True):
 
     try:
         ast_data = ast.parse(data, filename=mod_path)
-    except BaseException:
+    except Exception:
         print("Syntax error 'ast.parse' can't read:", repr(mod_path))
         import traceback
         traceback.print_exc()
@@ -166,7 +166,7 @@ def _fake_module(mod_name, mod_path, speedy=True):
             mod.bl_info = ast.literal_eval(body.value)
             mod.__file__ = mod_path
             mod.__time__ = os.path.getmtime(mod_path)
-        except:
+        except Exception:
             print("AST error parsing bl_info for:", repr(mod_path))
             import traceback
             traceback.print_exc()
@@ -369,7 +369,7 @@ def enable(module_name, *, default_set=False, persistent=False, handle_error=Non
             # in most cases the caller should 'check()' first.
             try:
                 mod.unregister()
-            except BaseException as ex:
+            except Exception as ex:
                 print("Exception in module unregister():", (mod_file or module_name))
                 handle_error(ex)
                 return None
@@ -382,7 +382,7 @@ def enable(module_name, *, default_set=False, persistent=False, handle_error=Non
 
             try:
                 importlib.reload(mod)
-            except BaseException as ex:
+            except Exception as ex:
                 handle_error(ex)
                 del sys.modules[module_name]
                 return None
@@ -420,7 +420,7 @@ def enable(module_name, *, default_set=False, persistent=False, handle_error=Non
                 )
             mod.__time__ = os.path.getmtime(mod_file)
             mod.__addon_enabled__ = False
-        except BaseException as ex:
+        except Exception as ex:
             # If the add-on doesn't exist, don't print full trace-back because the back-trace is in this case
             # is verbose without any useful details. A missing path is better communicated in a short message.
             # Account for `ImportError` & `ModuleNotFoundError`.
@@ -486,7 +486,7 @@ def enable(module_name, *, default_set=False, persistent=False, handle_error=Non
         # 3) Try run the modules register function.
         try:
             mod.register()
-        except BaseException as ex:
+        except Exception as ex:
             print("Exception in module register():", (mod_file or module_name))
             handle_error(ex)
             del sys.modules[module_name]
@@ -535,7 +535,7 @@ def disable(module_name, *, default_set=False, handle_error=None):
 
         try:
             mod.unregister()
-        except BaseException as ex:
+        except Exception as ex:
             mod_path = getattr(mod, "__file__", module_name)
             print("Exception in module unregister():", repr(mod_path))
             del mod_path
@@ -568,7 +568,12 @@ def reset_all(*, reload_scripts=False):
 
     # Update extensions compatibility (after reloading preferences).
     # Potentially refreshing wheels too.
-    _initialize_extensions_compat_data(_bpy.utils.user_resource('EXTENSIONS'), True, None)
+    _initialize_extensions_compat_data(
+        _bpy.utils.user_resource('EXTENSIONS'),
+        ensure_wheels=True,
+        addon_modules_pending=None,
+        use_startup_fastpath=False,
+    )
 
     for path, pkg_id in _paths_with_extension_repos():
         if not pkg_id:
@@ -760,7 +765,7 @@ def _stale_pending_check_and_remove_once():
         return
 
     # Some stale data needs to be removed, this is an exceptional case.
-    # Allow for slower logic that is typically accepted on startup.
+    # Allow for slower logic than is typically accepted on startup.
     from _bpy_internal.extensions.stale_file_manager import StaleFiles
     debug = _bpy.app.debug_python
 
@@ -813,6 +818,27 @@ def stale_pending_stage_paths(path_base, paths):
     if stale_handle.state_load_add_and_store(paths=paths):
         # Force clearing stale files on next restart.
         _stale_pending_stage(debug)
+
+
+def stale_pending_remove_paths(path_base, paths):
+    # The reverse of: `stale_pending_stage_paths`.
+    from _bpy_internal.extensions.stale_file_manager import StaleFiles
+
+    debug = _bpy.app.debug_python
+
+    stale_handle = StaleFiles(
+        base_directory=path_base,
+        stale_filename=_stale_filename,
+        debug=debug,
+    )
+    # Already checked.
+    if stale_handle.state_load_remove_and_store(paths=paths):
+        # Don't attempt to reverse the `_stale_pending_stage` call.
+        # This is not trivial since other repositories may need to be cleared.
+        # There will be a minor performance hit on restart but this is enough
+        # of a corner case that it's not worth attempting to calculate if
+        # removal of pending files is needed or not.
+        pass
 
 
 # -----------------------------------------------------------------------------
@@ -1066,7 +1092,7 @@ def _initialize_extensions_compat_ensure_up_to_date(extensions_directory, extens
         try:
             if _extension_compat_cache_update_needed(cache_data, blender_id, extensions_enabled, print_debug):
                 cache_data = None
-        except Exception as ex:
+        except Exception:
             print("Extension: unexpected error reading cache, this is is a bug! (regenerating)")
             import traceback
             traceback.print_exc()
@@ -1104,7 +1130,13 @@ def _initialize_extensions_compat_ensure_up_to_date_wheels(extensions_directory,
     )
 
 
-def _initialize_extensions_compat_data(extensions_directory, ensure_wheels, addon_modules_pending):
+def _initialize_extensions_compat_data(
+        extensions_directory,  # `str`
+        *,
+        ensure_wheels,  # `bool`
+        addon_modules_pending,  # `Optional[Sequence[str]]`
+        use_startup_fastpath,  # `bool`
+):
     # WARNING: this function must *never* raise an exception because it would interfere with low level initialization.
     # As the function deals with file IO, use what are typically over zealous exception checks so as to rule out
     # interfering with Blender loading properly in unexpected cases such as disk-full, read-only file-system
@@ -1130,7 +1162,13 @@ def _initialize_extensions_compat_data(extensions_directory, ensure_wheels, addo
 
     # Early exit, use for automated tests.
     # Avoid (relatively) expensive file-system scanning if at all possible.
-    if not extensions_enabled:
+    #
+    # - On startup when there are no extensions enabled, scanning and synchronizing wheels
+    #   adds unnecessary overhead. Especially considering this will run for automated tasks.
+    # - When disabling an add-on from the UI, there may be no extensions enabled afterwards,
+    #   however the extension that was disabled may have had wheels installed which must be removed,
+    #   so in this case it's important not to skip synchronizing wheels, see: #125958.
+    if use_startup_fastpath and (not extensions_enabled):
         if print_debug is not None:
             print_debug("no extensions, skipping cache data.")
         return
@@ -1143,7 +1181,7 @@ def _initialize_extensions_compat_data(extensions_directory, ensure_wheels, addo
             extensions_enabled,
             print_debug,
         )
-    except Exception as ex:
+    except Exception:
         print("Extension: unexpected error detecting cache, this is is a bug!")
         import traceback
         traceback.print_exc()
@@ -1153,7 +1191,7 @@ def _initialize_extensions_compat_data(extensions_directory, ensure_wheels, addo
         if updated:
             try:
                 _initialize_extensions_compat_ensure_up_to_date_wheels(extensions_directory, wheel_list, debug)
-            except Exception as ex:
+            except Exception:
                 print("Extension: unexpected error updating wheels, this is is a bug!")
                 import traceback
                 traceback.print_exc()
@@ -1184,7 +1222,7 @@ def _bl_info_from_extension(mod_name, mod_path):
     except FileNotFoundError:
         print("Warning: add-on missing manifest, this can cause poor performance!:", repr(filepath_toml))
         return None, filepath_toml
-    except BaseException as ex:
+    except Exception as ex:
         print("Error:", str(ex), "in", filepath_toml)
         return None, filepath_toml
 
@@ -1208,8 +1246,8 @@ def _bl_info_from_extension(mod_name, mod_path):
             (int if i < 2 else _version_int_left_digits)(x)
             for i, x in enumerate(value.split(".", 2))
         )
-    except BaseException as ex:
-        print("Error: \"version\" is not a semantic version (X.Y.Z) in ", filepath_toml)
+    except Exception as ex:
+        print("Error: \"version\" is not a semantic version (X.Y.Z) in ", filepath_toml, str(ex))
         return None, filepath_toml
     bl_info["version"] = value
 
@@ -1221,7 +1259,7 @@ def _bl_info_from_extension(mod_name, mod_path):
         return None, filepath_toml
     try:
         value = tuple(int(x) for x in value.split("."))
-    except BaseException as ex:
+    except Exception as ex:
         print("Error:", str(ex), "in \"blender_version_min\"", filepath_toml)
         return None, filepath_toml
     bl_info["blender"] = value
@@ -1393,7 +1431,7 @@ def _extension_dirpath_from_handle():
         # meddle with the modules.
         try:
             dirpath = module.__path__[0]
-        except BaseException:
+        except Exception:
             dirpath = ""
         repos_info[module_id] = dirpath
     return repos_info
@@ -1728,7 +1766,12 @@ def _initialize_extensions_repos_once():
     _initialize_extensions_site_packages(extensions_directory=extensions_directory)
 
     # Ensure extension compatibility data has been loaded and matches the manifests.
-    _initialize_extensions_compat_data(extensions_directory, True, None)
+    _initialize_extensions_compat_data(
+        extensions_directory,
+        ensure_wheels=True,
+        addon_modules_pending=None,
+        use_startup_fastpath=True,
+    )
 
     # Setup repositories for the first time.
     # Intentionally don't call `_initialize_extension_repos_pre` as this is the first time,
@@ -1750,6 +1793,7 @@ def extensions_refresh(ensure_wheels=True, addon_modules_pending=None):
         _bpy.utils.user_resource('EXTENSIONS'),
         ensure_wheels=ensure_wheels,
         addon_modules_pending=addon_modules_pending,
+        use_startup_fastpath=False,
     )
 
 

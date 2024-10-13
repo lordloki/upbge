@@ -8,14 +8,14 @@
 
 #include <Python.h>
 
-#include "mathutils.h"
+#include "mathutils.hh"
 
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_utildefines.h"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 #ifndef MATH_STANDALONE
 #  include "BLI_dynstr.h"
@@ -619,7 +619,7 @@ char BaseMathObject_owner_doc[] = "The item this is wrapping or None  (read-only
 PyObject *BaseMathObject_owner_get(BaseMathObject *self, void * /*closure*/)
 {
   PyObject *ret = self->cb_user ? self->cb_user : Py_None;
-  return Py_INCREF_RET(ret);
+  return Py_NewRef(ret);
 }
 
 char BaseMathObject_is_wrapped_doc[] =
@@ -660,7 +660,7 @@ PyObject *BaseMathObject_freeze(BaseMathObject *self)
 
   self->flag |= BASE_MATH_FLAG_IS_FROZEN;
 
-  return Py_INCREF_RET((PyObject *)self);
+  return Py_NewRef(self);
 }
 
 int BaseMathObject_traverse(BaseMathObject *self, visitproc visit, void *arg)
@@ -755,12 +755,12 @@ static PyModuleDef M_Mathutils_module_def = {
 };
 
 /* submodules only */
-#include "mathutils_geometry.h"
-#include "mathutils_interpolate.h"
+#include "mathutils_geometry.hh"
+#include "mathutils_interpolate.hh"
 #ifndef MATH_STANDALONE
-#  include "mathutils_bvhtree.h"
-#  include "mathutils_kdtree.h"
-#  include "mathutils_noise.h"
+#  include "mathutils_bvhtree.hh"
+#  include "mathutils_kdtree.hh"
+#  include "mathutils_noise.hh"
 #endif
 
 PyMODINIT_FUNC PyInit_mathutils()

@@ -252,7 +252,7 @@ def bake_action_iter(
             if key in obj.bl_rna.properties:
                 rna_path = key
             else:
-                rna_path = f'["{bpy.utils.escape_identifier(key)}"]'
+                rna_path = "[\"{:s}\"]".format(bpy.utils.escape_identifier(key))
             try:
                 obj.keyframe_insert(rna_path, frame=frame, group=group_name)
             except TypeError:
@@ -364,6 +364,9 @@ def bake_action_iter(
             atd.use_tweak_mode = False
 
         atd.action = action
+        if bpy.context.preferences.experimental.use_animation_baklava and action.is_action_layered:
+            slot = action.slots.new(for_id=obj)
+            atd.action_slot = slot
 
     # Baking the action only makes sense in Replace mode, so force it (#69105)
     if not atd.use_tweak_mode:

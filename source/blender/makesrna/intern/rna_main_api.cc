@@ -25,7 +25,6 @@
 
 #ifdef RNA_RUNTIME
 
-#  include "BKE_action.h"
 #  include "BKE_action.hh"
 #  include "BKE_armature.hh"
 #  include "BKE_brush.hh"
@@ -100,7 +99,7 @@
 #  include "BLT_translation.hh"
 
 #  ifdef WITH_PYTHON
-#    include "BPY_extern.h"
+#    include "BPY_extern.hh"
 #  endif
 
 #  include "WM_api.hh"
@@ -293,7 +292,7 @@ static bNodeTree *rna_Main_nodetree_new(Main *bmain, const char *name, int type)
 
   blender::bke::bNodeTreeType *typeinfo = rna_node_tree_type_from_enum(type);
   if (typeinfo) {
-    bNodeTree *ntree = blender::bke::ntreeAddTree(bmain, safe_name, typeinfo->idname);
+    bNodeTree *ntree = blender::bke::node_tree_add_tree(bmain, safe_name, typeinfo->idname);
     ED_node_tree_propagate_change(nullptr, bmain, ntree);
 
     id_us_min(&ntree->id);

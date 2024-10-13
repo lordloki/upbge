@@ -84,6 +84,7 @@ Spell Checkers
    * check_spelling_c:       Check for spelling errors (C/C++ only),
    * check_spelling_py:      Check for spelling errors (Python only).
    * check_spelling_shaders: Check for spelling errors (GLSL,OSL & MSL only).
+   * check_spelling_cmake:   Check for spelling errors (CMake only).
 
    Note: an additional word-list is maintained at: 'tools/check_source/check_spelling_c_config.py'
 
@@ -159,6 +160,9 @@ CPU:=$(shell uname -m)
 # Use our OS and CPU architecture naming conventions.
 ifeq ($(CPU),x86_64)
 	CPU:=x64
+endif
+ifeq ($(CPU),aarch64)
+	CPU:=arm64
 endif
 ifeq ($(OS_NCASE),darwin)
 	OS_LIBDIR:=macos
@@ -517,6 +521,16 @@ check_spelling_shaders: .FORCE
 	    "$(BLENDER_DIR)/tools/check_source/check_spelling.py" \
 	    --cache-file=$(CHECK_SPELLING_CACHE) \
 	    --match=".*\.(osl|metal|msl|glsl)$$" \
+	    "$(BLENDER_DIR)/intern/" \
+	    "$(BLENDER_DIR)/source/"
+
+check_spelling_cmake: .FORCE
+	@PYTHONIOENCODING=utf_8 $(PYTHON) \
+	    "$(BLENDER_DIR)/tools/check_source/check_spelling.py" \
+	    --cache-file=$(CHECK_SPELLING_CACHE) \
+	    --match=".*\.(cmake)$$" \
+	    --match=".*\bCMakeLists\.(txt)$$" \
+	    "$(BLENDER_DIR)/build_files/" \
 	    "$(BLENDER_DIR)/intern/" \
 	    "$(BLENDER_DIR)/source/"
 

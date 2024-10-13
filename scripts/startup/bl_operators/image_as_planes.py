@@ -31,7 +31,6 @@ from bpy_extras.object_utils import (
     world_to_camera_view,
 )
 
-from bpy_extras.image_utils import load_image
 from bpy_extras.io_utils import ImportHelper
 
 # -----------------------------------------------------------------------------
@@ -131,6 +130,7 @@ def load_images(filenames, directory, force_reload=False, frame_start=1, find_se
     """
     import os
     from itertools import repeat
+    from bpy_extras.image_utils import load_image
 
     if find_sequences:  # If finding sequences, we need some pre-processing first.
         file_iter = find_image_sequences(filenames)
@@ -294,10 +294,12 @@ class MaterialProperties_MixIn:
         items=(
             ('DITHERED',
              "Dithered",
-             "Allows for grayscale hashed transparency, and compatible with render passes and raytracing. Also known as deferred rendering."),
+             "Allows for grayscale hashed transparency, and compatible with render passes and ray-tracing. "
+             "Also known as deferred rendering."),
             ('BLENDED',
              "Blended",
-             "Allows for colored transparency, but incompatible with render passes and raytracing. Also known as forward rendering.")))
+             "Allows for colored transparency, but incompatible with render passes and ray-tracing. "
+             "Also known as forward rendering.")))
 
     use_backface_culling: BoolProperty(
         name="Backface Culling",
@@ -324,11 +326,11 @@ class MaterialProperties_MixIn:
         header, body = layout.panel("import_image_plane_material", default_closed=False)
         header.label(text="Material")
         if body:
-            body.prop(self, 'shader')
+            body.prop(self, "shader")
             if self.shader == 'EMISSION':
                 body.prop(self, "emit_strength")
 
-            body.prop(self, 'render_method')
+            body.prop(self, "render_method")
             if self.render_method == 'BLENDED':
                 body.prop(self, "show_transparent_back")
 
@@ -393,8 +395,8 @@ class TextureProperties_MixIn:
         header, body = layout.panel("import_image_plane_texture", default_closed=False)
         header.label(text="Texture")
         if body:
-            body.prop(self, 'interpolation')
-            body.prop(self, 'extension')
+            body.prop(self, "interpolation")
+            body.prop(self, "extension")
 
             row = body.row(align=False, heading="Alpha")
             row.prop(self, "use_transparency", text="")
@@ -1136,7 +1138,6 @@ class IMAGE_OT_convert_to_mesh_plane(MaterialProperties_MixIn, TextureProperties
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        scene = context.scene
 
         selected_objects = [ob for ob in context.selected_objects]
         converted = 0

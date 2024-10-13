@@ -67,7 +67,7 @@ static const EnumPropertyItem rna_enum_region_panel_category_items[] = {
 #  include "BLT_translation.hh"
 
 #  ifdef WITH_PYTHON
-#    include "BPY_extern.h"
+#    include "BPY_extern.hh"
 #  endif
 
 static void rna_Screen_bar_update(Main * /*bmain*/, Scene * /*scene*/, PointerRNA *ptr)
@@ -178,6 +178,10 @@ static void rna_Area_type_update(bContext *C, PointerRNA *ptr)
       break;
     }
   }
+
+  /* The set of visible geometry nodes gizmos depends on the visible node editors. So if a node
+   * editor becomes visible/invisible, the gizmos have to be updated. */
+  WM_main_add_notifier(NC_NODE | ND_NODE_GIZMO, nullptr);
 }
 
 static const EnumPropertyItem *rna_Area_ui_type_itemf(bContext *C,
@@ -269,14 +273,8 @@ static void rna_Area_ui_type_set(PointerRNA *ptr, int value)
 static void rna_Area_ui_type_update(bContext *C, PointerRNA *ptr)
 {
   ScrArea *area = static_cast<ScrArea *>(ptr->data);
-  SpaceType *st = BKE_spacetype_from_id(area->butspacetype);
 
   rna_Area_type_update(C, ptr);
-
-  if ((area->type == st) && (st->space_subtype_item_extend != nullptr)) {
-    st->space_subtype_set(area, area->butspacetype_subtype);
-  }
-  area->butspacetype_subtype = 0;
 
   ED_area_tag_refresh(area);
 }

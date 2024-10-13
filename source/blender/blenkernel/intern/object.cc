@@ -70,7 +70,7 @@
 
 #include "BLT_translation.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_data.hh"
 #include "BKE_anim_path.h"
 #include "BKE_anim_visualization.h"
@@ -152,8 +152,10 @@
 
 #include "SEQ_sequencer.hh"
 
+#include "ANIM_action_legacy.hh"
+
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 #include "CCGSubSurf.h"
@@ -2098,12 +2100,6 @@ void BKE_object_free_derived_caches(Object *ob)
 
   BKE_crazyspace_api_eval_clear(ob);
 
-  /* Clear grease pencil data. */
-  if (ob->runtime->gpd_eval != nullptr) {
-    BKE_gpencil_eval_delete(ob->runtime->gpd_eval);
-    ob->runtime->gpd_eval = nullptr;
-  }
-
   if (ob->runtime->geometry_set_eval != nullptr) {
     delete ob->runtime->geometry_set_eval;
     ob->runtime->geometry_set_eval = nullptr;
@@ -2992,7 +2988,7 @@ Object *BKE_object_pose_armature_get_with_wpaint_check(Object *ob)
         break;
       }
       case OB_GPENCIL_LEGACY: {
-        if ((ob->mode & OB_MODE_WEIGHT_GPENCIL_LEGACY) == 0) {
+        if ((ob->mode & OB_MODE_WEIGHT_GREASE_PENCIL) == 0) {
           return nullptr;
         }
         break;
@@ -4448,30 +4444,6 @@ bool BKE_object_minmax_dupli(Depsgraph *depsgraph,
   return ok;
 }
 
-struct GPencilStrokePointIterData {
-  const float (*obmat)[4];
-
-  void (*point_func_cb)(const float co[3], void *user_data);
-  void *user_data;
-};
-
-static void foreach_display_point_gpencil_stroke_fn(bGPDlayer * /*layer*/,
-                                                    bGPDframe * /*frame*/,
-                                                    bGPDstroke *stroke,
-                                                    void *thunk)
-{
-  GPencilStrokePointIterData *iter_data = (GPencilStrokePointIterData *)thunk;
-  {
-    bGPDspoint *pt;
-    int i;
-    for (i = 0, pt = stroke->points; i < stroke->totpoints; i++, pt++) {
-      float3 co;
-      mul_v3_m4v3(co, iter_data->obmat, &pt->x);
-      iter_data->point_func_cb(co, iter_data->user_data);
-    }
-  }
-}
-
 void BKE_object_foreach_display_point(Object *ob,
                                       const float obmat[4][4],
                                       void (*func_cb)(const float[3], void *),
@@ -4487,15 +4459,6 @@ void BKE_object_foreach_display_point(Object *ob,
       mul_v3_m4v3(co, obmat, positions[i]);
       func_cb(co, user_data);
     }
-  }
-  else if (ob->type == OB_GPENCIL_LEGACY) {
-    GPencilStrokePointIterData iter_data{};
-    iter_data.obmat = obmat;
-    iter_data.point_func_cb = func_cb;
-    iter_data.user_data = user_data;
-
-    BKE_gpencil_visible_stroke_iter(
-        (bGPdata *)ob->data, nullptr, foreach_display_point_gpencil_stroke_fn, &iter_data);
   }
   else if (ob->runtime->curve_cache && ob->runtime->curve_cache->disp.first) {
     LISTBASE_FOREACH (DispList *, dl, &ob->runtime->curve_cache->disp) {
@@ -4708,9 +4671,6 @@ bool BKE_object_obdata_texspace_get(Object *ob,
 
 Mesh *BKE_object_get_evaluated_mesh_no_subsurf_unchecked(const Object *object)
 {
- if (object->currentlod) { //UPBGE: hack to have LOD working in eevee-next
-    return (Mesh *)object->data;
-  }
   /* First attempt to retrieve the evaluated mesh from the evaluated geometry set. Most
    * object types either store it there or add a reference to it if it's owned elsewhere. */
   blender::bke::GeometrySet *geometry_set_eval = object->runtime->geometry_set_eval;
@@ -4744,26 +4704,26 @@ Mesh *BKE_object_get_evaluated_mesh_no_subsurf(const Object *object)
   return BKE_object_get_evaluated_mesh_no_subsurf_unchecked(object);
 }
 
-Mesh *BKE_object_get_evaluated_mesh_unchecked(const Object *object)
+Mesh *BKE_object_get_evaluated_mesh_unchecked(const Object *object_eval)
 {
-  Mesh *mesh = BKE_object_get_evaluated_mesh_no_subsurf_unchecked(object);
+  Mesh *mesh = BKE_object_get_evaluated_mesh_no_subsurf_unchecked(object_eval);
   if (!mesh) {
     return nullptr;
   }
 
-  if (object->data && GS(((const ID *)object->data)->name) == ID_ME) {
+  if (object_eval->data && GS(((const ID *)object_eval->data)->name) == ID_ME) {
     mesh = BKE_mesh_wrapper_ensure_subdivision(mesh);
   }
 
   return mesh;
 }
 
-Mesh *BKE_object_get_evaluated_mesh(const Object *object)
+Mesh *BKE_object_get_evaluated_mesh(const Object *object_eval)
 {
-  if (!DEG_object_geometry_is_evaluated(*object)) {
+  if (!DEG_object_geometry_is_evaluated(*object_eval)) {
     return nullptr;
   }
-  return BKE_object_get_evaluated_mesh_unchecked(object);
+  return BKE_object_get_evaluated_mesh_unchecked(object_eval);
 }
 
 Mesh *BKE_object_get_pre_modified_mesh(const Object *object)
@@ -5330,7 +5290,7 @@ static bool modifiers_has_animation_check(const Object *ob)
   if (ob->adt != nullptr) {
     AnimData *adt = ob->adt;
     if (adt->action != nullptr) {
-      LISTBASE_FOREACH (FCurve *, fcu, &adt->action->curves) {
+      for (FCurve *fcu : blender::animrig::legacy::fcurves_for_assigned_action(adt)) {
         if (fcu->rna_path && strstr(fcu->rna_path, "modifiers[")) {
           return true;
         }
@@ -5466,7 +5426,6 @@ void BKE_object_runtime_reset_on_copy(Object *object, const int /*flag*/)
 {
   blender::bke::ObjectRuntime *runtime = object->runtime;
   runtime->data_eval = nullptr;
-  runtime->gpd_eval = nullptr;
   runtime->mesh_deform_eval = nullptr;
   runtime->curve_cache = nullptr;
   runtime->object_as_temp_mesh = nullptr;

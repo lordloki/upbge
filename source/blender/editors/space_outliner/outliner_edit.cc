@@ -22,14 +22,14 @@
 
 #include "BLI_blenlib.h"
 #include "BLI_dynstr.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_utildefines.h"
 
 #include "BLT_translation.hh"
 
 #include "BLF_api.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_animsys.h"
 #include "BKE_appdir.hh"
 #include "BKE_armature.hh"
@@ -449,8 +449,9 @@ void OUTLINER_OT_item_rename(wmOperatorType *ot)
 
   ot->poll = ED_operator_region_outliner_active;
 
-  /* Flags. */
-  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+  /* Flags. No undo, since this operator only activate the name editing text field in the Outliner,
+   * but does not actually change anything. */
+  ot->flag = OPTYPE_REGISTER;
 
   prop = RNA_def_boolean(ot->srna,
                          "use_active",

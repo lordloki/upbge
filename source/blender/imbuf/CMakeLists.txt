@@ -102,12 +102,11 @@ else()
 endif()
 
 # Keep until APPLE/ARM libraries are updated.
-if(APPLE OR WIN32)
-  if(CMAKE_OSX_ARCHITECTURES MATCHES arm64 OR CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64")
-    list(APPEND INC_SYS
-      ${IMATH_INCLUDE_DIRS}
-    )
-  endif()
+if((APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES arm64) OR
+   (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64"))
+  list(APPEND INC_SYS
+    ${IMATH_INCLUDE_DIRS}
+  )
 endif()
 
 if(WITH_IMAGE_OPENJPEG)
@@ -185,7 +184,9 @@ blender_add_lib(bf_imbuf "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
 if(WITH_GTESTS)
   set(TEST_SRC
-    intern/transform_test.cc
+    tests/IMB_scaling_test.cc
+    tests/IMB_transform_test.cc
   )
   blender_add_test_suite_lib(imbuf "${TEST_SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+  add_subdirectory(tests/performance)
 endif()

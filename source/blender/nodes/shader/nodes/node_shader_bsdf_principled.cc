@@ -65,7 +65,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 #define SOCK_ALPHA_ID 4
   b.add_input<decl::Vector>("Normal").hide_value();
 #define SOCK_NORMAL_ID 5
-  b.add_input<decl::Float>("Weight").unavailable();
+  b.add_input<decl::Float>("Weight").available(false);
 #define SOCK_WEIGHT_ID 6
 
   /* Panel for Diffuse settings. */
@@ -81,12 +81,10 @@ static void node_declare(NodeDeclarationBuilder &b)
 #define SOCK_DIFFUSE_ROUGHNESS_ID 7
 
   /* Panel for Subsurface scattering settings. */
-  PanelDeclarationBuilder &sss =
-      b.add_panel("Subsurface")
-          .default_closed(true)
-          .draw_buttons([](uiLayout *layout, bContext * /*C*/, PointerRNA *ptr) {
-            uiItemR(layout, ptr, "subsurface_method", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
-          });
+  PanelDeclarationBuilder &sss = b.add_panel("Subsurface").default_closed(true);
+  sss.add_layout([](uiLayout *layout, bContext * /*C*/, PointerRNA *ptr) {
+    uiItemR(layout, ptr, "subsurface_method", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
+  });
   sss.add_input<decl::Float>("Subsurface Weight")
       .default_value(0.0f)
       .min(0.0f)
@@ -134,12 +132,10 @@ static void node_declare(NodeDeclarationBuilder &b)
 #define SOCK_SUBSURFACE_ANISOTROPY_ID 12
 
   /* Panel for Specular settings. */
-  PanelDeclarationBuilder &spec =
-      b.add_panel("Specular")
-          .default_closed(true)
-          .draw_buttons([](uiLayout *layout, bContext * /*C*/, PointerRNA *ptr) {
-            uiItemR(layout, ptr, "distribution", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
-          });
+  PanelDeclarationBuilder &spec = b.add_panel("Specular").default_closed(true);
+  spec.add_layout([](uiLayout *layout, bContext * /*C*/, PointerRNA *ptr) {
+    uiItemR(layout, ptr, "distribution", UI_ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
+  });
   spec.add_input<decl::Float>("Specular IOR Level")
       .default_value(0.5f)
       .min(0.0f)
@@ -166,8 +162,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .subtype(PROP_FACTOR)
       .description(
           "Amount of anisotropy for specular reflection. "
-          "Higher values give elongated highlights along the tangent direction; "
-          "negative values give highlights shaped perpendicular to the tangent direction");
+          "Higher values give elongated highlights along the tangent direction");
 #define SOCK_ANISOTROPIC_ID 15
   spec.add_input<decl::Float>("Anisotropic Rotation")
       .default_value(0.0f)
@@ -364,12 +359,12 @@ static void node_shader_update_principled(bNodeTree *ntree, bNode *node)
 {
   const int sss_method = node->custom2;
 
-  bke::nodeSetSocketAvailability(ntree,
-                                 bke::nodeFindSocket(node, SOCK_IN, "Subsurface IOR"),
-                                 sss_method == SHD_SUBSURFACE_RANDOM_WALK_SKIN);
-  bke::nodeSetSocketAvailability(ntree,
-                                 bke::nodeFindSocket(node, SOCK_IN, "Subsurface Anisotropy"),
-                                 sss_method != SHD_SUBSURFACE_BURLEY);
+  bke::node_set_socket_availability(ntree,
+                                    bke::node_find_socket(node, SOCK_IN, "Subsurface IOR"),
+                                    sss_method == SHD_SUBSURFACE_RANDOM_WALK_SKIN);
+  bke::node_set_socket_availability(ntree,
+                                    bke::node_find_socket(node, SOCK_IN, "Subsurface Anisotropy"),
+                                    sss_method != SHD_SUBSURFACE_BURLEY);
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -666,5 +661,5 @@ void register_node_type_sh_bsdf_principled()
   ntype.updatefunc = file_ns::node_shader_update_principled;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
-  blender::bke::nodeRegisterType(&ntype);
+  blender::bke::node_register_type(&ntype);
 }

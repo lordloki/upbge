@@ -30,16 +30,16 @@
 
 static int logImageSetData8(LogImageFile *logImage,
                             const LogImageElement &logElement,
-                            float *data);
+                            const float *data);
 static int logImageSetData10(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data);
+                             const float *data);
 static int logImageSetData12(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data);
+                             const float *data);
 static int logImageSetData16(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data);
+                             const float *data);
 static int logImageElementGetData(LogImageFile *logImage,
                                   const LogImageElement &logElement,
                                   float *data);
@@ -64,14 +64,14 @@ static int logImageElementGetData12Packed(LogImageFile *logImage,
 static int logImageElementGetData16(LogImageFile *logImage,
                                     const LogImageElement &logElement,
                                     float *data);
-static int convertLogElementToRGBA(float *src,
+static int convertLogElementToRGBA(const float *src,
                                    float *dst,
-                                   LogImageFile *logImage,
+                                   const LogImageFile *logImage,
                                    const LogImageElement &logElement,
                                    int dstIsLinearRGB);
-static int convertRGBAToLogElement(float *src,
+static int convertRGBAToLogElement(const float *src,
                                    float *dst,
-                                   LogImageFile *logImage,
+                                   const LogImageFile *logImage,
                                    const LogImageElement &logElement,
                                    int srcIsLinearRGB);
 
@@ -192,7 +192,7 @@ void logImageClose(LogImageFile *logImage)
   }
 }
 
-void logImageGetSize(LogImageFile *logImage, int *width, int *height, int *depth)
+void logImageGetSize(const LogImageFile *logImage, int *width, int *height, int *depth)
 {
   *width = logImage->width;
   *height = logImage->height;
@@ -245,7 +245,7 @@ size_t getRowLength(size_t width, const LogImageElement *logElement)
  * Data writing
  */
 
-int logImageSetDataRGBA(LogImageFile *logImage, float *data, int dataIsLinearRGB)
+int logImageSetDataRGBA(LogImageFile *logImage, const float *data, int dataIsLinearRGB)
 {
   float *elementData;
   int returnValue;
@@ -289,7 +289,9 @@ int logImageSetDataRGBA(LogImageFile *logImage, float *data, int dataIsLinearRGB
   return returnValue;
 }
 
-static int logImageSetData8(LogImageFile *logImage, const LogImageElement &logElement, float *data)
+static int logImageSetData8(LogImageFile *logImage,
+                            const LogImageElement &logElement,
+                            const float *data)
 {
   size_t rowLength = getRowLength(logImage->width, logElement);
   uchar *row;
@@ -322,7 +324,7 @@ static int logImageSetData8(LogImageFile *logImage, const LogImageElement &logEl
 
 static int logImageSetData10(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data)
+                             const float *data)
 {
   size_t rowLength = getRowLength(logImage->width, logElement);
   uint pixel, index;
@@ -369,7 +371,7 @@ static int logImageSetData10(LogImageFile *logImage,
 
 static int logImageSetData12(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data)
+                             const float *data)
 {
   size_t rowLength = getRowLength(logImage->width, logElement);
   ushort *row;
@@ -403,7 +405,7 @@ static int logImageSetData12(LogImageFile *logImage,
 
 static int logImageSetData16(LogImageFile *logImage,
                              const LogImageElement &logElement,
-                             float *data)
+                             const float *data)
 {
   size_t rowLength = getRowLength(logImage->width, logElement);
   ushort *row;
@@ -1101,7 +1103,7 @@ static int getYUVtoRGBMatrix(float *matrix, const LogImageElement &logElement)
   }
 }
 
-static float *getLinToLogLut(LogImageFile *logImage, const LogImageElement &logElement)
+static float *getLinToLogLut(const LogImageFile *logImage, const LogImageElement &logElement)
 {
   float *lut;
   float gain, negativeFilmGamma, offset, step;
@@ -1128,7 +1130,7 @@ static float *getLinToLogLut(LogImageFile *logImage, const LogImageElement &logE
   return lut;
 }
 
-static float *getLogToLinLut(LogImageFile *logImage, const LogImageElement &logElement)
+static float *getLogToLinLut(const LogImageFile *logImage, const LogImageElement &logElement)
 {
   float *lut;
   float breakPoint, gain, kneeGain, kneeOffset, negativeFilmGamma, offset, step, softClip;
@@ -1222,14 +1224,14 @@ static float *getSrgbToLinLut(const LogImageElement &logElement)
   return lut;
 }
 
-static int convertRGBA_RGB(float *src,
+static int convertRGBA_RGB(const float *src,
                            float *dst,
-                           LogImageFile *logImage,
+                           const LogImageFile *logImage,
                            const LogImageElement &logElement,
                            int elementIsSource)
 {
   uint i;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   switch (logElement.transfer) {
@@ -1277,14 +1279,14 @@ static int convertRGBA_RGB(float *src,
   }
 }
 
-static int convertRGB_RGBA(float *src,
+static int convertRGB_RGBA(const float *src,
                            float *dst,
-                           LogImageFile *logImage,
+                           const LogImageFile *logImage,
                            const LogImageElement &logElement,
                            int elementIsSource)
 {
   uint i;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   switch (logElement.transfer) {
@@ -1332,14 +1334,14 @@ static int convertRGB_RGBA(float *src,
   }
 }
 
-static int convertRGBA_RGBA(float *src,
+static int convertRGBA_RGBA(const float *src,
                             float *dst,
-                            LogImageFile *logImage,
+                            const LogImageFile *logImage,
                             const LogImageElement &logElement,
                             int elementIsSource)
 {
   uint i;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   switch (logElement.transfer) {
@@ -1377,14 +1379,14 @@ static int convertRGBA_RGBA(float *src,
   }
 }
 
-static int convertABGR_RGBA(float *src,
+static int convertABGR_RGBA(const float *src,
                             float *dst,
-                            LogImageFile *logImage,
+                            const LogImageFile *logImage,
                             const LogImageElement &logElement,
                             int elementIsSource)
 {
   uint i;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   switch (logElement.transfer) {
@@ -1431,14 +1433,14 @@ static int convertABGR_RGBA(float *src,
   }
 }
 
-static int convertCbYCr_RGBA(float *src,
+static int convertCbYCr_RGBA(const float *src,
                              float *dst,
-                             LogImageFile *logImage,
+                             const LogImageFile *logImage,
                              const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], refLowData, y, cb, cr;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1463,14 +1465,14 @@ static int convertCbYCr_RGBA(float *src,
   return 0;
 }
 
-static int convertCbYCrA_RGBA(float *src,
+static int convertCbYCrA_RGBA(const float *src,
                               float *dst,
-                              LogImageFile *logImage,
+                              const LogImageFile *logImage,
                               const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], refLowData, y, cb, cr, a;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1496,14 +1498,14 @@ static int convertCbYCrA_RGBA(float *src,
   return 0;
 }
 
-static int convertCbYCrY_RGBA(float *src,
+static int convertCbYCrY_RGBA(const float *src,
                               float *dst,
-                              LogImageFile *logImage,
+                              const LogImageFile *logImage,
                               const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], refLowData, y1, y2, cb, cr;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1548,14 +1550,14 @@ static int convertCbYCrY_RGBA(float *src,
   return 0;
 }
 
-static int convertCbYACrYA_RGBA(float *src,
+static int convertCbYACrYA_RGBA(const float *src,
                                 float *dst,
-                                LogImageFile *logImage,
+                                const LogImageFile *logImage,
                                 const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], refLowData, y1, y2, cb, cr, a1, a2;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1602,14 +1604,14 @@ static int convertCbYACrYA_RGBA(float *src,
   return 0;
 }
 
-static int convertLuminance_RGBA(float *src,
+static int convertLuminance_RGBA(const float *src,
                                  float *dst,
-                                 LogImageFile *logImage,
+                                 const LogImageFile *logImage,
                                  const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], value, refLowData;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1628,14 +1630,14 @@ static int convertLuminance_RGBA(float *src,
   return 0;
 }
 
-static int convertYA_RGBA(float *src,
+static int convertYA_RGBA(const float *src,
                           float *dst,
-                          LogImageFile *logImage,
+                          const LogImageFile *logImage,
                           const LogImageElement &logElement)
 {
   uint i;
   float conversionMatrix[9], value, refLowData;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *dst_ptr = dst;
 
   if (getYUVtoRGBMatrix((float *)&conversionMatrix, logElement) != 0) {
@@ -1654,9 +1656,9 @@ static int convertYA_RGBA(float *src,
   return 0;
 }
 
-static int convertLogElementToRGBA(float *src,
+static int convertLogElementToRGBA(const float *src,
                                    float *dst,
-                                   LogImageFile *logImage,
+                                   const LogImageFile *logImage,
                                    const LogImageElement &logElement,
                                    int dstIsLinearRGB)
 {
@@ -1727,29 +1729,32 @@ static int convertLogElementToRGBA(float *src,
   return 0;
 }
 
-static int convertRGBAToLogElement(float *src,
+static int convertRGBAToLogElement(const float *src,
                                    float *dst,
-                                   LogImageFile *logImage,
+                                   const LogImageFile *logImage,
                                    const LogImageElement &logElement,
                                    int srcIsLinearRGB)
 {
   uint i;
   int rvalue;
-  float *srgbSrc;
+  const float *srgbSrc;
+  float *srgbSrc_alloc;
   float *srgbSrc_ptr;
-  float *src_ptr = src;
+  const float *src_ptr = src;
   float *lut;
 
   if (srcIsLinearRGB != 0) {
     /* we need to convert src to sRGB */
-    srgbSrc = (float *)imb_alloc_pixels(
+    srgbSrc_alloc = (float *)imb_alloc_pixels(
         logImage->width, logImage->height, 4, sizeof(float), false, __func__);
-    if (srgbSrc == nullptr) {
+    if (srgbSrc_alloc == nullptr) {
       return 1;
     }
 
-    memcpy(srgbSrc, src, 4 * size_t(logImage->width) * size_t(logImage->height) * sizeof(float));
-    srgbSrc_ptr = srgbSrc;
+    memcpy(srgbSrc_alloc,
+           src,
+           4 * size_t(logImage->width) * size_t(logImage->height) * sizeof(float));
+    srgbSrc_ptr = srgbSrc_alloc;
 
     /* convert data from Linear RGB to sRGB via lut */
     lut = getLinToSrgbLut(logElement);
@@ -1761,6 +1766,7 @@ static int convertRGBAToLogElement(float *src,
       src_ptr++;
     }
     MEM_freeN(lut);
+    srgbSrc = srgbSrc_alloc;
   }
   else {
     srgbSrc = src;
@@ -1790,7 +1796,7 @@ static int convertRGBAToLogElement(float *src,
   }
 
   if (srcIsLinearRGB != 0) {
-    MEM_freeN(srgbSrc);
+    MEM_freeN(srgbSrc_alloc);
   }
 
   return rvalue;

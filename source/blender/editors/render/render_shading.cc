@@ -25,7 +25,7 @@
 
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_string_utils.hh"
 #include "BLI_utildefines.h"
@@ -2769,7 +2769,7 @@ static int paste_material_exec(bContext *C, wmOperator *op)
     BKE_library_foreach_ID_link(
         bmain, &nodetree->id, paste_material_nodetree_ids_decref, nullptr, IDWALK_NOP);
 
-    blender::bke::ntreeFreeEmbeddedTree(nodetree);
+    blender::bke::node_tree_free_embedded_tree(nodetree);
     MEM_freeN(nodetree);
     ma->nodetree = nullptr;
   }

@@ -16,8 +16,8 @@
 
 #include "BLI_utildefines.h"
 
-#include "BPY_extern.h"
-#include "bpy_app_translations.h"
+#include "BPY_extern.hh"
+#include "bpy_app_translations.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -26,7 +26,7 @@
 
 #include "RNA_types.hh"
 
-#include "../generic/python_utildefines.h"
+#include "../generic/python_utildefines.hh"
 
 #ifdef WITH_INTERNATIONAL
 #  include "BLI_ghash.h"
@@ -421,10 +421,10 @@ static PyStructSequence_Field app_translations_contexts_fields[ARRAY_SIZE(_conte
     {nullptr}};
 
 static PyStructSequence_Desc app_translations_contexts_desc = {
-    "bpy.app.translations.contexts",                                 /* name */
-    "This named tuple contains all predefined translation contexts", /* doc */
-    app_translations_contexts_fields,                                /* fields */
-    ARRAY_SIZE(app_translations_contexts_fields) - 1,
+    /*name*/ "bpy.app.translations.contexts",
+    /*doc*/ "This named tuple contains all predefined translation contexts",
+    /*fields*/ app_translations_contexts_fields,
+    /*n_in_sequence*/ ARRAY_SIZE(app_translations_contexts_fields) - 1,
 };
 
 static PyObject *app_translations_contexts_make()
@@ -440,8 +440,7 @@ static PyObject *app_translations_contexts_make()
 
 #define SetObjString(item) \
   PyStructSequence_SET_ITEM(translations_contexts, pos++, PyUnicode_FromString(item))
-#define SetObjNone() \
-  PyStructSequence_SET_ITEM(translations_contexts, pos++, Py_INCREF_RET(Py_None))
+#define SetObjNone() PyStructSequence_SET_ITEM(translations_contexts, pos++, Py_NewRef(Py_None))
 
   for (ctxt = _contexts; ctxt->c_id; ctxt++) {
     if (ctxt->value) {
@@ -575,7 +574,7 @@ static PyObject *_py_pgettext(PyObject *args,
     return nullptr;
   }
 
-  return Py_INCREF_RET(msgid);
+  return Py_NewRef(msgid);
 #endif
 }
 
@@ -644,7 +643,7 @@ static PyObject *app_translations_pgettext_n(BlenderAppTranslations * /*self*/,
     return nullptr;
   }
 
-  return Py_INCREF_RET(msgid);
+  return Py_NewRef(msgid);
 }
 
 PyDoc_STRVAR(

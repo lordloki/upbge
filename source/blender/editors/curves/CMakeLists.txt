@@ -39,6 +39,7 @@ set(LIB
   PRIVATE bf::depsgraph
   PRIVATE bf::dna
   PRIVATE bf::extern::curve_fit_nd
+  PRIVATE bf::extern::fmtlib
   PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
 )
@@ -46,7 +47,7 @@ set(LIB
 if(WITH_TBB)
   if(WIN32)
     # TBB includes Windows.h which will define min/max macros
-    # that will collide with the stl versions.
+    # that will collide with the STL versions.
     add_definitions(-DNOMINMAX)
   endif()
 endif()

@@ -226,10 +226,12 @@ void RNA_property_float_ui_range(PointerRNA *ptr,
 int RNA_property_float_clamp(PointerRNA *ptr, PropertyRNA *prop, float *value);
 int RNA_property_int_clamp(PointerRNA *ptr, PropertyRNA *prop, int *value);
 
-bool RNA_enum_identifier(const EnumPropertyItem *item, int value, const char **identifier);
-int RNA_enum_bitflag_identifiers(const EnumPropertyItem *item, int value, const char **identifier);
+bool RNA_enum_identifier(const EnumPropertyItem *item, int value, const char **r_identifier);
+int RNA_enum_bitflag_identifiers(const EnumPropertyItem *item,
+                                 int value,
+                                 const char **r_identifier);
 bool RNA_enum_name(const EnumPropertyItem *item, int value, const char **r_name);
-bool RNA_enum_description(const EnumPropertyItem *item, int value, const char **description);
+bool RNA_enum_description(const EnumPropertyItem *item, int value, const char **r_description);
 int RNA_enum_from_value(const EnumPropertyItem *item, int value);
 int RNA_enum_from_identifier(const EnumPropertyItem *item, const char *identifier);
 bool RNA_enum_value_from_identifier(const EnumPropertyItem *item,
@@ -741,8 +743,8 @@ void RNA_parameter_list_begin(ParameterList *parms, ParameterIterator *iter);
 void RNA_parameter_list_next(ParameterIterator *iter);
 void RNA_parameter_list_end(ParameterIterator *iter);
 
-void RNA_parameter_get(ParameterList *parms, PropertyRNA *parm, void **value);
-void RNA_parameter_get_lookup(ParameterList *parms, const char *identifier, void **value);
+void RNA_parameter_get(ParameterList *parms, PropertyRNA *parm, void **r_value);
+void RNA_parameter_get_lookup(ParameterList *parms, const char *identifier, void **r_value);
 void RNA_parameter_set(ParameterList *parms, PropertyRNA *parm, const void *value);
 void RNA_parameter_set_lookup(ParameterList *parms, const char *identifier, const void *value);
 
@@ -873,7 +875,7 @@ bool RNA_struct_override_matches(Main *bmain,
                                  PointerRNA *ptr_reference,
                                  const char *root_path,
                                  size_t root_path_len,
-                                 IDOverrideLibrary *override,
+                                 IDOverrideLibrary *liboverride,
                                  eRNAOverrideMatch flags,
                                  eRNAOverrideMatchResult *r_report_flags);
 
@@ -885,7 +887,7 @@ bool RNA_struct_override_store(Main *bmain,
                                PointerRNA *ptr_local,
                                PointerRNA *ptr_reference,
                                PointerRNA *ptr_storage,
-                               IDOverrideLibrary *override);
+                               IDOverrideLibrary *liboverride);
 
 enum eRNAOverrideApplyFlag {
   RNA_OVERRIDE_APPLY_FLAG_NOP = 0,
@@ -937,7 +939,7 @@ IDOverrideLibraryPropertyOperation *RNA_property_override_property_operation_get
                                                                                  bool *r_strict,
                                                                                  bool *r_created);
 
-eRNAOverrideStatus RNA_property_override_library_status(Main *bmainm,
+eRNAOverrideStatus RNA_property_override_library_status(Main *bmain,
                                                         PointerRNA *ptr,
                                                         PropertyRNA *prop,
                                                         int index);

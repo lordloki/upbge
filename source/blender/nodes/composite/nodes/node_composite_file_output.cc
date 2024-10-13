@@ -11,7 +11,8 @@
 #include "BLI_assert.h"
 #include "BLI_fileops.h"
 #include "BLI_index_range.hh"
-#include "BLI_path_util.h"
+#include "BLI_math_vector.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_string_utf8.h"
 #include "BLI_string_utils.hh"
@@ -143,7 +144,7 @@ bNodeSocket *ntreeCompositOutputFileAddSocket(bNodeTree *ntree,
                                               const ImageFormatData *im_format)
 {
   NodeImageMultiFile *nimf = (NodeImageMultiFile *)node->storage;
-  bNodeSocket *sock = blender::bke::nodeAddStaticSocket(
+  bNodeSocket *sock = blender::bke::node_add_static_socket(
       ntree, node, SOCK_IN, SOCK_RGBA, PROP_NONE, nullptr, name);
 
   /* create format data for the input socket */
@@ -193,7 +194,7 @@ int ntreeCompositOutputFileRemoveActiveSocket(bNodeTree *ntree, bNode *node)
   /* free format data */
   MEM_freeN(sock->storage);
 
-  blender::bke::nodeRemoveSocket(ntree, node, sock);
+  blender::bke::node_remove_socket(ntree, node, sock);
   return 1;
 }
 
@@ -291,11 +292,11 @@ static void update_output_file(bNodeTree *ntree, bNode *node)
    */
   LISTBASE_FOREACH (bNodeSocket *, sock, &node->inputs) {
     if (sock->storage == nullptr) {
-      blender::bke::nodeRemoveSocket(ntree, node, sock);
+      blender::bke::node_remove_socket(ntree, node, sock);
     }
   }
   LISTBASE_FOREACH (bNodeSocket *, sock, &node->outputs) {
-    blender::bke::nodeRemoveSocket(ntree, node, sock);
+    blender::bke::node_remove_socket(ntree, node, sock);
   }
 
   cmp_node_update_default(ntree, node);
@@ -306,7 +307,7 @@ static void update_output_file(bNodeTree *ntree, bNode *node)
     if (sock->is_logically_linked()) {
       const bNodeSocket *from_socket = sock->logically_linked_sockets()[0];
       if (sock->type != from_socket->type) {
-        blender::bke::nodeModifySocketTypeStatic(ntree, node, sock, from_socket->type, 0);
+        blender::bke::node_modify_socket_type_static(ntree, node, sock, from_socket->type, 0);
         BKE_ntree_update_tag_socket_property(ntree, sock);
       }
     }
@@ -627,11 +628,6 @@ class FileOutputOperation : public NodeOperation {
 
     for (const bNodeSocket *input : this->node()->input_sockets()) {
       const Result &input_result = get_input(input->identifier);
-      /* We only write images, not single values. */
-      if (input_result.is_single_value()) {
-        continue;
-      }
-
       const char *pass_name = (static_cast<NodeImageMultiFileSocket *>(input->storage))->layer;
       add_pass_for_result(file_output, input_result, pass_name, pass_view);
 
@@ -646,12 +642,22 @@ class FileOutputOperation : public NodeOperation {
                            const char *pass_name,
                            const char *view_name)
   {
+    /* For single values, we fill a buffer that covers the domain of the operation with the value
+     * of the result. */
+    const int2 size = result.is_single_value() ? this->compute_domain().size :
+                                                 result.domain().size;
+
     /* The image buffer in the file output will take ownership of this buffer and freeing it will
      * be its responsibility. */
-    GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
-    float *buffer = static_cast<float *>(GPU_texture_read(result.texture(), GPU_DATA_FLOAT, 0));
+    float *buffer = nullptr;
+    if (result.is_single_value()) {
+      buffer = this->inflate_result(result, size);
+    }
+    else {
+      GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
+      buffer = static_cast<float *>(GPU_texture_read(result, GPU_DATA_FLOAT, 0));
+    }
 
-    const int2 size = result.domain().size;
     switch (result.type()) {
       case ResultType::Color:
         /* Use lowercase rgba for Cryptomatte layers because the EXR internal compression rules
@@ -682,6 +688,52 @@ class FileOutputOperation : public NodeOperation {
     }
   }
 
+  /* Allocates and fills an image buffer of the specified size with the value of the given single
+   * value result. */
+  float *inflate_result(const Result &result, const int2 size)
+  {
+    BLI_assert(result.is_single_value());
+
+    switch (result.type()) {
+      case ResultType::Float: {
+        float *buffer = static_cast<float *>(MEM_malloc_arrayN(
+            size_t(size.x) * size.y, sizeof(float), "File Output Inflated Buffer."));
+
+        const float value = result.get_float_value();
+        threading::parallel_for(IndexRange(size.y), 1, [&](const IndexRange sub_y_range) {
+          for (const int64_t y : sub_y_range) {
+            for (const int64_t x : IndexRange(size.x)) {
+              buffer[y * size.x + x] = value;
+            }
+          }
+        });
+        return buffer;
+      }
+      case ResultType::Vector:
+      case ResultType::Color: {
+        float *buffer = static_cast<float *>(MEM_malloc_arrayN(
+            size_t(size.x) * size.y, sizeof(float[4]), "File Output Inflated Buffer."));
+
+        const float4 value = result.type() == ResultType::Color ? result.get_color_value() :
+                                                                  result.get_vector_value();
+        threading::parallel_for(IndexRange(size.y), 1, [&](const IndexRange sub_y_range) {
+          for (const int64_t y : sub_y_range) {
+            for (const int64_t x : IndexRange(size.x)) {
+              copy_v4_v4(buffer + ((y * size.x + x) * 4), value);
+            }
+          }
+        });
+        return buffer;
+      }
+      default:
+        /* Other types are internal and needn't be handled by operations. */
+        break;
+    }
+
+    BLI_assert_unreachable();
+    return nullptr;
+  }
+
   /* Read the data stored in the GPU texture of the given result and add a view of the given name
    * and read buffer. */
   void add_view_for_result(FileOutput &file_output, const Result &result, const char *view_name)
@@ -689,7 +741,7 @@ class FileOutputOperation : public NodeOperation {
     /* The image buffer in the file output will take ownership of this buffer and freeing it will
      * be its responsibility. */
     GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
-    float *buffer = static_cast<float *>(GPU_texture_read(result.texture(), GPU_DATA_FLOAT, 0));
+    float *buffer = static_cast<float *>(GPU_texture_read(result, GPU_DATA_FLOAT, 0));
 
     const int2 size = result.domain().size;
     switch (result.type()) {
@@ -862,5 +914,5 @@ void register_node_type_cmp_output_file()
   ntype.updatefunc = file_ns::update_output_file;
   ntype.get_compositor_operation = file_ns::get_compositor_operation;
 
-  blender::bke::nodeRegisterType(&ntype);
+  blender::bke::node_register_type(&ntype);
 }

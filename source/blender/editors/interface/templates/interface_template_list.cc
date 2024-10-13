@@ -183,8 +183,13 @@ eUIListFilterResult uiListNameFilter::operator()(const PointerRNA & /*itemptr*/,
     return UI_LIST_ITEM_FILTER_MATCHES;
   }
 
-  /* Case-insensitive! */
-  if (fnmatch(filter_, name.c_str(), FNM_CASEFOLD) == 0) {
+  /* Use `fnmatch` for shell-style globing.
+   * - Case-insensitive.
+   * - Don't handle escape characters as "special" characters are not expected in names.
+   *   Unlike shell input - `\` should be treated like any other character.
+   */
+  const int fn_flag = FNM_CASEFOLD | FNM_NOESCAPE;
+  if (fnmatch(filter_, name.c_str(), fn_flag) == 0) {
     return UI_LIST_ITEM_FILTER_MATCHES;
   }
   return UI_LIST_ITEM_FILTER_MISMATCHES;
@@ -375,7 +380,7 @@ static bool ui_template_list_data_retrieve(const char *listtype_name,
                                            TemplateListInputData *r_input_data,
                                            uiListType **r_list_type)
 {
-  memset(r_input_data, 0, sizeof(*r_input_data));
+  *r_input_data = {};
 
   /* Forbid default UI_UL_DEFAULT_CLASS_NAME list class without a custom list_id! */
   if (STREQ(UI_UL_DEFAULT_CLASS_NAME, listtype_name) && !(list_id && list_id[0])) {
@@ -772,7 +777,10 @@ static void ui_template_list_layout_draw(const bContext *C,
                                0,
                                0,
                                org_i,
-                               editable ? TIP_("Double click to rename") : "");
+                               editable ? TIP_("Select List Item "
+                                               "(Double click to rename)") :
+                                          TIP_("Select List Item"));
+
           if ((dyntip_data = uilist_item_use_dynamic_tooltip(itemptr,
                                                              input_data->item_dyntip_propname)))
           {
@@ -1209,7 +1217,7 @@ uiList *uiTemplateList_ex(uiLayout *layout,
                           enum uiTemplateListFlags flags,
                           void *customdata)
 {
-  TemplateListInputData input_data = {{nullptr}};
+  TemplateListInputData input_data = {};
   uiListType *ui_list_type;
   if (!ui_template_list_data_retrieve(listtype_name,
                                       list_id,

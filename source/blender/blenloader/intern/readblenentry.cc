@@ -17,7 +17,7 @@
 
 #include "BLI_ghash.h"
 #include "BLI_linklist.h"
-#include "BLI_path_util.h" /* Only for assertions. */
+#include "BLI_path_utils.hh" /* Only for assertions. */
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
@@ -415,7 +415,9 @@ void BLO_blendfiledata_free(BlendFileData *bfd)
   MEM_freeN(bfd);
 }
 
-void BLO_read_do_version_after_setup(Main *new_bmain, BlendFileReadReport *reports)
+void BLO_read_do_version_after_setup(Main *new_bmain,
+                                     BlendfileLinkAppendContext *lapp_context,
+                                     BlendFileReadReport *reports)
 {
-  do_versions_after_setup(new_bmain, reports);
+  do_versions_after_setup(new_bmain, lapp_context, reports);
 }

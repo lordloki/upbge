@@ -162,6 +162,7 @@ class SampleNearestSurfaceFunction : public mf::MultiFunction {
       const BVHTreeFromMesh &bvh = bvh_trees_[group_index];
       BVHTreeNearest nearest;
       nearest.dist_sq = FLT_MAX;
+      nearest.index = -1;
       BLI_bvhtree_find_nearest(
           bvh.tree, position, &nearest, bvh.nearest_callback, const_cast<BVHTreeFromMesh *>(&bvh));
       triangle_index[i] = nearest.index;
@@ -244,7 +245,7 @@ static void node_register()
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
-  blender::bke::nodeRegisterType(&ntype);
+  blender::bke::node_register_type(&ntype);
 
   node_rna(ntype.rna_ext.srna);
 }

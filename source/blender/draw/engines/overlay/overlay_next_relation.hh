@@ -23,27 +23,39 @@ class Relations {
  private:
   PassSimple ps_ = {"Relations"};
 
-  LinePrimitiveBuf relations_buf_ = {SelectionType::DISABLED, "relations_buf_"};
-  PointPrimitiveBuf points_buf_ = {SelectionType::DISABLED, "points_buf_"};
+  LinePrimitiveBuf relations_buf_;
+  PointPrimitiveBuf points_buf_;
+
+  bool enabled_ = false;
 
  public:
-  void begin_sync()
+  Relations(SelectionType selection_type)
+      : relations_buf_(selection_type, "relations_buf_"),
+        points_buf_(selection_type, "points_buf_")
   {
+  }
+
+  void begin_sync(Resources & /*res*/, const State &state)
+  {
+    enabled_ = state.space_type == SPACE_VIEW3D;
+
     points_buf_.clear();
     relations_buf_.clear();
   }
 
   void object_sync(const ObjectRef &ob_ref, Resources &res, const State &state)
   {
+    if (!enabled_) {
+      return;
+    }
+
     Object *ob = ob_ref.object;
     const float4 &relation_color = res.theme_settings.color_wire;
     const float4 &constraint_color = res.theme_settings.color_grid_axis_z; /* ? */
-    const select::ID select_id = res.select_id(ob_ref);
 
     if (ob->parent && (DRW_object_visibility_in_active_context(ob->parent) & OB_VISIBLE_SELF)) {
       const float3 &parent_pos = ob->runtime->parent_display_origin;
-      relations_buf_.append(
-          parent_pos, ob->object_to_world().location(), relation_color, select_id);
+      relations_buf_.append(parent_pos, ob->object_to_world().location(), relation_color);
     }
 
     /* Drawing the hook lines. */
@@ -151,11 +163,17 @@ class Relations {
 
   void end_sync(Resources &res, const State &state)
   {
+    if (!enabled_) {
+      return;
+    }
+
     ps_.init();
+    res.select_bind(ps_);
     {
       PassSimple::Sub &sub_pass = ps_.sub("lines");
       sub_pass.state_set(DRW_STATE_WRITE_COLOR | DRW_STATE_WRITE_DEPTH |
-                         DRW_STATE_DEPTH_LESS_EQUAL | state.clipping_state);
+                             DRW_STATE_DEPTH_LESS_EQUAL,
+                         state.clipping_plane_count);
       sub_pass.shader_set(res.shaders.extra_wire.get());
       sub_pass.bind_ubo("globalsBlock", &res.globals_buf);
       relations_buf_.end_sync(sub_pass);
@@ -163,7 +181,8 @@ class Relations {
     {
       PassSimple::Sub &sub_pass = ps_.sub("loose_points");
       sub_pass.state_set(DRW_STATE_WRITE_COLOR | DRW_STATE_WRITE_DEPTH |
-                         DRW_STATE_DEPTH_LESS_EQUAL | state.clipping_state);
+                             DRW_STATE_DEPTH_LESS_EQUAL,
+                         state.clipping_plane_count);
       sub_pass.shader_set(res.shaders.extra_loose_points.get());
       sub_pass.bind_ubo("globalsBlock", &res.globals_buf);
       points_buf_.end_sync(sub_pass);
@@ -172,6 +191,10 @@ class Relations {
 
   void draw(Framebuffer &framebuffer, Manager &manager, View &view)
   {
+    if (!enabled_) {
+      return;
+    }
+
     GPU_framebuffer_bind(framebuffer);
     manager.submit(ps_, view);
   }

@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#ifndef GPU_SHADER
+#if !defined(GPU_SHADER) && !defined(GLSL_CPP_STUBS)
 #  pragma once
 
 #  include "GPU_shader.hh"
@@ -59,7 +59,7 @@ struct ObjectRef;
 /** \name Views
  * \{ */
 
-#ifndef DRW_VIEW_LEN
+#if !defined(DRW_VIEW_LEN) && !defined(GLSL_CPP_STUBS)
 /* Single-view case (default). */
 #  define drw_view_id 0
 #  define DRW_VIEW_LEN 1
@@ -173,7 +173,8 @@ struct ObjectInfos {
 
   float4 ob_color;
   uint index;
-  uint _pad2;
+  /** Used for Light Linking in EEVEE */
+  uint light_and_shadow_set_membership;
   float random;
   eObjectInfoFlag flag;
 #endif
@@ -184,6 +185,24 @@ struct ObjectInfos {
 #endif
 };
 BLI_STATIC_ASSERT_ALIGN(ObjectInfos, 16)
+
+inline uint receiver_light_set_get(ObjectInfos object_infos)
+{
+#if defined(GPU_SHADER) && !defined(DRAW_FINALIZE_SHADER)
+  return floatBitsToUint(object_infos.infos.y) & 0xFFu;
+#else
+  return object_infos.light_and_shadow_set_membership & 0xFFu;
+#endif
+}
+
+inline uint blocker_shadow_set_get(ObjectInfos object_infos)
+{
+#if defined(GPU_SHADER) && !defined(DRAW_FINALIZE_SHADER)
+  return (floatBitsToUint(object_infos.infos.y) >> 8u) & 0xFFu;
+#else
+  return (object_infos.light_and_shadow_set_membership >> 8u) & 0xFFu;
+#endif
+}
 
 struct ObjectBounds {
   /**
@@ -204,6 +223,18 @@ struct ObjectBounds {
 };
 BLI_STATIC_ASSERT_ALIGN(ObjectBounds, 16)
 
+/* Return true if `bounding_corners` are valid. Should be checked before accessing them.
+ * Does not guarantee that `bounding_sphere` is valid.
+ * Converting these bounds to an `IsectBox` may generate invalid clip planes.
+ * For safe `IsectBox` generation check `drw_bounds_are_valid`. */
+inline bool drw_bounds_corners_are_valid(ObjectBounds bounds)
+{
+  return bounds.bounding_sphere.w != -1.0f;
+}
+
+/* Return true if bounds are ready for culling.
+ * In this case, both `bounding_corners` and `bounding_sphere` are valid.
+ * These bounds can be safely converted to an `IsectBox` with valid clip planes. */
 inline bool drw_bounds_are_valid(ObjectBounds bounds)
 {
   return bounds.bounding_sphere.w >= 0.0f;

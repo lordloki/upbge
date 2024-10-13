@@ -28,7 +28,7 @@
 #include "DNA_text_types.h"
 
 #include "BIK_api.h"
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
 #include "BKE_context.hh"
@@ -44,7 +44,7 @@
 #include "DEG_depsgraph_query.hh"
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 #include "WM_api.hh"
@@ -60,6 +60,7 @@
 #include "ED_screen.hh"
 
 #include "ANIM_action.hh"
+#include "ANIM_action_legacy.hh"
 #include "ANIM_animdata.hh"
 
 #include "UI_interface.hh"
@@ -357,10 +358,23 @@ static void test_constraint(
       /* must have action */
       con->flag |= CONSTRAINT_DISABLE;
     }
-    else if (data->act->idroot != ID_OB) {
-      /* only object-rooted actions can be used */
-      data->act = nullptr;
-      con->flag |= CONSTRAINT_DISABLE;
+    else {
+      if (animrig::legacy::action_treat_as_legacy(*data->act)) {
+        if (!ELEM(data->act->idroot, ID_OB, 0)) {
+          /* Only object-rooted actions can be used. */
+          data->act = nullptr;
+          con->flag |= CONSTRAINT_DISABLE;
+        }
+      }
+      else {
+        /* The slot was assigned, so assume that it is suitable to animate the
+         * owner (only suitable slots appear in the drop-down). */
+        animrig::Action &action = data->act->wrap();
+        animrig::Slot *slot = action.slot_for_handle(data->action_slot_handle);
+        if (!slot) {
+          con->flag |= CONSTRAINT_DISABLE;
+        }
+      }
     }
 
     /* Skip target checking if we're not using it */
@@ -1070,7 +1084,7 @@ static int followpath_path_animate_exec(bContext *C, wmOperator *op)
     Curve *cu = (Curve *)data->tar->data;
 
     if (ELEM(nullptr, cu->adt, cu->adt->action) ||
-        (BKE_fcurve_find(&cu->adt->action->curves, "eval_time", 0) == nullptr))
+        (animrig::fcurve_find_in_assigned_slot(*cu->adt, {"eval_time", 0}) == nullptr))
     {
       /* create F-Curve for path animation */
       act = animrig::id_action_ensure(bmain, &cu->id);

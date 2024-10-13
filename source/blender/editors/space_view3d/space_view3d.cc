@@ -75,7 +75,7 @@
 #include "BLO_read_write.hh"
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 #include "DEG_depsgraph.hh"
@@ -403,6 +403,10 @@ static void view3d_main_region_init(wmWindowManager *wm, ARegion *region)
    * annotations.). But for OB_GREASE_PENCIL, we only need it to register the keymaps for the
    * 3D View. */
   keymap = WM_keymap_ensure(
+      wm->defaultconf, "Grease Pencil Selection", SPACE_EMPTY, RGN_TYPE_WINDOW);
+  WM_event_add_keymap_handler(&region->handlers, keymap);
+
+  keymap = WM_keymap_ensure(
       wm->defaultconf, "Grease Pencil Edit Mode", SPACE_EMPTY, RGN_TYPE_WINDOW);
   WM_event_add_keymap_handler(&region->handlers, keymap);
 
@@ -416,6 +420,10 @@ static void view3d_main_region_init(wmWindowManager *wm, ARegion *region)
 
   keymap = WM_keymap_ensure(
       wm->defaultconf, "Grease Pencil Weight Paint", SPACE_EMPTY, RGN_TYPE_WINDOW);
+  WM_event_add_keymap_handler(&region->handlers, keymap);
+
+  keymap = WM_keymap_ensure(
+      wm->defaultconf, "Grease Pencil Vertex Paint", SPACE_EMPTY, RGN_TYPE_WINDOW);
   WM_event_add_keymap_handler(&region->handlers, keymap);
 
   keymap = WM_keymap_ensure(
@@ -780,38 +788,26 @@ static void view3d_ob_drop_copy_external_asset(bContext *C, wmDrag *drag, wmDrop
    * can use the context setup here to place the objects. */
   BLI_assert(drag->type == WM_DRAG_ASSET);
 
-  Main *bmain = CTX_data_main(C);
   wmDragAsset *asset_drag = WM_drag_get_asset_data(drag, 0);
   Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
-  View3D *v3d = CTX_wm_view3d(C);
 
   BKE_view_layer_base_deselect_all(scene, view_layer);
 
-  Object *object = reinterpret_cast<Object *>(
-      WM_drag_asset_id_import(C, asset_drag, FILE_AUTOSELECT));
-
-  LayerCollection *lc = BKE_layer_collection_get_active(view_layer);
-  Collection *collection = BKE_collection_parent_editable_find_recursive(view_layer,
-                                                                         lc->collection);
-  object->visibility_flag &= ~(OB_HIDE_VIEWPORT | OB_HIDE_SELECT);
-
-  BKE_collection_object_add(bmain, collection, object);
-  BKE_view_layer_synced_ensure(scene, view_layer);
-  Base *base = BKE_view_layer_base_find(view_layer, object);
-  base->local_view_bits |= v3d->local_view_uid;
-  base->flag |= BASE_SELECTED;
-  BKE_scene_object_base_flag_sync_from_base(base);
+  ID *id = WM_drag_asset_id_import(C, asset_drag, FILE_AUTOSELECT);
 
   /* TODO(sergey): Only update relations for the current scene. */
   DEG_relations_tag_update(CTX_data_main(C));
   WM_event_add_notifier(C, NC_SCENE | ND_LAYER_CONTENT, scene);
 
-  RNA_int_set(drop->ptr, "session_uid", object->id.session_uid);
+  RNA_int_set(drop->ptr, "session_uid", id->session_uid);
 
   BKE_view_layer_synced_ensure(scene, view_layer);
-  BKE_view_layer_base_select_and_set_active(view_layer, base);
-  WM_main_add_notifier(NC_SCENE | ND_OB_ACTIVE, scene);
+  Base *base = BKE_view_layer_base_find(view_layer, (Object *)id);
+  if (base != nullptr) {
+    BKE_view_layer_base_select_and_set_active(view_layer, base);
+    WM_main_add_notifier(NC_SCENE | ND_OB_ACTIVE, scene);
+  }
   DEG_id_tag_update(&scene->id, ID_RECALC_SELECT);
   ED_outliner_select_sync_from_object_tag(C);
 
@@ -824,7 +820,7 @@ static void view3d_ob_drop_copy_external_asset(bContext *C, wmDrag *drag, wmDrop
   if (snap_state) {
     float obmat_final[4][4];
 
-    view3d_ob_drop_matrix_from_snap(snap_state, object, obmat_final);
+    view3d_ob_drop_matrix_from_snap(snap_state, (Object *)id, obmat_final);
 
     RNA_float_set_array(drop->ptr, "matrix", &obmat_final[0][0]);
   }
@@ -1725,6 +1721,9 @@ void ED_view3d_buttons_region_layout_ex(const bContext *C,
     case CTX_MODE_WEIGHT_GREASE_PENCIL:
       ARRAY_SET_ITEMS(contexts, ".greasepencil_weight");
       break;
+    case CTX_MODE_VERTEX_GREASE_PENCIL:
+      ARRAY_SET_ITEMS(contexts, ".grease_pencil_vertex");
+      break;
     case CTX_MODE_EDIT_POINT_CLOUD:
       ARRAY_SET_ITEMS(contexts, ".point_cloud_edit");
       break;
@@ -2008,7 +2007,7 @@ static void space_view3d_refresh(const bContext *C, ScrArea *area)
                                v3d,
                                CTX_wm_area(C),
                                true,
-                               300);
+                               U.smooth_viewtx);
   }
 }
 

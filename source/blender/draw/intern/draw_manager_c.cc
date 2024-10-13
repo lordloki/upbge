@@ -1655,7 +1655,9 @@ static void update_lods(Depsgraph *depsgraph, Object *ob_eval, float camera_pos[
 
   if (ob_orig->currentlod) {
     Object *lod_ob = BKE_object_lod_meshob_get(ob_orig);
-    ob_eval->data = DEG_get_evaluated_object(depsgraph, lod_ob)->data;
+    Mesh *lod_mesh = (Mesh *)DEG_get_evaluated_object(depsgraph, lod_ob)->data;
+    BKE_object_free_derived_caches(ob_eval);
+    BKE_object_eval_assign_data(ob_eval, &lod_mesh->id, false);
   }
 }
 /* End of UPBGE */
@@ -3294,7 +3296,9 @@ void DRW_gpu_context_create()
   WM_system_gpu_context_activate(DST.system_gpu_context);
   /* Be sure to create blender_gpu_context too. */
   DST.blender_gpu_context = GPU_context_create(nullptr, DST.system_gpu_context);
-  /* So we activate the window's one afterwards. */
+  /* Setup compilation context. */
+  DRW_shader_init();
+  /* Activate the window's context afterwards. */
   wm_window_reset_drawable();
 }
 
@@ -3302,6 +3306,7 @@ void DRW_gpu_context_destroy()
 {
   BLI_assert(BLI_thread_is_main());
   if (DST.system_gpu_context != nullptr) {
+    DRW_shader_exit();
     WM_system_gpu_context_activate(DST.system_gpu_context);
     GPU_context_active_set(DST.blender_gpu_context);
     GPU_context_discard(DST.blender_gpu_context);
@@ -3889,14 +3894,10 @@ void DRW_gpu_context_create_blenderplayer(void *ghost_system)
   DST.system_gpu_context = WM_system_gpu_context_create_blenderplayer(ghost_system);
   WM_system_gpu_context_activate(DST.system_gpu_context);
   /* Be sure to create gpu_context too. */
-  DST.blender_gpu_context = GPU_context_create(0, DST.system_gpu_context);
-  /* Set default Blender OpenGL state */
-  // GPU_state_init();
-  /* So we activate the window's one afterwards. */
-
-  /* IDK if it is really needed to have a win->eventstate in blenderplayer ? */
-  // wm_window_ensure_eventstate(win);
-
+  DST.blender_gpu_context = GPU_context_create(nullptr, DST.system_gpu_context);
+  /* Setup compilation context. */
+  DRW_shader_init();
+  /* Activate the window's context afterwards. */
   wm_window_reset_drawable();
 }
 

@@ -120,6 +120,11 @@ static void WIDGETGROUP_camera_setup(const bContext *C, wmGizmoGroup *gzgroup)
     UI_GetThemeColor3fv(TH_GIZMO_PRIMARY, gz->color);
     UI_GetThemeColor3fv(TH_GIZMO_HI, gz->color_hi);
   }
+
+  /* All gizmos must perform undo. */
+  LISTBASE_FOREACH (wmGizmo *, gz, &gzgroup->gizmos) {
+    WM_gizmo_set_flag(gz, WM_GIZMO_NEEDS_UNDO, true);
+  }
 }
 
 static void WIDGETGROUP_camera_refresh(const bContext *C, wmGizmoGroup *gzgroup)
@@ -418,6 +423,8 @@ static void WIDGETGROUP_camera_view_setup(const bContext * /*C*/, wmGizmoGroup *
   WM_gizmo_set_scale(viewgroup->border, 10.0f / 0.15f);
 
   gzgroup->customdata = viewgroup;
+
+  /* NOTE: #WM_GIZMO_NEEDS_UNDO is set on refresh and depends on modifying a camera object. */
 }
 
 static void WIDGETGROUP_camera_view_draw_prepare(const bContext *C, wmGizmoGroup *gzgroup)
@@ -432,7 +439,7 @@ static void WIDGETGROUP_camera_view_draw_prepare(const bContext *C, wmGizmoGroup
     Scene *scene = CTX_data_scene(C);
     View3D *v3d = CTX_wm_view3d(C);
     ED_view3d_calc_camera_border(
-        scene, depsgraph, region, v3d, rv3d, &viewgroup->state.view_border, false);
+        scene, depsgraph, region, v3d, rv3d, false, &viewgroup->state.view_border);
   }
   else {
     rctf rect{};
@@ -485,6 +492,8 @@ static void WIDGETGROUP_camera_view_refresh(const bContext *C, wmGizmoGroup *gzg
     params.range_get_fn = nullptr;
     params.user_data = viewgroup;
     WM_gizmo_target_property_def_func(gz, "matrix", &params);
+
+    WM_gizmo_set_flag(gz, WM_GIZMO_NEEDS_UNDO, viewgroup->is_camera);
   }
 }
 

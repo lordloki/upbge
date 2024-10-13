@@ -12,7 +12,7 @@
 #include "BLI_fileops.h"
 #include "BLI_index_range.hh"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_task.hh"
 #include "BLI_vector.hh"
@@ -998,9 +998,10 @@ bool BKE_image_render_write_exr(ReportList *reports,
 
   BLI_file_ensure_parent_dir_exists(filepath);
 
-  int compress = (imf ? imf->exr_codec : 0);
+  const int compress = (imf ? imf->exr_codec : 0);
+  const int quality = (imf ? imf->quality : 90);
   bool success = IMB_exr_begin_write(
-      exrhandle, filepath, rr->rectx, rr->recty, compress, rr->stamp_data);
+      exrhandle, filepath, rr->rectx, rr->recty, compress, quality, rr->stamp_data);
   if (success) {
     IMB_exr_write_channels(exrhandle);
   }
@@ -1038,15 +1039,15 @@ static void image_render_print_save_message(ReportList *reports,
   }
 }
 
-static int image_render_write_stamp_test(ReportList *reports,
-                                         const Scene *scene,
-                                         const RenderResult *rr,
-                                         ImBuf *ibuf,
-                                         const char *filepath,
-                                         const ImageFormatData *imf,
-                                         const bool stamp)
+static bool image_render_write_stamp_test(ReportList *reports,
+                                          const Scene *scene,
+                                          const RenderResult *rr,
+                                          ImBuf *ibuf,
+                                          const char *filepath,
+                                          const ImageFormatData *imf,
+                                          const bool stamp)
 {
-  int ok;
+  bool ok;
 
   if (stamp) {
     /* writes the name of the individual cameras */

@@ -198,14 +198,14 @@ static void node_buts_normal(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr
   uiItemR(layout, &sockptr, "default_value", DEFAULT_FLAGS, "", ICON_NONE);
 }
 
-static void node_buts_texture(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
+static void node_buts_texture(uiLayout *layout, bContext *C, PointerRNA *ptr)
 {
   bNode *node = (bNode *)ptr->data;
 
   short multi = (node->id && ((Tex *)node->id)->use_nodes && (node->type != CMP_NODE_TEXTURE) &&
                  (node->type != TEX_NODE_TEXTURE));
 
-  uiItemR(layout, ptr, "texture", DEFAULT_FLAGS, "", ICON_NONE);
+  uiTemplateID(layout, C, ptr, "texture", "texture.new", nullptr, nullptr);
 
   if (multi) {
     /* Number Drawing not optimal here, better have a list. */
@@ -286,8 +286,7 @@ NodeResizeDirection node_get_resize_direction(const SpaceNode &snode,
 
 static void node_draw_buttons_group(uiLayout *layout, bContext *C, PointerRNA *ptr)
 {
-  uiTemplateIDBrowse(
-      layout, C, ptr, "node_tree", nullptr, nullptr, nullptr, UI_TEMPLATE_ID_FILTER_ALL, nullptr);
+  uiTemplateIDBrowse(layout, C, ptr, "node_tree", nullptr, nullptr, nullptr);
 }
 
 static void node_buts_frame_ex(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
@@ -386,16 +385,7 @@ static void node_shader_buts_tex_image(uiLayout *layout, bContext *C, PointerRNA
   PointerRNA iuserptr = RNA_pointer_get(ptr, "image_user");
 
   uiLayoutSetContextPointer(layout, "image_user", &iuserptr);
-  uiTemplateID(layout,
-               C,
-               ptr,
-               "image",
-               "IMAGE_OT_new",
-               "IMAGE_OT_open",
-               nullptr,
-               UI_TEMPLATE_ID_FILTER_ALL,
-               false,
-               nullptr);
+  uiTemplateID(layout, C, ptr, "image", "IMAGE_OT_new", "IMAGE_OT_open", nullptr);
   uiItemR(layout, ptr, "interpolation", DEFAULT_FLAGS, "", ICON_NONE);
   uiItemR(layout, ptr, "projection", DEFAULT_FLAGS, "", ICON_NONE);
 
@@ -423,16 +413,7 @@ static void node_shader_buts_tex_environment(uiLayout *layout, bContext *C, Poin
   PointerRNA iuserptr = RNA_pointer_get(ptr, "image_user");
 
   uiLayoutSetContextPointer(layout, "image_user", &iuserptr);
-  uiTemplateID(layout,
-               C,
-               ptr,
-               "image",
-               "IMAGE_OT_new",
-               "IMAGE_OT_open",
-               nullptr,
-               UI_TEMPLATE_ID_FILTER_ALL,
-               false,
-               nullptr);
+  uiTemplateID(layout, C, ptr, "image", "IMAGE_OT_new", "IMAGE_OT_open", nullptr);
 
   uiItemR(layout, ptr, "interpolation", DEFAULT_FLAGS, "", ICON_NONE);
   uiItemR(layout, ptr, "projection", DEFAULT_FLAGS, "", ICON_NONE);
@@ -462,6 +443,11 @@ static void node_shader_buts_glossy(uiLayout *layout, bContext * /*C*/, PointerR
 static void node_buts_output_shader(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
 {
   uiItemR(layout, ptr, "target", DEFAULT_FLAGS, "", ICON_NONE);
+}
+
+static void node_shader_buts_scatter(uiLayout *layout, bContext * /*C*/, PointerRNA *ptr)
+{
+  uiItemR(layout, ptr, "phase", DEFAULT_FLAGS, "", ICON_NONE);
 }
 
 /* only once called */
@@ -520,6 +506,9 @@ static void node_shader_set_butfunc(blender::bke::bNodeType *ntype)
     case SH_NODE_OUTPUT_WORLD:
       ntype->draw_buttons = node_buts_output_shader;
       break;
+    case SH_NODE_VOLUME_SCATTER:
+      ntype->draw_buttons = node_shader_buts_scatter;
+      break;
   }
 }
 
@@ -554,16 +543,7 @@ static void node_composit_buts_image(uiLayout *layout, bContext *C, PointerRNA *
 
   PointerRNA iuserptr = RNA_pointer_create(ptr->owner_id, &RNA_ImageUser, node->storage);
   uiLayoutSetContextPointer(layout, "image_user", &iuserptr);
-  uiTemplateID(layout,
-               C,
-               ptr,
-               "image",
-               "IMAGE_OT_new",
-               "IMAGE_OT_open",
-               nullptr,
-               UI_TEMPLATE_ID_FILTER_ALL,
-               false,
-               nullptr);
+  uiTemplateID(layout, C, ptr, "image", "IMAGE_OT_new", "IMAGE_OT_open", nullptr);
   if (!node->id) {
     return;
   }
@@ -738,28 +718,10 @@ static void node_composit_buts_cryptomatte(uiLayout *layout, bContext *C, Pointe
 
   uiLayout *col = uiLayoutColumn(layout, false);
   if (node->custom1 == CMP_NODE_CRYPTOMATTE_SOURCE_RENDER) {
-    uiTemplateID(col,
-                 C,
-                 ptr,
-                 "scene",
-                 nullptr,
-                 nullptr,
-                 nullptr,
-                 UI_TEMPLATE_ID_FILTER_ALL,
-                 false,
-                 nullptr);
+    uiTemplateID(col, C, ptr, "scene", nullptr, nullptr, nullptr);
   }
   else {
-    uiTemplateID(col,
-                 C,
-                 ptr,
-                 "image",
-                 nullptr,
-                 "IMAGE_OT_open",
-                 nullptr,
-                 UI_TEMPLATE_ID_FILTER_ALL,
-                 false,
-                 nullptr);
+    uiTemplateID(col, C, ptr, "image", nullptr, "IMAGE_OT_open", nullptr);
 
     NodeCryptomatte *crypto = (NodeCryptomatte *)node->storage;
     PointerRNA imaptr = RNA_pointer_get(ptr, "image");
@@ -946,16 +908,7 @@ static void node_texture_buts_proc(uiLayout *layout, bContext * /*C*/, PointerRN
 
 static void node_texture_buts_image(uiLayout *layout, bContext *C, PointerRNA *ptr)
 {
-  uiTemplateID(layout,
-               C,
-               ptr,
-               "image",
-               "IMAGE_OT_new",
-               "IMAGE_OT_open",
-               nullptr,
-               UI_TEMPLATE_ID_FILTER_ALL,
-               false,
-               nullptr);
+  uiTemplateID(layout, C, ptr, "image", "IMAGE_OT_new", "IMAGE_OT_open", nullptr);
 }
 
 static void node_texture_buts_image_ex(uiLayout *layout, bContext *C, PointerRNA *ptr)
@@ -1358,6 +1311,7 @@ static void std_node_socket_draw(
     return;
   }
 
+  const char *label = text;
   text = (sock->flag & SOCK_HIDE_LABEL) ? "" : text;
 
   /* Some socket types draw the gizmo icon in a special way to look better. All others use a
@@ -1423,7 +1377,7 @@ static void std_node_socket_draw(
     case SOCK_STRING: {
       if (socket_needs_attribute_search(*node, *sock)) {
         if (text[0] == '\0') {
-          node_geometry_add_attribute_search_button(*C, *node, *ptr, *layout);
+          node_geometry_add_attribute_search_button(*C, *node, *ptr, *layout, label);
         }
         else {
           uiLayout *row = uiLayoutSplit(layout, 0.4f, false);
@@ -1433,7 +1387,15 @@ static void std_node_socket_draw(
       }
       else {
         if (text[0] == '\0') {
-          uiItemR(layout, ptr, "default_value", DEFAULT_FLAGS, "", ICON_NONE);
+          uiItemFullR(layout,
+                      ptr,
+                      RNA_struct_find_property(ptr, "default_value"),
+                      -1,
+                      0,
+                      UI_ITEM_NONE,
+                      "",
+                      ICON_NONE,
+                      label);
         }
         else {
           uiLayout *row = uiLayoutSplit(layout, 0.4f, false);
@@ -1472,31 +1434,13 @@ static void std_node_socket_draw(
       const bNodeTree *node_tree = (const bNodeTree *)node_ptr->owner_id;
       if (node_tree->type == NTREE_GEOMETRY) {
         if (text[0] == '\0') {
-          uiTemplateID(layout,
-                       C,
-                       ptr,
-                       "default_value",
-                       "image.new",
-                       "image.open",
-                       nullptr,
-                       0,
-                       ICON_NONE,
-                       nullptr);
+          uiTemplateID(layout, C, ptr, "default_value", "image.new", "image.open", nullptr);
         }
         else {
           /* 0.3 split ratio is inconsistent, but use it here because the "New" button is large. */
           uiLayout *row = uiLayoutSplit(layout, 0.3f, false);
           uiItemL(row, text, ICON_NONE);
-          uiTemplateID(row,
-                       C,
-                       ptr,
-                       "default_value",
-                       "image.new",
-                       "image.open",
-                       nullptr,
-                       0,
-                       ICON_NONE,
-                       nullptr);
+          uiTemplateID(row, C, ptr, "default_value", "image.new", "image.open", nullptr);
         }
       }
       else {
@@ -1510,23 +1454,13 @@ static void std_node_socket_draw(
     }
     case SOCK_TEXTURE: {
       if (text[0] == '\0') {
-        uiTemplateID(layout,
-                     C,
-                     ptr,
-                     "default_value",
-                     "texture.new",
-                     nullptr,
-                     nullptr,
-                     0,
-                     ICON_NONE,
-                     nullptr);
+        uiTemplateID(layout, C, ptr, "default_value", "texture.new", nullptr, nullptr);
       }
       else {
         /* 0.3 split ratio is inconsistent, but use it here because the "New" button is large. */
         uiLayout *row = uiLayoutSplit(layout, 0.3f, false);
         uiItemL(row, text, ICON_NONE);
-        uiTemplateID(
-            row, C, ptr, "default_value", "texture.new", nullptr, nullptr, 0, ICON_NONE, nullptr);
+        uiTemplateID(row, C, ptr, "default_value", "texture.new", nullptr, nullptr);
       }
 
       break;
@@ -1583,10 +1517,14 @@ static void std_node_socket_interface_draw(ID *id,
       uiItemR(sub, &ptr, "max_value", DEFAULT_FLAGS, IFACE_("Max"), ICON_NONE);
       break;
     }
+    case SOCK_STRING: {
+      uiItemR(col, &ptr, "subtype", DEFAULT_FLAGS, IFACE_("Subtype"), ICON_NONE);
+      uiItemR(col, &ptr, "default_value", DEFAULT_FLAGS, IFACE_("Default"), ICON_NONE);
+      break;
+    }
     case SOCK_BOOLEAN:
     case SOCK_ROTATION:
     case SOCK_RGBA:
-    case SOCK_STRING:
     case SOCK_OBJECT:
     case SOCK_COLLECTION:
     case SOCK_IMAGE:
@@ -1678,7 +1616,7 @@ void ED_node_type_draw_color(const char *idname, float *r_color)
 {
   using namespace blender::ed::space_node;
 
-  const blender::bke::bNodeSocketType *typeinfo = blender::bke::nodeSocketTypeFind(idname);
+  const blender::bke::bNodeSocketType *typeinfo = blender::bke::node_socket_type_find(idname);
   if (!typeinfo || typeinfo->type == SOCK_CUSTOM) {
     r_color[0] = 0.0f;
     r_color[1] = 0.0f;
@@ -1748,7 +1686,7 @@ void draw_nodespace_back_pix(const bContext &C,
      */
     if (snode.edittree) {
       bNode *node = (bNode *)snode.edittree->nodes.first;
-      rctf *viewer_border = &snode.nodetree->viewer_border;
+      const rctf *viewer_border = &snode.nodetree->viewer_border;
       while (node) {
         if (node->flag & NODE_SELECT) {
           if (node->typeinfo->draw_backdrop) {
@@ -2215,7 +2153,7 @@ static bool node_link_is_field_link(const SpaceNode &snode, const bNodeLink &lin
   if (snode.edittree->type != NTREE_GEOMETRY) {
     return false;
   }
-  if (link.fromsock && link.fromsock->display_shape == SOCK_DISPLAY_SHAPE_DIAMOND) {
+  if (link.fromsock && link.fromsock->runtime->field_state == bke::FieldSocketState::IsField) {
     return true;
   }
   return false;

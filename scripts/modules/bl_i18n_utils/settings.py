@@ -91,6 +91,8 @@ LANGUAGES = (
     (52, "Belarusian (беларуску)", "be"),
     (53, "Danish (Dansk)", "da"),
     (54, "Slovenian (Slovenščina)", "sl"),
+    # Using the utf8 flipped form of Urdu (اُردُو).
+    (55, "Urdu (وُدرُا)", "ur"),
 )
 
 # Default context, in py (keep in sync with `BLT_translation.hh`)!
@@ -112,7 +114,7 @@ IMPORT_LANGUAGES_SKIP = {
 
 # Languages that need RTL pre-processing.
 IMPORT_LANGUAGES_RTL = {
-    'ar_EG', 'fa_IR', 'he_IL',
+    'ar_EG', 'fa_IR', 'he_IL', 'ur',
 }
 
 # The comment prefix used in generated `messages.txt` file.
@@ -266,9 +268,10 @@ PYGETTEXT_KEYWORDS = (() +
     tuple(("{}\\((?:[^\"',]+,){{2}}\\s*" + _msg_re + r"\s*(?:\)|,)").format(it)
           for it in ("BKE_modifier_set_error",)) +
 
-    # Compositor error messages
-    tuple((r"\.{}\(\s*" + _msg_re + r"\s*\)").format(it)
-          for it in ("set_info_message",)) +
+    # Compositor and EEVEE messages.
+    # Ends either with `)` (function call close), or `,` when there are extra formatting parameters.
+    tuple((r"{}\(\s*" + _msg_re + r"\s*(?:\)|,)").format(it)
+          for it in ("set_info_message", "info_append_i18n")) +
 
     # This one is a tad more risky, but in practice would not expect a name/uid string parameter
     # (the second one in those functions) to ever have a comma in it, so think this is fine.

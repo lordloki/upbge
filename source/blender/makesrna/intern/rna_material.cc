@@ -160,7 +160,7 @@ static void rna_Material_active_paint_texture_index_update(bContext *C, PointerR
     bNode *node = BKE_texpaint_slot_material_find_node(ma, ma->paint_active_slot);
 
     if (node) {
-      blender::bke::nodeSetActive(ma->nodetree, node);
+      blender::bke::node_set_active(ma->nodetree, node);
     }
   }
 
@@ -394,15 +394,6 @@ static bool rna_is_grease_pencil_get(PointerRNA *ptr)
   return false;
 }
 
-static void rna_gpcolordata_uv_update(Main *bmain, Scene *scene, PointerRNA *ptr)
-{
-  /* update all uv strokes of this color */
-  Material *ma = (Material *)ptr->owner_id;
-  ED_gpencil_update_color_uv(bmain, ma);
-
-  rna_MaterialGpencil_update(bmain, scene, ptr);
-}
-
 static std::optional<std::string> rna_GpencilColorData_path(const PointerRNA * /*ptr*/)
 {
   return "grease_pencil";
@@ -453,6 +444,10 @@ static void rna_def_material_display(StructRNA *srna)
   RNA_def_property_array(prop, 4);
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_ui_text(prop, "Diffuse Color", "Diffuse color of the material");
+  /* See #82514 for details, for now re-define defaults here. Keep in sync with
+   * #DNA_material_defaults.h */
+  static float diffuse_color_default[4] = {0.8f, 0.8f, 0.8f, 1.0f};
+  RNA_def_property_float_array_default(prop, diffuse_color_default);
   RNA_def_property_update(prop, 0, "rna_Material_draw_update");
 
   prop = RNA_def_property(srna, "specular_color", PROP_FLOAT, PROP_COLOR);
@@ -620,7 +615,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_float_sdna(prop, nullptr, "texture_pixsize");
   RNA_def_property_range(prop, 1, 5000);
   RNA_def_property_ui_text(prop, "UV Factor", "Texture Pixel Size factor along the stroke");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_gpcolordata_uv_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* Flags */
   prop = RNA_def_property(srna, "hide", PROP_BOOLEAN, PROP_NONE);

@@ -23,7 +23,7 @@
 
 #include "BLI_fileops.h"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_task.h"
 #include "BLI_threads.h"
@@ -63,8 +63,8 @@
 #include "RE_pipeline.h" /* `RE_` free stuff. */
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern_python.h"
-#  include "BPY_extern_run.h"
+#  include "BPY_extern_python.hh"
+#  include "BPY_extern_run.hh"
 #endif
 
 #ifdef WITH_GAMEENGINE
@@ -468,7 +468,10 @@ bool WM_init_game(bContext *C)
     /* Fullscreen */
     if ((scene->gm.playerflag & GAME_PLAYER_FULLSCREEN)) {
       WM_operator_name_call(C, "WM_OT_window_fullscreen_toggle", WM_OP_EXEC_DEFAULT, NULL, NULL);
-      wm_get_screensize(&ar->winrct.xmax, &ar->winrct.ymax);
+      blender::int2 scr_size;
+      wm_get_screensize(scr_size);
+      ar->winrct.xmax = scr_size[0];
+      ar->winrct.ymax = scr_size[1];
       ar->winx = ar->winrct.xmax + 1;
       ar->winy = ar->winrct.ymax + 1;
     }
@@ -569,7 +572,8 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
       /* Save quit.blend. */
       Main *bmain = CTX_data_main(C);
       char filepath[FILE_MAX];
-      const int fileflags = G.fileflags & ~(G_FILE_COMPRESS | G_FILE_AUTOPLAY);
+      int fileflags = G.fileflags & ~(G_FILE_COMPRESS | G_FILE_AUTOPLAY);
+      fileflags |= G_FILE_RECOVER_WRITE;
 
       BLI_path_join(filepath, sizeof(filepath), BKE_tempdir_base(), BLENDER_QUIT_FILE);
 
@@ -750,6 +754,7 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
     DRW_gpu_context_enable_ex(false);
     UI_exit();
     GPU_pass_cache_free();
+    GPU_shader_cache_dir_clear_old();
     GPU_exit();
     DRW_gpu_context_disable_ex(false);
     DRW_gpu_context_destroy();
@@ -789,10 +794,6 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
 
   BKE_tempdir_session_purge();
 
-#if defined(WITH_OPENGL_BACKEND) && BLI_SUBPROCESS_SUPPORT
-  GPU_shader_cache_dir_clear_old();
-#endif
-
   /* Logging cannot be called after exiting (#CLOG_INFO, #CLOG_WARN etc will crash).
    * So postpone exiting until other sub-systems that may use logging have shut down. */
   CLG_exit();
@@ -813,6 +814,13 @@ void WM_exit(bContext *C, const int exit_code)
 void WM_script_tag_reload()
 {
   UI_interface_tag_script_reload();
+
+  /* Any operators referenced by gizmos may now be a dangling pointer.
+   *
+   * While it is possible to inspect the gizmos it's simpler to re-create them,
+   * especially for script reloading - where we can accept slower logic
+   * for the sake of simplicity, see #126852. */
+  WM_gizmoconfig_update_tag_reinit_all();
 }
 
 /* UPBGE */

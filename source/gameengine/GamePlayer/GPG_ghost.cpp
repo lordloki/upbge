@@ -77,8 +77,8 @@
 #include "BLO_readfile.hh"
 #include "BLO_runtime.hh"
 #include "BLT_lang.hh"
-#include "BPY_extern_python.h"
-#include "BPY_extern_run.h"
+#include "BPY_extern_python.hh"
+#include "BPY_extern_run.hh"
 #include "CLG_log.h"
 #include "DEG_depsgraph.hh"
 #include "DNA_genfile.h"
@@ -140,10 +140,6 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[]);
 #  endif
 #  include "utfconv.hh"
 #endif  // WIN32
-
-#ifdef WITH_SDL_DYNLOAD
-#  include "sdlew.h"
-#endif
 
 #ifdef WITH_GAMEENGINE_BPPLAYER
 #  include "SpindleEncryption.h"
@@ -808,10 +804,6 @@ int main(int argc,
 #  endif /* __alpha__ */
 #endif   /* __linux__ */
 
-#ifdef WITH_SDL_DYNLOAD
-  sdlewInit();
-#endif
-
   //GPU_backend_type_selection_set(GPU_BACKEND_VULKAN);
 
   BlendFileData *bfd = nullptr;
@@ -868,7 +860,7 @@ int main(int argc,
   RNA_init();
 
   RE_engines_init();
-  blender::bke::BKE_node_system_init();
+  blender::bke::node_system_init();
   BKE_particle_init_rng();
 
   BKE_sound_init_once();

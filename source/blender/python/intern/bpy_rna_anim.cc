@@ -41,12 +41,12 @@
 #include "WM_api.hh"
 #include "WM_types.hh"
 
-#include "bpy_capi_utils.h"
-#include "bpy_rna.h"
-#include "bpy_rna_anim.h"
+#include "bpy_capi_utils.hh"
+#include "bpy_rna.hh"
+#include "bpy_rna_anim.hh"
 
-#include "../generic/py_capi_rna.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_rna.hh"
+#include "../generic/python_utildefines.hh"
 
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
@@ -436,6 +436,7 @@ PyObject *pyrna_struct_keyframe_insert(BPy_StructRNA *self, PyObject *args, PyOb
     BKE_reports_free(&reports);
     return nullptr;
   }
+  BKE_report_print_level_set(&reports, G.quiet ? RPT_WARNING : RPT_DEBUG);
   BPy_reports_write_stdout(&reports, nullptr);
   BKE_reports_free(&reports);
 

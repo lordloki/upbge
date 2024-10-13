@@ -33,12 +33,15 @@
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_idprop.hh"
+#include "BKE_lib_id.hh"
 #include "BKE_screen.hh"
 
 #include "RNA_access.hh"
 #include "RNA_prototypes.hh"
 
 #include "UI_interface.hh"
+
+#include "ED_id_management.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -1135,7 +1138,7 @@ void UI_context_active_but_prop_get_filebrowser(const bContext *C,
   ARegion *region = CTX_wm_region_popup(C) ? CTX_wm_region_popup(C) : CTX_wm_region(C);
   uiBut *prevbut = nullptr;
 
-  memset(r_ptr, 0, sizeof(*r_ptr));
+  *r_ptr = {};
   *r_prop = nullptr;
   *r_is_undo = false;
   *r_is_userdef = false;
@@ -2112,6 +2115,8 @@ void uiItemFullR(uiLayout *layout,
   const PropertyType type = RNA_property_type(prop);
   const bool is_array = RNA_property_array_check(prop);
   const int len = (is_array) ? RNA_property_array_length(ptr, prop) : 0;
+  const bool is_id_name_prop = (ptr->owner_id == ptr->data && type == PROP_STRING &&
+                                prop == RNA_struct_name_property(ptr->type));
 
   const bool icon_only = (flag & UI_ITEM_R_ICON_ONLY) != 0;
 
@@ -2395,6 +2400,16 @@ void uiItemFullR(uiLayout *layout,
   /* property with separate label */
   else if (ELEM(type, PROP_ENUM, PROP_STRING, PROP_POINTER)) {
     but = ui_item_with_label(layout, block, name, icon, ptr, prop, index, 0, 0, w, h, flag);
+
+    if (is_id_name_prop) {
+      Main *bmain = CTX_data_main(static_cast<bContext *>(block->evil_C));
+      ID *id = ptr->owner_id;
+      UI_but_func_rename_full_set(but, [bmain, id](const std::string &new_name) {
+        ED_id_rename(*bmain, *id, new_name);
+        WM_main_add_notifier(NC_ID | NA_RENAME, nullptr);
+      });
+    }
+
     bool results_are_suggestions = false;
     if (type == PROP_STRING) {
       const eStringPropertySearchFlag search_flag = RNA_property_string_search_flag(prop);
@@ -2775,7 +2790,7 @@ static void ui_rna_collection_search_arg_free_fn(void *ptr)
 {
   uiRNACollectionSearch *coll_search = static_cast<uiRNACollectionSearch *>(ptr);
   UI_butstore_free(coll_search->butstore_block, coll_search->butstore);
-  MEM_freeN(ptr);
+  MEM_delete(coll_search);
 }
 
 uiBut *ui_but_add_search(uiBut *but,
@@ -2802,8 +2817,7 @@ uiBut *ui_but_add_search(uiBut *but,
 
   /* turn button into search button */
   if (has_search_fn || searchprop) {
-    uiRNACollectionSearch *coll_search = static_cast<uiRNACollectionSearch *>(
-        MEM_mallocN(sizeof(*coll_search), __func__));
+    uiRNACollectionSearch *coll_search = MEM_new<uiRNACollectionSearch>(__func__);
     uiButSearch *search_but;
 
     but = ui_but_change_type(but, UI_BTYPE_SEARCH_MENU);
@@ -2971,7 +2985,9 @@ static uiBut *ui_item_menu(uiLayout *layout,
                            void *arg,
                            void *argN,
                            const char *tip,
-                           bool force_menu)
+                           bool force_menu,
+                           uiButArgNFree func_argN_free_fn = MEM_freeN,
+                           uiButArgNCopy func_argN_copy_fn = MEM_dupallocN)
 {
   uiBlock *block = layout->root->block;
   uiLayout *heading_layout = ui_layout_heading_find(layout);
@@ -3027,8 +3043,8 @@ static uiBut *ui_item_menu(uiLayout *layout,
       but->poin = (char *)but;
     }
     but->func_argN = argN;
-    but->func_argN_free_fn = MEM_freeN;
-    but->func_argN_copy_fn = MEM_dupallocN;
+    but->func_argN_free_fn = func_argN_free_fn;
+    but->func_argN_copy_fn = func_argN_copy_fn;
   }
 
   if (ELEM(layout->root->type, UI_LAYOUT_PANEL, UI_LAYOUT_TOOLBAR) ||
@@ -3334,7 +3350,9 @@ uiPropertySplitWrapper uiItemPropertySplitWrapperCreate(uiLayout *parent_layout)
   split_wrapper.label_column = uiLayoutColumn(layout_split, true);
   split_wrapper.label_column->alignment = UI_LAYOUT_ALIGN_RIGHT;
   split_wrapper.property_row = ui_item_prop_split_layout_hack(parent_layout, layout_split);
-  split_wrapper.decorate_column = uiLayoutColumn(layout_row, true);
+  split_wrapper.decorate_column = uiLayoutGetPropDecorate(parent_layout) ?
+                                      uiLayoutColumn(layout_row, true) :
+                                      nullptr;
 
   return split_wrapper;
 }
@@ -3358,7 +3376,7 @@ uiLayout *uiItemL_respect_property_split(uiLayout *layout, const char *text, int
   }
   uiItemL_(layout, text, icon);
 
-  return layout;
+  return nullptr;
 }
 
 void uiItemLDrag(uiLayout *layout, PointerRNA *ptr, const char *name, int icon)
@@ -3594,17 +3612,25 @@ void uiItemMenuEnumFullO_ptr(uiLayout *layout,
     icon = ICON_BLANK1;
   }
 
-  MenuItemLevel *lvl = MEM_cnew<MenuItemLevel>("MenuItemLevel");
+  MenuItemLevel *lvl = MEM_new<MenuItemLevel>("MenuItemLevel");
   STRNCPY(lvl->opname, ot->idname);
   STRNCPY(lvl->propname, propname);
   lvl->opcontext = layout->root->opcontext;
 
-  uiBut *but = ui_item_menu(
-      layout, name, icon, menu_item_enum_opname_menu, nullptr, lvl, nullptr, true);
+  uiBut *but = ui_item_menu(layout,
+                            name,
+                            icon,
+                            menu_item_enum_opname_menu,
+                            nullptr,
+                            lvl,
+                            nullptr,
+                            true,
+                            but_func_argN_free<MenuItemLevel>,
+                            but_func_argN_copy<MenuItemLevel>);
   /* Use the menu button as owner for the operator properties, which will then be passed to the
    * individual menu items. */
   if (r_opptr) {
-    but->opptr = MEM_cnew<PointerRNA>("uiButOpPtr");
+    but->opptr = MEM_new<PointerRNA>("uiButOpPtr");
     WM_operator_properties_create_ptr(but->opptr, ot);
     BLI_assert(but->opptr->data == nullptr);
     WM_operator_properties_alloc(&but->opptr, (IDProperty **)&but->opptr->data, ot->idname);
@@ -3670,7 +3696,7 @@ void uiItemMenuEnumR_prop(
     icon = ICON_BLANK1;
   }
 
-  MenuItemLevel *lvl = MEM_cnew<MenuItemLevel>("MenuItemLevel");
+  MenuItemLevel *lvl = MEM_new<MenuItemLevel>("MenuItemLevel");
   lvl->rnapoin = *ptr;
   STRNCPY(lvl->propname, RNA_property_identifier(prop));
   lvl->opcontext = layout->root->opcontext;
@@ -3682,7 +3708,9 @@ void uiItemMenuEnumR_prop(
                nullptr,
                lvl,
                RNA_property_description(prop),
-               false);
+               false,
+               but_func_argN_free<MenuItemLevel>,
+               but_func_argN_copy<MenuItemLevel>);
 }
 
 void uiItemMenuEnumR(

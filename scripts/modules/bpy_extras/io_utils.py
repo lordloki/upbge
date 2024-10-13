@@ -111,7 +111,7 @@ class ImportHelper:
         if self.properties.is_property_set("filepath"):
             title = self.filepath
             if len(self.files) > 1:
-                title = iface_("Import {} files").format(len(self.files))
+                title = iface_("Import {:d} files").format(len(self.files))
 
             if confirm_text:
                 confirm_text = iface_(confirm_text)
@@ -548,13 +548,13 @@ def path_reference_copy(copy_set, report=print):
 
             try:
                 os.makedirs(dir_to, exist_ok=True)
-            except:
+            except Exception:
                 import traceback
                 traceback.print_exc()
 
             try:
                 shutil.copy(file_src, file_dst)
-            except:
+            except Exception:
                 import traceback
                 traceback.print_exc()
 

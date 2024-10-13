@@ -18,7 +18,8 @@
 
 #include "BLT_translation.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
+#include "BKE_blender.hh"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
@@ -27,6 +28,7 @@
 #include "rna_internal.hh"
 
 #include "ANIM_action.hh"
+#include "ANIM_action_legacy.hh"
 
 #include "WM_types.hh"
 
@@ -70,7 +72,19 @@ const EnumPropertyItem rna_enum_strip_type_items[] = {
      "Strip containing keyframes on F-Curves"},
     {0, nullptr, 0, nullptr, nullptr},
 };
-#endif  // WITH_ANIM_BAKLAVA
+#endif /* WITH_ANIM_BAKLAVA */
+
+/* Cannot use rna_enum_dummy_DEFAULT_items because the UNSPECIFIED entry needs
+ * to exist as it is the default. */
+const EnumPropertyItem default_ActionSlot_id_root_items[] = {
+    {0,
+     "UNSPECIFIED",
+     ICON_NONE,
+     "Unspecified",
+     "Not yet specified. When this slot is first assigned to a data-block, this will be set to "
+     "the type of that data-block"},
+    {0, nullptr, 0, nullptr, nullptr},
+};
 
 #ifdef RNA_RUNTIME
 
@@ -97,12 +111,12 @@ const EnumPropertyItem rna_enum_strip_type_items[] = {
 
 #  include <fmt/format.h>
 
-#  ifdef WITH_ANIM_BAKLAVA
-
 static animrig::Action &rna_action(const PointerRNA *ptr)
 {
   return reinterpret_cast<bAction *>(ptr->owner_id)->wrap();
 }
+
+#  ifdef WITH_ANIM_BAKLAVA
 
 static animrig::Slot &rna_data_slot(const PointerRNA *ptr)
 {
@@ -124,12 +138,6 @@ static void rna_Action_tag_animupdate(Main *, Scene *, PointerRNA *ptr)
 {
   animrig::Action &action = rna_action(ptr);
   DEG_id_tag_update(&action.id, ID_RECALC_ANIMATION);
-}
-
-static animrig::KeyframeStrip &rna_data_keyframe_strip(const PointerRNA *ptr)
-{
-  animrig::Strip &strip = reinterpret_cast<ActionStrip *>(ptr->data)->wrap();
-  return strip.as<animrig::KeyframeStrip>();
 }
 
 static animrig::ChannelBag &rna_data_channelbag(const PointerRNA *ptr)
@@ -200,6 +208,23 @@ static ActionSlot *rna_Action_slots_new(bAction *dna_action,
 
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
   return slot;
+}
+
+void rna_Action_slots_remove(bAction *dna_action,
+                             bContext *C,
+                             ReportList *reports,
+                             PointerRNA *slot_ptr)
+{
+  animrig::Action &action = dna_action->wrap();
+  animrig::Slot &slot = rna_data_slot(slot_ptr);
+  if (!action.slot_remove(slot)) {
+    BKE_report(reports, RPT_ERROR, "This slot does not belong to this Action");
+    return;
+  }
+
+  RNA_POINTER_INVALIDATE(slot_ptr);
+  WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
+  DEG_id_tag_update(&action.id, ID_RECALC_ANIMATION);
 }
 
 static void rna_iterator_action_layers_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
@@ -280,11 +305,10 @@ static std::optional<std::string> rna_ActionSlot_path(const PointerRNA *ptr)
   return fmt::format("slots[\"{}\"]", name_esc);
 }
 
-int rna_ActionSlot_idtype_icon_get(PointerRNA *ptr)
+int rna_ActionSlot_id_root_icon_get(PointerRNA *ptr)
 {
   animrig::Slot &slot = rna_data_slot(ptr);
   return UI_icon_from_idcode(slot.idtype);
-  ;
 }
 
 /* Name functions that ignore the first two ID characters */
@@ -350,6 +374,29 @@ static void rna_ActionSlot_name_update(Main *bmain, Scene *, PointerRNA *ptr)
   action.slot_name_propagate(*bmain, slot);
 }
 
+#    ifndef NDEBUG
+static void rna_ActionSlot_debug_log_users(const ID *action_id, ActionSlot *dna_slot, Main *bmain)
+{
+  using namespace blender::animrig;
+  const Action &action = reinterpret_cast<const bAction *>(action_id)->wrap();
+  Slot &slot = dna_slot->wrap();
+
+  printf("\033[38;5;214mAction Slot users of '%s' on Action '%s':\033[0m\n",
+         slot.name,
+         action.id.name + 2);
+  if (bmain->is_action_slot_to_id_map_dirty) {
+    printf("  User map is \033[93mdirty\033[0m, this will trigger a recompute.\n");
+  }
+  else {
+    printf("  User map is \033[92mclean\033[0m.\n");
+  }
+
+  for (const ID *user : slot.users(*bmain)) {
+    printf("  - %s\n", user->name);
+  }
+}
+#    endif /* NDEBUG */
+
 static std::optional<std::string> rna_ActionLayer_path(const PointerRNA *ptr)
 {
   animrig::Layer &layer = rna_data_layer(ptr);
@@ -372,10 +419,19 @@ static int rna_iterator_ActionLayer_strips_length(PointerRNA *ptr)
   return layer.strips().size();
 }
 
-ActionStrip *rna_ActionStrips_new(ActionLayer *dna_layer,
-                                  bContext *C,
-                                  ReportList *reports,
-                                  const int type)
+static StructRNA *rna_ActionStrip_refine(PointerRNA *ptr)
+{
+  animrig::Strip &strip = static_cast<ActionStrip *>(ptr->data)->wrap();
+
+  switch (strip.type()) {
+    case animrig::Strip::Type::Keyframe:
+      return &RNA_ActionKeyframeStrip;
+  }
+  return &RNA_UnknownType;
+}
+
+ActionStrip *rna_ActionStrips_new(
+    ID *dna_action_id, ActionLayer *dna_layer, bContext *C, ReportList *reports, const int type)
 {
   const animrig::Strip::Type strip_type = animrig::Strip::Type(type);
 
@@ -388,35 +444,27 @@ ActionStrip *rna_ActionStrips_new(ActionLayer *dna_layer,
     return nullptr;
   }
 
-  animrig::Strip &strip = layer.strip_add(strip_type);
+  animrig::Action &action = reinterpret_cast<bAction *>(dna_action_id)->wrap();
+  animrig::Strip &strip = layer.strip_add(action, strip_type);
 
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
   return &strip;
 }
 
 void rna_ActionStrips_remove(
-    ID *action, ActionLayer *dna_layer, bContext *C, ReportList *reports, PointerRNA *strip_ptr)
+    ID *action_id, ActionLayer *dna_layer, bContext *C, ReportList *reports, PointerRNA *strip_ptr)
 {
+  animrig::Action &action = reinterpret_cast<bAction *>(action_id)->wrap();
   animrig::Layer &layer = dna_layer->wrap();
   animrig::Strip &strip = rna_data_strip(strip_ptr);
-  if (!layer.strip_remove(strip)) {
+  if (!layer.strip_remove(action, strip)) {
     BKE_report(reports, RPT_ERROR, "This strip does not belong to this layer");
     return;
   }
 
   RNA_POINTER_INVALIDATE(strip_ptr);
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
-  DEG_id_tag_update(action, ID_RECALC_ANIMATION);
-}
-
-static StructRNA *rna_ActionStrip_refine(PointerRNA *ptr)
-{
-  animrig::Strip &strip = rna_data_strip(ptr);
-  switch (strip.type()) {
-    case animrig::Strip::Type::Keyframe:
-      return &RNA_KeyframeActionStrip;
-  }
-  return &RNA_UnknownType;
+  DEG_id_tag_update(action_id, ID_RECALC_ANIMATION);
 }
 
 static std::optional<std::string> rna_ActionStrip_path(const PointerRNA *ptr)
@@ -444,30 +492,35 @@ static std::optional<std::string> rna_ActionStrip_path(const PointerRNA *ptr)
 static void rna_iterator_keyframestrip_channelbags_begin(CollectionPropertyIterator *iter,
                                                          PointerRNA *ptr)
 {
-  animrig::KeyframeStrip &key_strip = rna_data_keyframe_strip(ptr);
-  rna_iterator_array_begin(iter, key_strip.channelbags());
+  animrig::Action &action = reinterpret_cast<bAction *>(ptr->owner_id)->wrap();
+  animrig::Strip &strip = rna_data_strip(ptr);
+  rna_iterator_array_begin(iter, strip.data<animrig::StripKeyframeData>(action).channelbags());
 }
 
 static int rna_iterator_keyframestrip_channelbags_length(PointerRNA *ptr)
 {
-  animrig::KeyframeStrip &key_strip = rna_data_keyframe_strip(ptr);
-  return key_strip.channelbags().size();
+  animrig::Action &action = reinterpret_cast<bAction *>(ptr->owner_id)->wrap();
+  animrig::Strip &strip = rna_data_strip(ptr);
+  return strip.data<animrig::StripKeyframeData>(action).channelbags().size();
 }
 
-static ActionChannelBag *rna_ChannelBags_new(KeyframeActionStrip *dna_strip,
+static ActionChannelBag *rna_ChannelBags_new(ID *dna_action_id,
+                                             ActionStrip *dna_strip,
                                              bContext *C,
                                              ReportList *reports,
                                              ActionSlot *dna_slot)
 {
-  animrig::KeyframeStrip &key_strip = dna_strip->wrap();
+  animrig::Action &action = reinterpret_cast<bAction *>(dna_action_id)->wrap();
+  animrig::Strip &strip = dna_strip->wrap();
+  animrig::StripKeyframeData &strip_data = strip.data<animrig::StripKeyframeData>(action);
   animrig::Slot &slot = dna_slot->wrap();
 
-  if (key_strip.channelbag_for_slot(slot) != nullptr) {
+  if (strip_data.channelbag_for_slot(slot) != nullptr) {
     BKE_report(reports, RPT_ERROR, "A channelbag for this slot already exists");
     return nullptr;
   }
 
-  ChannelBag &channelbag = key_strip.channelbag_for_slot_add(slot);
+  animrig::ChannelBag &channelbag = strip_data.channelbag_for_slot_add(slot);
 
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
   /* No need to tag the depsgraph, as there is no new animation yet. */
@@ -475,50 +528,54 @@ static ActionChannelBag *rna_ChannelBags_new(KeyframeActionStrip *dna_strip,
   return &channelbag;
 }
 
-static void rna_ChannelBags_remove(ID *action,
-                                   KeyframeActionStrip *dna_strip,
+static void rna_ChannelBags_remove(ID *dna_action_id,
+                                   ActionStrip *dna_strip,
                                    bContext *C,
                                    ReportList *reports,
                                    PointerRNA *channelbag_ptr)
 {
-  animrig::KeyframeStrip &key_strip = dna_strip->wrap();
+  animrig::Action &action = reinterpret_cast<bAction *>(dna_action_id)->wrap();
+  animrig::StripKeyframeData &strip_data = dna_strip->wrap().data<animrig::StripKeyframeData>(
+      action);
   animrig::ChannelBag &channelbag = rna_data_channelbag(channelbag_ptr);
 
-  if (!key_strip.channelbag_remove(channelbag)) {
+  if (!strip_data.channelbag_remove(channelbag)) {
     BKE_report(reports, RPT_ERROR, "This channelbag does not belong to this strip");
     return;
   }
 
   RNA_POINTER_INVALIDATE(channelbag_ptr);
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN, nullptr);
-  DEG_id_tag_update(action, ID_RECALC_ANIMATION);
+  DEG_id_tag_update(dna_action_id, ID_RECALC_ANIMATION);
 }
 
-static bool rna_KeyframeActionStrip_key_insert(ID *id,
-                                               KeyframeActionStrip *dna_strip,
-                                               Main *bmain,
-                                               ReportList *reports,
-                                               ActionSlot *dna_slot,
-                                               const char *rna_path,
-                                               const int array_index,
-                                               const float value,
-                                               const float time)
+static bool rna_ActionStrip_key_insert(ID *dna_action_id,
+                                       ActionStrip *dna_strip,
+                                       Main *bmain,
+                                       ReportList *reports,
+                                       ActionSlot *dna_slot,
+                                       const char *rna_path,
+                                       const int array_index,
+                                       const float value,
+                                       const float time)
 {
   if (dna_slot == nullptr) {
     BKE_report(reports, RPT_ERROR, "Slot cannot be None");
     return false;
   }
 
-  animrig::KeyframeStrip &key_strip = dna_strip->wrap();
+  animrig::Action &action = reinterpret_cast<bAction *>(dna_action_id)->wrap();
+  animrig::StripKeyframeData &strip_data = dna_strip->wrap().data<animrig::StripKeyframeData>(
+      action);
   const animrig::Slot &slot = dna_slot->wrap();
   const animrig::KeyframeSettings settings = animrig::get_keyframe_settings(true);
 
-  const animrig::SingleKeyingResult result = key_strip.keyframe_insert(
+  const animrig::SingleKeyingResult result = strip_data.keyframe_insert(
       bmain, slot, {rna_path, array_index}, {time, value}, settings, INSERTKEY_NOFLAGS);
 
   const bool ok = result == animrig::SingleKeyingResult::SUCCESS;
   if (ok) {
-    DEG_id_tag_update_ex(bmain, id, ID_RECALC_ANIMATION);
+    DEG_id_tag_update_ex(bmain, dna_action_id, ID_RECALC_ANIMATION);
   }
 
   return ok;
@@ -532,12 +589,13 @@ static std::optional<std::string> rna_ChannelBag_path(const PointerRNA *ptr)
   for (animrig::Layer *layer : action.layers()) {
     for (int64_t strip_index : layer->strips().index_range()) {
       const animrig::Strip *strip = layer->strip(strip_index);
-      if (!strip->is<animrig::KeyframeStrip>()) {
+      if (strip->type() != animrig::Strip::Type::Keyframe) {
         continue;
       }
 
-      const animrig::KeyframeStrip &key_strip = strip->as<animrig::KeyframeStrip>();
-      const int64_t index = key_strip.find_channelbag_index(cbag_to_find);
+      const animrig::StripKeyframeData &strip_data = strip->data<animrig::StripKeyframeData>(
+          action);
+      const int64_t index = strip_data.find_channelbag_index(cbag_to_find);
       if (index < 0) {
         continue;
       }
@@ -631,49 +689,298 @@ static void rna_ChannelBag_fcurve_clear(ID *dna_action_id,
   WM_event_add_notifier(C, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
 }
 
-static ActionChannelBag *rna_KeyframeActionStrip_channels(KeyframeActionStrip *self,
-                                                          const animrig::slot_handle_t slot_handle)
+static void rna_iterator_ChannelBag_groups_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
-  animrig::KeyframeStrip &key_strip = self->wrap();
-  return key_strip.channelbag_for_slot(slot_handle);
+  animrig::ChannelBag &bag = rna_data_channelbag(ptr);
+  rna_iterator_array_begin(iter, bag.channel_groups());
+}
+
+static int rna_iterator_ChannelBag_groups_length(PointerRNA *ptr)
+{
+  animrig::ChannelBag &bag = rna_data_channelbag(ptr);
+  return bag.channel_groups().size();
+}
+
+static bActionGroup *rna_ChannelBag_group_new(ActionChannelBag *dna_channelbag, const char *name)
+{
+  BLI_assert(name != nullptr);
+
+  animrig::ChannelBag &self = dna_channelbag->wrap();
+  return &self.channel_group_create(name);
+}
+
+static void rna_ChannelBag_group_remove(ActionChannelBag *dna_channelbag,
+                                        ReportList *reports,
+                                        PointerRNA *agrp_ptr)
+{
+  animrig::ChannelBag &self = dna_channelbag->wrap();
+
+  bActionGroup *agrp = static_cast<bActionGroup *>(agrp_ptr->data);
+
+  if (!self.channel_group_remove(*agrp)) {
+    BKE_report(reports,
+               RPT_ERROR,
+               "Could not remove the F-Curve Group from the collection because it doesn't exist "
+               "in the collection");
+    return;
+  }
+
+  RNA_POINTER_INVALIDATE(agrp_ptr);
+  WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
+}
+
+static ActionChannelBag *rna_ActionStrip_channels(ID *dna_action_id,
+                                                  ActionStrip *self,
+                                                  const animrig::slot_handle_t slot_handle)
+{
+  animrig::Action &action = reinterpret_cast<bAction *>(dna_action_id)->wrap();
+  animrig::StripKeyframeData &strip_data = self->wrap().data<animrig::StripKeyframeData>(action);
+  return strip_data.channelbag_for_slot(slot_handle);
 }
 
 #  endif  // WITH_ANIM_BAKLAVA
 
-static void rna_ActionGroup_channels_next(CollectionPropertyIterator *iter)
+/**
+ * Iterator for the fcurves in a channel group.
+ *
+ * We need a custom iterator for this because legacy actions store their fcurves
+ * in a listbase, whereas layered actions store them in an array.  Therefore
+ * this iterator needs to handle both kinds of iteration.
+ *
+ * In the future when legacy actions are fully deprecated this can be changed to
+ * a simple array iterator.
+ */
+struct ActionGroupChannelsIterator {
+  /* Which kind of iterator it is. */
+  enum {
+    ARRAY,
+    LISTBASE,
+  } tag;
+
+  union {
+    ArrayIterator array;
+    ListBaseIterator listbase;
+  };
+};
+
+static void rna_ActionGroup_channels_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
 {
-  ListBaseIterator *internal = &iter->internal.listbase;
-  FCurve *fcu = (FCurve *)internal->link;
-  bActionGroup *grp = fcu->grp;
+  bActionGroup *group = (bActionGroup *)ptr->data;
 
-  /* only continue if the next F-Curve (if existent) belongs in the same group */
-  if ((fcu->next) && (fcu->next->grp == grp)) {
-    internal->link = (Link *)fcu->next;
-  }
-  else {
-    internal->link = nullptr;
+  ActionGroupChannelsIterator *custom_iter = MEM_cnew<ActionGroupChannelsIterator>(__func__);
+
+  iter->internal.custom = custom_iter;
+
+  /* We handle both the listbase (legacy action) and array (layered action)
+   * cases below. The code for each is based on the code in
+   * `rna_iterator_listbase_begin()` and `rna_iterator_array_begin()`,
+   * respectively. */
+
+  /* Group from a legacy action. */
+  if (group->wrap().is_legacy()) {
+    custom_iter->tag = ActionGroupChannelsIterator::LISTBASE;
+    custom_iter->listbase.link = static_cast<Link *>(group->channels.first);
+
+    iter->valid = custom_iter->listbase.link != nullptr;
+    return;
   }
 
-  iter->valid = (internal->link != nullptr);
+  /* Group from a layered action. */
+  animrig::ChannelBag &cbag = group->channel_bag->wrap();
+
+  custom_iter->tag = ActionGroupChannelsIterator::ARRAY;
+  custom_iter->array.ptr = reinterpret_cast<char *>(cbag.fcurve_array + group->fcurve_range_start);
+  custom_iter->array.endptr = reinterpret_cast<char *>(
+      cbag.fcurve_array + group->fcurve_range_start + group->fcurve_range_length);
+  custom_iter->array.itemsize = sizeof(FCurve *);
+  custom_iter->array.length = group->fcurve_range_length;
+
+  iter->valid = group->fcurve_range_length > 0;
 }
 
-static bActionGroup *rna_Action_groups_new(bAction *act, ReportList *reports, const char name[])
+static void rna_ActionGroup_channels_end(CollectionPropertyIterator *iter)
 {
-  if (!act->wrap().is_action_legacy()) {
-    BKE_reportf(reports,
-                RPT_ERROR,
-                "Cannot add legacy Action Groups to a layered Action '%s'. Convert it to a legacy "
-                "Action first.",
-                act->id.name + 2);
-    return nullptr;
+  MEM_freeN(iter->internal.custom);
+}
+
+static void rna_ActionGroup_channels_next(CollectionPropertyIterator *iter)
+{
+  BLI_assert(iter->internal.custom != nullptr);
+  BLI_assert(iter->valid);
+
+  ActionGroupChannelsIterator *custom_iter = static_cast<ActionGroupChannelsIterator *>(
+      iter->internal.custom);
+
+  /* The code for both cases here is written based on the code in
+   * `rna_iterator_array_next()` and `rna_iterator_listbase_next()`,
+   * respectively. */
+  switch (custom_iter->tag) {
+    case ActionGroupChannelsIterator::ARRAY: {
+      custom_iter->array.ptr += custom_iter->array.itemsize;
+      iter->valid = (custom_iter->array.ptr != custom_iter->array.endptr);
+      break;
+    }
+    case ActionGroupChannelsIterator::LISTBASE: {
+      FCurve *fcurve = (FCurve *)custom_iter->listbase.link;
+      bActionGroup *grp = fcurve->grp;
+      /* Only continue if the next F-Curve (if existent) belongs in the same
+       * group. */
+      if ((fcurve->next) && (fcurve->next->grp == grp)) {
+        custom_iter->listbase.link = custom_iter->listbase.link->next;
+        iter->valid = (custom_iter->listbase.link != nullptr);
+      }
+      else {
+        custom_iter->listbase.link = nullptr;
+        iter->valid = false;
+      }
+      break;
+    }
+  }
+}
+
+static PointerRNA rna_ActionGroup_channels_get(CollectionPropertyIterator *iter)
+{
+  BLI_assert(iter->internal.custom != nullptr);
+  BLI_assert(iter->valid);
+  ActionGroupChannelsIterator *custom_iter = static_cast<ActionGroupChannelsIterator *>(
+      iter->internal.custom);
+
+  FCurve *fcurve;
+  switch (custom_iter->tag) {
+    case ActionGroupChannelsIterator::ARRAY:
+      fcurve = *reinterpret_cast<FCurve **>(custom_iter->array.ptr);
+      break;
+    case ActionGroupChannelsIterator::LISTBASE:
+      fcurve = reinterpret_cast<FCurve *>(custom_iter->listbase.link);
+      break;
   }
 
-  return action_groups_add_new(act, name);
+  return rna_pointer_inherit_refine(&iter->parent, &RNA_FCurve, fcurve);
+}
+
+#  ifdef WITH_ANIM_BAKLAVA
+/* Use the backward-compatible API only when we're working with the action as a
+ * layered action. */
+static bool use_backward_compatible_api(animrig::Action &action)
+{
+  return !animrig::legacy::action_treat_as_legacy(action);
+}
+
+static void rna_iterator_Action_groups_begin(CollectionPropertyIterator *iter, PointerRNA *ptr)
+{
+  animrig::Action &action = rna_action(ptr);
+
+  if (use_backward_compatible_api(action)) {
+    animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
+    if (!channelbag) {
+      return;
+    }
+    rna_iterator_array_begin(iter, channelbag->channel_groups());
+  }
+  else {
+    rna_iterator_listbase_begin(iter, &action.groups, nullptr);
+  }
+}
+static void rna_iterator_Action_groups_next(CollectionPropertyIterator *iter)
+{
+  animrig::Action &action = rna_action(&iter->parent);
+  if (use_backward_compatible_api(action)) {
+    rna_iterator_array_next(iter);
+  }
+  else {
+    rna_iterator_listbase_next(iter);
+  }
+}
+static void rna_iterator_Action_groups_end(CollectionPropertyIterator *iter)
+{
+  animrig::Action &action = rna_action(&iter->parent);
+  if (use_backward_compatible_api(action)) {
+    rna_iterator_array_end(iter);
+  }
+  else {
+    rna_iterator_listbase_end(iter);
+  }
+}
+static PointerRNA rna_iterator_Action_groups_get(CollectionPropertyIterator *iter)
+{
+  animrig::Action &action = rna_action(&iter->parent);
+  bActionGroup *group;
+  if (use_backward_compatible_api(action)) {
+    group = static_cast<bActionGroup *>(rna_iterator_array_dereference_get(iter));
+  }
+  else {
+    group = static_cast<bActionGroup *>(rna_iterator_listbase_get(iter));
+  }
+
+  return RNA_pointer_create(&action.id, &RNA_ActionGroup, group);
+}
+static int rna_iterator_Action_groups_length(PointerRNA *ptr)
+{
+  animrig::Action &action = rna_action(ptr);
+  if (use_backward_compatible_api(action)) {
+    animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
+    if (!channelbag) {
+      return 0;
+    }
+    return channelbag->channel_groups().size();
+  }
+  return BLI_listbase_count(&action.groups);
+}
+
+#  endif /* WITH_ANIM_BAKLAVA */
+
+static bActionGroup *rna_Action_groups_new(bAction *act, const char name[])
+{
+  bActionGroup *group;
+
+#  ifdef WITH_ANIM_BAKLAVA
+  animrig::Action &action = act->wrap();
+  if (use_backward_compatible_api(action)) {
+    animrig::ChannelBag &channelbag = animrig::legacy::channelbag_ensure(action);
+    group = &channelbag.channel_group_create(name);
+  }
+  else {
+    group = action_groups_add_new(act, name);
+  }
+#  else
+  group = action_groups_add_new(act, name);
+#  endif
+
+  /* I (Sybren) expected that the commented-out notifier below was missing.
+   * However, the animation filtering code (`animfilter_act_group()`) hides
+   * empty groups. Because this group is newly created, it's not shown in the
+   * UI, and thus there is no need to send notifiers.
+   *
+   * WM_main_add_notifier(NC_ANIMATION | ND_ANIMCHAN | NA_ADDED, nullptr); */
+
+  return group;
 }
 
 static void rna_Action_groups_remove(bAction *act, ReportList *reports, PointerRNA *agrp_ptr)
 {
   bActionGroup *agrp = static_cast<bActionGroup *>(agrp_ptr->data);
+  BLI_assert(agrp); /* Ensured by RNA flag PROP_NEVER_NULL. */
+
+#  ifdef WITH_ANIM_BAKLAVA
+  animrig::Action &action = act->wrap();
+  if (use_backward_compatible_api(action)) {
+    animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
+    if (!channelbag || !channelbag->channel_group_remove(*agrp)) {
+      BKE_reportf(reports,
+                  RPT_ERROR,
+                  "Action group '%s' not found in action '%s'",
+                  agrp->name,
+                  act->id.name + 2);
+    }
+
+    /* Removing a group also removes its F-Curves. */
+    DEG_id_tag_update(&act->id, ID_RECALC_ANIMATION_NO_FLUSH);
+    WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
+
+    return;
+  }
+#  endif
+
   FCurve *fcu, *fcn;
 
   /* try to remove the F-Curve from the action */
@@ -702,16 +1009,6 @@ static void rna_Action_groups_remove(bAction *act, ReportList *reports, PointerR
 
   DEG_id_tag_update(&act->id, ID_RECALC_ANIMATION_NO_FLUSH);
   WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
-}
-
-/* Use the backward-compatible API only when the experimental feature is
- * enabled OR if the Action is already a layered Action. */
-static bool use_backward_compatible_api(animrig::Action &action)
-{
-  /* action.is_action_layered() returns 'true' on empty Actions, but that case must be protected by
-   * the experimental flag, hence the expression below uses !action.is_action_legacy(). */
-  return (USER_EXPERIMENTAL_TEST(&U, use_animation_baklava) && action.is_empty()) ||
-         !action.is_action_legacy();
 }
 
 #  ifdef WITH_ANIM_BAKLAVA
@@ -791,11 +1088,17 @@ static FCurve *rna_Action_fcurve_new(bAction *act,
     return nullptr;
   }
 
+  animrig::FCurveDescriptor fcurve_descriptor = {data_path, index};
+  if (group && group[0] != '\0') {
+    fcurve_descriptor.channel_group = group;
+  }
+
+#  ifdef WITH_ANIM_BAKLAVA
   animrig::Action &action = act->wrap();
   if (use_backward_compatible_api(action)) {
     /* Add the F-Curve to the channelbag for the first slot. */
     animrig::ChannelBag &channelbag = animrig::legacy::channelbag_ensure(action);
-    FCurve *fcurve = channelbag.fcurve_create_unique(bmain, {data_path, index});
+    FCurve *fcurve = channelbag.fcurve_create_unique(bmain, fcurve_descriptor);
     if (!fcurve) {
       /* The only reason fcurve_create_unique() returns nullptr is when the curve
        * already exists. */
@@ -810,16 +1113,12 @@ static FCurve *rna_Action_fcurve_new(bAction *act,
       return nullptr;
     }
 
-    /* TODO: handle the groups. */
     return fcurve;
   }
-
-  if (group && group[0] == '\0') {
-    group = nullptr;
-  }
+#  endif
 
   /* Annoying, check if this exists. */
-  if (blender::animrig::action_fcurve_find(act, {data_path, index})) {
+  if (blender::animrig::fcurve_find_in_action(act, fcurve_descriptor)) {
     BKE_reportf(reports,
                 RPT_ERROR,
                 "F-Curve '%s[%d]' already exists in action '%s'",
@@ -828,7 +1127,12 @@ static FCurve *rna_Action_fcurve_new(bAction *act,
                 act->id.name + 2);
     return nullptr;
   }
-  return blender::animrig::action_fcurve_ensure(bmain, act, group, nullptr, {data_path, index});
+  return blender::animrig::action_fcurve_ensure(
+      bmain,
+      act,
+      fcurve_descriptor.channel_group ? fcurve_descriptor.channel_group->c_str() : nullptr,
+      nullptr,
+      fcurve_descriptor);
 }
 
 static FCurve *rna_Action_fcurve_find(bAction *act,
@@ -841,6 +1145,7 @@ static FCurve *rna_Action_fcurve_find(bAction *act,
     return nullptr;
   }
 
+#  ifdef WITH_ANIM_BAKLAVA
   animrig::Action &action = act->wrap();
   if (use_backward_compatible_api(action)) {
     animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
@@ -849,15 +1154,17 @@ static FCurve *rna_Action_fcurve_find(bAction *act,
     }
     return channelbag->fcurve_find({data_path, index});
   }
+#  endif
 
   /* Returns nullptr if not found. */
-  return BKE_fcurve_find(&act->curves, data_path, index);
+  return animrig::fcurve_find_in_action(act, {data_path, index});
 }
 
 static void rna_Action_fcurve_remove(bAction *act, ReportList *reports, PointerRNA *fcu_ptr)
 {
   FCurve *fcu = static_cast<FCurve *>(fcu_ptr->data);
 
+#  ifdef WITH_ANIM_BAKLAVA
   animrig::Action &action = act->wrap();
   if (use_backward_compatible_api(action)) {
     animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
@@ -876,6 +1183,7 @@ static void rna_Action_fcurve_remove(bAction *act, ReportList *reports, PointerR
 
     return;
   }
+#  endif
 
   if (fcu->grp) {
     if (BLI_findindex(&act->groups, fcu->grp) == -1) {
@@ -908,6 +1216,7 @@ static void rna_Action_fcurve_remove(bAction *act, ReportList *reports, PointerR
 
 static void rna_Action_fcurve_clear(bAction *act)
 {
+#  ifdef WITH_ANIM_BAKLAVA
   animrig::Action &action = act->wrap();
   if (use_backward_compatible_api(action)) {
     animrig::ChannelBag *channelbag = animrig::legacy::channelbag_get(action);
@@ -920,6 +1229,9 @@ static void rna_Action_fcurve_clear(bAction *act)
   else {
     BKE_action_fcurves_clear(act);
   }
+#  else
+  BKE_action_fcurves_clear(act);
+#  endif
 
   WM_main_add_notifier(NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
 }
@@ -1006,7 +1318,9 @@ static bool rna_Action_is_action_layered_get(PointerRNA *ptr)
 
 static void rna_Action_frame_range_get(PointerRNA *ptr, float *r_values)
 {
-  BKE_action_frame_range_get((bAction *)ptr->owner_id, &r_values[0], &r_values[1]);
+  const float2 frame_range = rna_action(ptr).get_frame_range();
+  r_values[0] = frame_range[0];
+  r_values[1] = frame_range[1];
 }
 
 static void rna_Action_frame_range_set(PointerRNA *ptr, const float *values)
@@ -1022,23 +1336,27 @@ static void rna_Action_frame_range_set(PointerRNA *ptr, const float *values)
 static void rna_Action_curve_frame_range_get(PointerRNA *ptr, float *values)
 { /* don't include modifiers because they too easily can have very large
    * ranges: MINAFRAMEF to MAXFRAMEF. */
-  BKE_action_frame_range_calc((bAction *)ptr->owner_id, false, values, values + 1);
+  const float2 frame_range = rna_action(ptr).get_frame_range_of_keys(false);
+  values[0] = frame_range[0];
+  values[1] = frame_range[1];
 }
 
 static void rna_Action_use_frame_range_set(PointerRNA *ptr, bool value)
 {
-  bAction *data = (bAction *)ptr->owner_id;
+  animrig::Action &action = rna_action(ptr);
 
   if (value) {
     /* If the frame range is blank, initialize it by scanning F-Curves. */
-    if ((data->frame_start == data->frame_end) && (data->frame_start == 0)) {
-      BKE_action_frame_range_calc(data, false, &data->frame_start, &data->frame_end);
+    if ((action.frame_start == action.frame_end) && (action.frame_start == 0)) {
+      const float2 frame_range = action.get_frame_range_of_keys(false);
+      action.frame_start = frame_range[0];
+      action.frame_end = frame_range[1];
     }
 
-    data->flag |= ACT_FRAME_RANGE;
+    action.flag |= ACT_FRAME_RANGE;
   }
   else {
-    data->flag &= ~ACT_FRAME_RANGE;
+    action.flag &= ~ACT_FRAME_RANGE;
   }
 }
 
@@ -1069,22 +1387,29 @@ static void rna_Action_deselect_keys(bAction *act)
 bool rna_Action_id_poll(PointerRNA *ptr, PointerRNA value)
 {
   ID *srcId = ptr->owner_id;
-  bAction *act = (bAction *)value.owner_id;
+  bAction *dna_action = (bAction *)value.owner_id;
 
-  if (act) {
+  if (!dna_action) {
+    return false;
+  }
+
+  animrig::Action &action = dna_action->wrap();
+  if (animrig::legacy::action_treat_as_legacy(action)) {
     /* there can still be actions that will have undefined id-root
      * (i.e. floating "action-library" members) which we will not
      * be able to resolve an idroot for automatically, so let these through
      */
-    if (act->idroot == 0) {
+    if (action.idroot == 0) {
       return 1;
     }
     else if (srcId) {
-      return GS(srcId->name) == act->idroot;
+      return GS(srcId->name) == action.idroot;
     }
   }
 
-  return 0;
+  /* Layered Actions can always be assigned. */
+  BLI_assert(action.idroot == 0);
+  return true;
 }
 
 /* Used to check if an action (value pointer)
@@ -1170,6 +1495,54 @@ static std::optional<std::string> rna_DopeSheet_path(const PointerRNA *ptr)
   return "dopesheet";
 }
 
+static const EnumPropertyItem *rna_ActionSlot_id_root_itemf(bContext * /* C */,
+                                                            PointerRNA * /* ptr */,
+                                                            PropertyRNA * /* prop */,
+                                                            bool *r_free)
+{
+  /* These items don't change, as the ID types are hard-coded. So better to
+   * cache the list of enum items. */
+  static EnumPropertyItem *_rna_ActionSlot_id_root_items = nullptr;
+
+  if (_rna_ActionSlot_id_root_items) {
+    return _rna_ActionSlot_id_root_items;
+  }
+
+  int totitem = 0;
+  EnumPropertyItem *items = nullptr;
+
+  int i = 0;
+  while (rna_enum_id_type_items[i].identifier != nullptr) {
+    EnumPropertyItem item = {0};
+    item.value = rna_enum_id_type_items[i].value;
+    item.name = rna_enum_id_type_items[i].name;
+    item.identifier = rna_enum_id_type_items[i].identifier;
+    item.icon = rna_enum_id_type_items[i].icon;
+    item.description = rna_enum_id_type_items[i].description;
+    RNA_enum_item_add(&items, &totitem, &item);
+    i++;
+  }
+
+  RNA_enum_item_add(&items, &totitem, &default_ActionSlot_id_root_items[0]);
+
+  RNA_enum_item_end(&items, &totitem);
+
+  /* Don't free, but keep a reference to the created list. This is necessary
+   * because of the PROP_ENUM_NO_CONTEXT flag. Without it, this will make
+   * Blender use memory after it is freed:
+   *
+   * >>> slot = C.object.animation_data.action_slot
+   * >>> enum_item = s.bl_rna.properties['id_root'].enum_items[slot.id_root]
+   * >>> print(enum_item.name)
+   */
+  *r_free = false;
+  _rna_ActionSlot_id_root_items = items;
+
+  BKE_blender_atexit_register(MEM_freeN, items);
+
+  return items;
+}
+
 #else
 
 static void rna_def_dopesheet(BlenderRNA *brna)
@@ -1211,7 +1584,7 @@ static void rna_def_dopesheet(BlenderRNA *brna)
   prop = RNA_def_property(srna, "show_all_slots", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "filterflag", ADS_FILTER_ALL_SLOTS);
   RNA_def_property_ui_text(prop, "Show All Slots", "Show all the Action's Slots");
-  RNA_def_property_ui_icon(prop, ICON_LINKED, 0); /* TODO: select icon for Slots. */
+  RNA_def_property_ui_icon(prop, ICON_ACTION_SLOT, 0);
   RNA_def_property_update(prop, NC_ANIMATION | ND_ANIMCHAN | NA_EDITED, nullptr);
 
   prop = RNA_def_property(srna, "show_hidden", PROP_BOOLEAN, PROP_NONE);
@@ -1520,7 +1893,7 @@ static void rna_def_action_slots(BlenderRNA *brna, PropertyRNA *cprop)
 
   /* Animation.slots.new(...) */
   func = RNA_def_function(srna, "new", "rna_Action_slots_new");
-  RNA_def_function_ui_description(func, "Add a slot to the animation");
+  RNA_def_function_ui_description(func, "Add a slot to the Action");
   RNA_def_function_flag(func, FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
   parm = RNA_def_pointer(
       func,
@@ -1535,6 +1908,15 @@ static void rna_def_action_slots(BlenderRNA *brna, PropertyRNA *cprop)
 
   parm = RNA_def_pointer(func, "slot", "ActionSlot", "", "Newly created action slot");
   RNA_def_function_return(func, parm);
+
+  /* Animation.slots.remove(layer) */
+  func = RNA_def_function(srna, "remove", "rna_Action_slots_remove");
+  RNA_def_function_flag(func, FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
+  RNA_def_function_ui_description(func,
+                                  "Remove the slot from the Action, including all animation that "
+                                  "is associated with that slot");
+  parm = RNA_def_pointer(func, "action_slot", "ActionSlot", "Action Slot", "The slot to remove");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED | PARM_RNAPTR);
 }
 
 static void rna_def_action_layers(BlenderRNA *brna, PropertyRNA *cprop)
@@ -1581,11 +1963,14 @@ static void rna_def_action_slot(BlenderRNA *brna)
 
   srna = RNA_def_struct(brna, "ActionSlot", nullptr);
   RNA_def_struct_path_func(srna, "rna_ActionSlot_path");
+  RNA_def_struct_ui_icon(srna, ICON_ACTION_SLOT);
   RNA_def_struct_ui_text(
       srna,
       "Action slot",
       "Identifier for a set of channels in this Action, that can be used by a data-block "
       "to specify what it gets animated by");
+
+  RNA_define_lib_overridable(false);
 
   prop = RNA_def_property(srna, "name", PROP_STRING, PROP_NONE);
   RNA_def_struct_name_property(srna, prop);
@@ -1595,10 +1980,21 @@ static void rna_def_action_slot(BlenderRNA *brna)
   RNA_def_property_ui_text(
       prop,
       "Slot Name",
-      "Used when connecting an Action to a data-block, to find the correct slot handle");
+      "Used when connecting an Action to a data-block, to find the correct slot handle. This is "
+      "the display name, prefixed by two characters determined by the slot's ID type");
 
-  prop = RNA_def_property(srna, "idtype_icon", PROP_INT, PROP_NONE);
-  RNA_def_property_int_funcs(prop, "rna_ActionSlot_idtype_icon_get", nullptr, nullptr);
+  prop = RNA_def_property(srna, "id_root", PROP_ENUM, PROP_NONE);
+  RNA_def_property_enum_sdna(prop, nullptr, "idtype");
+  RNA_def_property_enum_items(prop, default_ActionSlot_id_root_items);
+  RNA_def_property_enum_funcs(prop, nullptr, nullptr, "rna_ActionSlot_id_root_itemf");
+  RNA_def_property_flag(prop, PROP_ENUM_NO_CONTEXT);
+  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+  RNA_def_property_ui_text(
+      prop, "ID Root Type", "Type of data-block that can be animated by this slot");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_ID);
+
+  prop = RNA_def_property(srna, "id_root_icon", PROP_INT, PROP_NONE);
+  RNA_def_property_int_funcs(prop, "rna_ActionSlot_id_root_icon_get", nullptr, nullptr);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
 
   prop = RNA_def_property(srna, "name_display", PROP_STRING, PROP_NONE);
@@ -1611,15 +2007,15 @@ static void rna_def_action_slot(BlenderRNA *brna)
   RNA_def_property_ui_text(
       prop,
       "Slot Display Name",
-      "Name of the slot for showing in the interface. It is the name, without the first two "
-      "characters that identify what kind of data-block it animates.");
+      "Name of the slot, for display in the user interface. This name combined with the slot's "
+      "data-block type is unique within its Action");
 
   prop = RNA_def_property(srna, "handle", PROP_INT, PROP_NONE);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
   RNA_def_property_ui_text(prop,
                            "Slot Handle",
                            "Number specific to this Slot, unique within the Action"
-                           "This is used, for example, on a KeyframeActionStrip to look up the "
+                           "This is used, for example, on a ActionKeyframeStrip to look up the "
                            "ActionChannelBag for this Slot");
 
   prop = RNA_def_property(srna, "active", PROP_BOOLEAN, PROP_NONE);
@@ -1645,6 +2041,16 @@ static void rna_def_action_slot(BlenderRNA *brna)
   RNA_def_property_flag(prop, PROP_NO_DEG_UPDATE);
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_update_notifier(prop, NC_ANIMATION | ND_ANIMCHAN | NA_SELECTED);
+
+#    ifndef NDEBUG
+  /* Slot.debug_log_users() */
+  {
+    FunctionRNA *func;
+
+    func = RNA_def_function(srna, "debug_log_users", "rna_ActionSlot_debug_log_users");
+    RNA_def_function_flag(func, FUNC_USE_SELF_ID | FUNC_USE_MAIN);
+  }
+#    endif
 }
 
 static void rna_def_ActionLayer_strips(BlenderRNA *brna, PropertyRNA *cprop)
@@ -1664,7 +2070,7 @@ static void rna_def_ActionLayer_strips(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_function_ui_description(func,
                                   "Add a new strip to the layer. Currently a layer can only have "
                                   "one strip, with infinite boundaries.");
-  RNA_def_function_flag(func, FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
+  RNA_def_function_flag(func, FUNC_USE_SELF_ID | FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
   parm = RNA_def_enum(func,
                       "type",
                       rna_enum_strip_type_items,
@@ -1738,18 +2144,18 @@ static void rna_def_keyframestrip_channelbags(BlenderRNA *brna, PropertyRNA *cpr
 
   RNA_def_property_srna(cprop, "ActionChannelBags");
   srna = RNA_def_struct(brna, "ActionChannelBags", nullptr);
-  RNA_def_struct_sdna(srna, "KeyframeActionStrip");
+  RNA_def_struct_sdna(srna, "ActionStrip");
   RNA_def_struct_ui_text(
       srna,
       "Animation Channels for Slots",
       "For each action slot, a list of animation channels that are meant for that slot");
 
-  /* KeyframeStrip.channelbags.new(slot=...) */
+  /* Strip.channelbags.new(slot=...) */
   func = RNA_def_function(srna, "new", "rna_ChannelBags_new");
   RNA_def_function_ui_description(
       func,
       "Add a new channelbag to the strip, to contain animation channels for a specific slot");
-  RNA_def_function_flag(func, FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
+  RNA_def_function_flag(func, FUNC_USE_SELF_ID | FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
   parm = RNA_def_pointer(func,
                          "slot",
                          "ActionSlot",
@@ -1761,7 +2167,7 @@ static void rna_def_keyframestrip_channelbags(BlenderRNA *brna, PropertyRNA *cpr
   parm = RNA_def_pointer(func, "channelbag", "ActionChannelBag", "", "Newly created channelbag");
   RNA_def_function_return(func, parm);
 
-  /* KeyframeStrip.channelbags.remove(strip) */
+  /* Strip.channelbags.remove(strip) */
   func = RNA_def_function(srna, "remove", "rna_ChannelBags_remove");
   RNA_def_function_flag(func, FUNC_USE_SELF_ID | FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
   RNA_def_function_ui_description(func, "Remove the channelbag from the strip");
@@ -1769,14 +2175,18 @@ static void rna_def_keyframestrip_channelbags(BlenderRNA *brna, PropertyRNA *cpr
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED | PARM_RNAPTR);
 }
 
+/**
+ * Define the ActionKeyframeStrip subtype of ActionStrip.
+ */
 static void rna_def_action_keyframe_strip(BlenderRNA *brna)
 {
   StructRNA *srna;
   PropertyRNA *prop;
 
-  srna = RNA_def_struct(brna, "KeyframeActionStrip", "ActionStrip");
+  srna = RNA_def_struct(brna, "ActionKeyframeStrip", "ActionStrip");
   RNA_def_struct_ui_text(
       srna, "Keyframe Animation Strip", "Strip with a set of F-Curves for each action slot");
+  RNA_def_struct_sdna_from(srna, "ActionStrip", nullptr);
 
   prop = RNA_def_property(srna, "channelbags", PROP_COLLECTION, PROP_NONE);
   RNA_def_property_struct_type(prop, "ActionChannelBag");
@@ -1795,8 +2205,9 @@ static void rna_def_action_keyframe_strip(BlenderRNA *brna)
     FunctionRNA *func;
     PropertyRNA *parm;
 
-    /* KeyframeStrip.channels(...). */
-    func = RNA_def_function(srna, "channels", "rna_KeyframeActionStrip_channels");
+    /* Strip.channels(...). */
+    func = RNA_def_function(srna, "channels", "rna_ActionStrip_channels");
+    RNA_def_function_flag(func, FUNC_USE_SELF_ID);
     RNA_def_function_ui_description(func, "Find the ActionChannelBag for a specific Slot");
     parm = RNA_def_int(func,
                        "slot_handle",
@@ -1811,9 +2222,9 @@ static void rna_def_action_keyframe_strip(BlenderRNA *brna)
     parm = RNA_def_pointer(func, "channels", "ActionChannelBag", "Channels", "");
     RNA_def_function_return(func, parm);
 
-    /* KeyframeStrip.key_insert(...). */
+    /* Strip.key_insert(...). */
 
-    func = RNA_def_function(srna, "key_insert", "rna_KeyframeActionStrip_key_insert");
+    func = RNA_def_function(srna, "key_insert", "rna_ActionStrip_key_insert");
     RNA_def_function_flag(func, FUNC_USE_SELF_ID | FUNC_USE_MAIN | FUNC_USE_REPORTS);
     parm = RNA_def_pointer(func,
                            "slot",
@@ -1890,7 +2301,7 @@ static void rna_def_action_strip(BlenderRNA *brna)
   RNA_def_property_enum_items(prop, prop_type_items);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
 
-  /* Define Strip subclasses. */
+  /* Define Strip subtypes. */
   rna_def_action_keyframe_strip(brna);
 }
 
@@ -1953,6 +2364,34 @@ static void rna_def_channelbag_fcurves(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_function_ui_description(func, "Remove all F-Curves from this channelbag");
 }
 
+static void rna_def_channelbag_groups(BlenderRNA *brna, PropertyRNA *cprop)
+{
+  StructRNA *srna;
+
+  FunctionRNA *func;
+  PropertyRNA *parm;
+
+  RNA_def_property_srna(cprop, "ActionChannelBagGroups");
+  srna = RNA_def_struct(brna, "ActionChannelBagGroups", nullptr);
+  RNA_def_struct_sdna(srna, "ActionChannelBag");
+  RNA_def_struct_ui_text(srna, "F-Curve Groups", "Collection of f-curve groups");
+
+  func = RNA_def_function(srna, "new", "rna_ChannelBag_group_new");
+  RNA_def_function_flag(func, FunctionFlag(0));
+  RNA_def_function_ui_description(func, "Create a new action group and add it to the action");
+  parm = RNA_def_string(func, "name", "Group", 0, "", "New name for the action group");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  parm = RNA_def_pointer(func, "action_group", "ActionGroup", "", "Newly created action group");
+  RNA_def_function_return(func, parm);
+
+  func = RNA_def_function(srna, "remove", "rna_ChannelBag_group_remove");
+  RNA_def_function_ui_description(func, "Remove action group");
+  RNA_def_function_flag(func, FUNC_USE_REPORTS);
+  parm = RNA_def_pointer(func, "action_group", "ActionGroup", "", "Action group to remove");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED | PARM_RNAPTR);
+  RNA_def_parameter_clear_flags(parm, PROP_THICK_WRAP, ParameterFlag(0));
+}
+
 static void rna_def_action_channelbag(BlenderRNA *brna)
 {
   StructRNA *srna;
@@ -1968,6 +2407,7 @@ static void rna_def_action_channelbag(BlenderRNA *brna)
   prop = RNA_def_property(srna, "slot_handle", PROP_INT, PROP_NONE);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
 
+  /* ChannelBag.fcurves */
   prop = RNA_def_property(srna, "fcurves", PROP_COLLECTION, PROP_NONE);
   RNA_def_property_collection_funcs(prop,
                                     "rna_iterator_ChannelBag_fcurves_begin",
@@ -1981,10 +2421,26 @@ static void rna_def_action_channelbag(BlenderRNA *brna)
   RNA_def_property_struct_type(prop, "FCurve");
   RNA_def_property_ui_text(prop, "F-Curves", "The individual F-Curves that animate the slot");
   rna_def_channelbag_fcurves(brna, prop);
+
+  /* ChannelBag.groups */
+  prop = RNA_def_property(srna, "groups", PROP_COLLECTION, PROP_NONE);
+  RNA_def_property_collection_funcs(prop,
+                                    "rna_iterator_ChannelBag_groups_begin",
+                                    "rna_iterator_array_next",
+                                    "rna_iterator_array_end",
+                                    "rna_iterator_array_dereference_get",
+                                    "rna_iterator_ChannelBag_groups_length",
+                                    nullptr,
+                                    nullptr,
+                                    nullptr);
+  RNA_def_property_struct_type(prop, "ActionGroup");
+  RNA_def_property_ui_text(
+      prop,
+      "F-Curve Groups",
+      "Groupings of F-Curves for display purposes, in e.g. the dopesheet and graph editor");
+  rna_def_channelbag_groups(brna, prop);
 }
 #  endif  // WITH_ANIM_BAKLAVA
-
-/* =========================== Legacy Action interface =========================== */
 
 static void rna_def_action_group(BlenderRNA *brna)
 {
@@ -2014,10 +2470,10 @@ static void rna_def_action_group(BlenderRNA *brna)
   RNA_def_property_collection_sdna(prop, nullptr, "channels", nullptr);
   RNA_def_property_struct_type(prop, "FCurve");
   RNA_def_property_collection_funcs(prop,
-                                    nullptr,
+                                    "rna_ActionGroup_channels_begin",
                                     "rna_ActionGroup_channels_next",
-                                    nullptr,
-                                    nullptr,
+                                    "rna_ActionGroup_channels_end",
+                                    "rna_ActionGroup_channels_get",
                                     nullptr,
                                     nullptr,
                                     nullptr,
@@ -2062,6 +2518,8 @@ static void rna_def_action_group(BlenderRNA *brna)
   rna_def_actionbone_group_common(srna, NC_ANIMATION | ND_ANIMCHAN | NA_EDITED, nullptr);
 }
 
+/* =========================== Legacy Action interface =========================== */
+
 /* fcurve.keyframe_points */
 static void rna_def_action_groups(BlenderRNA *brna, PropertyRNA *cprop)
 {
@@ -2074,13 +2532,22 @@ static void rna_def_action_groups(BlenderRNA *brna, PropertyRNA *cprop)
   srna = RNA_def_struct(brna, "ActionGroups", nullptr);
   RNA_def_struct_sdna(srna, "bAction");
   RNA_def_struct_ui_text(srna, "Action Groups", "Collection of action groups");
+#  ifdef WITH_ANIM_BAKLAVA
+  RNA_def_property_collection_funcs(cprop,
+                                    "rna_iterator_Action_groups_begin",
+                                    "rna_iterator_Action_groups_next",
+                                    "rna_iterator_Action_groups_end",
+                                    "rna_iterator_Action_groups_get",
+                                    "rna_iterator_Action_groups_length",
+                                    nullptr,
+                                    nullptr,
+                                    nullptr);
+#  endif
 
   func = RNA_def_function(srna, "new", "rna_Action_groups_new");
-  RNA_def_function_flag(func, FUNC_USE_REPORTS);
   RNA_def_function_ui_description(func, "Create a new action group and add it to the action");
   parm = RNA_def_string(func, "name", "Group", 0, "", "New name for the action group");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
-
   parm = RNA_def_pointer(func, "action_group", "ActionGroup", "", "Newly created action group");
   RNA_def_function_return(func, parm);
 
@@ -2226,7 +2693,9 @@ static void rna_def_action_legacy(BlenderRNA *brna, StructRNA *srna)
    * but is still available/editable in 'emergencies' */
   prop = RNA_def_property(srna, "id_root", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_sdna(prop, nullptr, "idroot");
-  RNA_def_property_enum_items(prop, rna_enum_id_type_items);
+  RNA_def_property_enum_items(prop, default_ActionSlot_id_root_items);
+  RNA_def_property_enum_funcs(prop, nullptr, nullptr, "rna_ActionSlot_id_root_itemf");
+  RNA_def_property_flag(prop, PROP_ENUM_NO_CONTEXT);
   RNA_def_property_ui_text(prop,
                            "ID Root Type",
                            "Type of ID block that action can be used on - "
@@ -2246,9 +2715,6 @@ static void rna_def_action(BlenderRNA *brna)
 
 #  ifdef WITH_ANIM_BAKLAVA
   /* Properties. */
-  prop = RNA_def_property(srna, "last_slot_handle", PROP_INT, PROP_NONE);
-  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
-
   prop = RNA_def_property(srna, "is_empty", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
   RNA_def_property_ui_text(

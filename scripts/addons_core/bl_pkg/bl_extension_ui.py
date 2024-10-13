@@ -216,7 +216,7 @@ def addon_draw_item_expanded(
         addon_type,  # `int`
         is_enabled,  # `bool`
         # Expanded from both legacy add-ons & extensions.
-        item_name,  # `str`
+        # item_name,  # `str`  # UNUSED.
         item_description,  # `str`
         item_maintainer,  # `str`
         item_version,  # `str`
@@ -582,7 +582,7 @@ def addons_panel_draw_items(
                 addon_type=addon_type,
                 is_enabled=is_enabled,
                 # Expanded from both legacy add-ons & extensions.
-                item_name=item_name,
+                # item_name=item_name, # UNUSED.
                 item_description=item_description,
                 # pylint: disable-next=used-before-assignment
                 item_maintainer=item_maintainer,
@@ -626,11 +626,12 @@ def addons_panel_draw_error_generic(layout, lines):
 
 
 def addons_panel_draw_impl(
-        self,
+        panel,
         context,  # `bpy.types.Context`
         search_casefold,  # `str`
         addon_tags_exclude,  # `Set[str]`
         enabled_only,  # `bool`
+        *,
         show_development,  # `bool`
 ):
     """
@@ -644,7 +645,7 @@ def addons_panel_draw_impl(
 
     from . import repo_cache_store_ensure
 
-    layout = self.layout
+    layout = panel.layout
 
     # First show any errors, this should be an exceptional situation that should be resolved,
     # otherwise add-ons may not behave correctly.
@@ -1343,8 +1344,8 @@ def extension_draw_item(
     row_right.separator()
 
     # NOTE: Keep space between any buttons and this menu to prevent stray clicks accidentally running install.
-    # The separator is around together with the align to give some space while keeping the button and the menu still close-by.
-    # Used `extension_path` so the menu can access "this" extension.
+    # The separator is around together with the align to give some space while keeping the button and the menu
+    # still close-by. Used `extension_path` so the menu can access "this" extension.
     row_right.context_string_set("extension_path", "{:s}.{:s}".format(repo_item.module, pkg_id))
     row_right.menu("USERPREF_MT_extensions_item", text="", icon='DOWNARROW_HLT')
     del row_right
@@ -1725,7 +1726,7 @@ def extensions_panel_draw_impl(
 
 
 class USERPREF_PT_addons_tags(Panel):
-    bl_label = "Addon Tags"
+    bl_label = "Add-on Tags"
 
     bl_space_type = 'TOPBAR'  # dummy.
     bl_region_type = 'HEADER'

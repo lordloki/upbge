@@ -9,6 +9,7 @@
 #pragma once
 
 #include "BLI_map.hh"
+#include "BLI_span.hh"
 #include "BLI_utility_mixins.hh"
 #include "BLI_vector.hh"
 #include "BLI_vector_set.hh"
@@ -29,10 +30,6 @@
 class SeqQuadsBatch;
 struct ARegion;
 struct ARegionType;
-struct Depsgraph;
-struct wmGizmoGroupType;
-struct wmGizmoType;
-struct Main;
 struct Scene;
 struct SeqRetimingKey;
 struct Sequence;
@@ -52,11 +49,9 @@ struct ListBase;
 
 namespace blender::ed::seq {
 
+class StripsDrawBatch;
+
 struct SpaceSeq_Runtime : public NonCopyable {
-  /** Required for Thumbnail job start condition. */
-  rctf last_thumbnail_area = {0, 0, 0, 0};
-  /** Stores lists of most recently displayed thumbnails. */
-  GHash *last_displayed_thumbnails = nullptr;
   int rename_channel_index = 0;
   float timeline_clamp_custom_range = 0;
 
@@ -89,6 +84,8 @@ struct SeqChannelDrawContext {
 
 struct StripDrawContext {
   Sequence *seq;
+  const FCurve *curve = nullptr; /* Curve for overlay, if any (blend factor or volume). */
+
   /* Strip boundary in timeline space. Content start/end is clamped by left/right handle. */
   float content_start, content_end, bottom, top;
   float left_handle, right_handle; /* Position in frames. */
@@ -104,6 +101,8 @@ struct StripDrawContext {
   bool show_strip_color_tag;
   bool missing_data_block;
   bool missing_media;
+  bool is_connected;
+  bool is_muted;
 };
 
 struct TimelineDrawContext {
@@ -161,17 +160,9 @@ ImBuf *sequencer_ibuf_get(const bContext *C,
 
 /* `sequencer_thumbnails.cc` */
 
-void last_displayed_thumbnails_list_free(void *val);
-void draw_seq_strip_thumbnail(View2D *v2d,
-                              const bContext *C,
-                              Scene *scene,
-                              Sequence *seq,
-                              float y1,
-                              float y2,
-                              float y_top,
-                              float pixelx,
-                              float pixely,
-                              float round_radius);
+void draw_strip_thumbnails(TimelineDrawContext *ctx,
+                           blender::ed::seq::StripsDrawBatch &strips_batch,
+                           const blender::Vector<StripDrawContext> &strips);
 
 /* sequencer_draw_channels.c */
 
@@ -182,7 +173,7 @@ void channel_draw_context_init(const bContext *C,
 
 /* `sequencer_edit.cc` */
 
-void seq_rectf(const Scene *scene, const Sequence *seq, rctf *rect);
+void seq_rectf(const Scene *scene, const Sequence *seq, rctf *r_rect);
 Sequence *find_neighboring_sequence(Scene *scene, Sequence *test, int lr, int sel);
 void recurs_sel_seq(Sequence *seq_meta);
 int seq_effect_find_selected(Scene *scene,
@@ -190,7 +181,6 @@ int seq_effect_find_selected(Scene *scene,
                              int type,
                              Sequence **r_selseq1,
                              Sequence **r_selseq2,
-                             Sequence **r_selseq3,
                              const char **r_error_str);
 
 /* Operator helpers. */
@@ -227,6 +217,8 @@ void SEQUENCER_OT_mute(wmOperatorType *ot);
 void SEQUENCER_OT_unmute(wmOperatorType *ot);
 void SEQUENCER_OT_lock(wmOperatorType *ot);
 void SEQUENCER_OT_unlock(wmOperatorType *ot);
+void SEQUENCER_OT_connect(wmOperatorType *ot);
+void SEQUENCER_OT_disconnect(wmOperatorType *ot);
 void SEQUENCER_OT_reload(wmOperatorType *ot);
 void SEQUENCER_OT_refresh_all(wmOperatorType *ot);
 void SEQUENCER_OT_reassign_inputs(wmOperatorType *ot);
@@ -376,9 +368,10 @@ int sequencer_retiming_box_select_exec(bContext *C, wmOperator *op);
 void sequencer_retiming_draw_continuity(const TimelineDrawContext *timeline_ctx,
                                         const StripDrawContext &strip_ctx);
 void sequencer_retiming_keys_draw(const TimelineDrawContext *timeline_ctx,
-                                  const StripDrawContext &strip_ctx);
+                                  blender::Span<StripDrawContext> strips);
 void sequencer_retiming_speed_draw(const TimelineDrawContext *timeline_ctx,
                                    const StripDrawContext &strip_ctx);
+void realize_fake_keys(const Scene *scene, Sequence *seq);
 SeqRetimingKey *try_to_realize_fake_keys(const bContext *C, Sequence *seq, const int mval[2]);
 SeqRetimingKey *retiming_mouseover_key_get(const bContext *C, const int mval[2], Sequence **r_seq);
 int left_fake_key_frame_get(const bContext *C, const Sequence *seq);

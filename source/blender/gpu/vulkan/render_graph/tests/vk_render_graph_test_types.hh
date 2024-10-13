@@ -189,6 +189,20 @@ class CommandBufferLog : public VKCommandBufferInterface {
     log_.append(ss.str());
   }
 
+  void update_buffer(VkBuffer dst_buffer,
+                     VkDeviceSize dst_offset,
+                     VkDeviceSize data_size,
+                     const void * /*p_data*/) override
+  {
+    EXPECT_TRUE(is_recording_);
+    std::stringstream ss;
+    ss << "update_buffer(";
+    ss << "dst_buffer=" << to_string(dst_buffer);
+    ss << ", dst_offset=" << dst_offset;
+    ss << ", data_size=" << data_size;
+    ss << ")";
+    log_.append(ss.str());
+  }
   void copy_buffer(VkBuffer src_buffer,
                    VkBuffer dst_buffer,
                    uint32_t region_count,
@@ -421,6 +435,17 @@ class CommandBufferLog : public VKCommandBufferInterface {
     log_.append(ss.str());
   }
 
+  void begin_query(VkQueryPool /*vk_query_pool*/,
+                   uint32_t /*query_index*/,
+                   VkQueryControlFlags /*vk_query_control_flags*/) override
+  {
+  }
+  void end_query(VkQueryPool /*vk_query_pool*/, uint32_t /*query_index*/) override {}
+  void reset_query_pool(VkQueryPool /*vk_query_pool*/,
+                        uint32_t /*first_query*/,
+                        uint32_t /*query_count*/) override
+  {
+  }
   void begin_debug_utils_label(const VkDebugUtilsLabelEXT * /*vk_debug_utils_label*/) override {}
   void end_debug_utils_label() override {}
 };

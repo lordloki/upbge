@@ -2,13 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include "BKE_action.hh"
 #include "BKE_attribute.hh"
 #include "BKE_brush.hh"
 #include "BKE_colortools.hh"
 #include "BKE_context.hh"
 #include "BKE_curves.hh"
+#include "BKE_deform.hh"
 #include "BKE_geometry_set.hh"
 #include "BKE_grease_pencil.hh"
+#include "BKE_grease_pencil_vertex_groups.hh"
 #include "BKE_material.h"
 #include "BKE_paint.hh"
 #include "BKE_scene.hh"
@@ -28,6 +31,7 @@
 
 #include "DNA_brush_enums.h"
 #include "DNA_material_types.h"
+#include "DNA_modifier_types.h"
 
 #include "DNA_scene_types.h"
 #include "ED_curves.hh"
@@ -156,24 +160,21 @@ static void create_blank_curve(bke::CurvesGeometry &curves, const bool on_back)
 
   bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
 
-  attributes.for_all(
-      [&](const bke::AttributeIDRef &id, const bke::AttributeMetaData /*meta_data*/) {
-        bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(id);
+  attributes.foreach_attribute([&](const bke::AttributeIter &iter) {
+    bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(iter.name);
+    GMutableSpan attribute_data = dst.span;
 
-        GMutableSpan attribute_data = dst.span;
+    bke::attribute_math::convert_to_static_type(attribute_data.type(), [&](auto dummy) {
+      using T = decltype(dummy);
+      MutableSpan<T> span_data = attribute_data.typed<T>();
 
-        bke::attribute_math::convert_to_static_type(attribute_data.type(), [&](auto dummy) {
-          using T = decltype(dummy);
-          MutableSpan<T> span_data = attribute_data.typed<T>();
-
-          /* Loop through backwards to not overwrite the data. */
-          for (int i = span_data.size() - 2; i >= 0; i--) {
-            span_data[i + 1] = span_data[i];
-          }
-        });
-        dst.finish();
-        return true;
-      });
+      /* Loop through backwards to not overwrite the data. */
+      for (int i = span_data.size() - 2; i >= 0; i--) {
+        span_data[i + 1] = span_data[i];
+      }
+    });
+    dst.finish();
+  });
 }
 
 /**
@@ -200,12 +201,12 @@ static void extend_curve(bke::CurvesGeometry &curves, const bool on_back, const 
 
   bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
 
-  attributes.for_all([&](const bke::AttributeIDRef &id, const bke::AttributeMetaData meta_data) {
-    if (meta_data.domain != bke::AttrDomain::Point) {
-      return true;
+  attributes.foreach_attribute([&](const bke::AttributeIter &iter) {
+    if (iter.domain != bke::AttrDomain::Point) {
+      return;
     }
 
-    bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(id);
+    bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(iter.name);
     GMutableSpan attribute_data = dst.span;
 
     bke::attribute_math::convert_to_static_type(attribute_data.type(), [&](auto dummy) {
@@ -218,7 +219,6 @@ static void extend_curve(bke::CurvesGeometry &curves, const bool on_back, const 
       }
     });
     dst.finish();
-    return true;
   });
 
   curves.tag_topology_changed();
@@ -601,12 +601,16 @@ struct PaintOperationExecutor {
     curves.update_curve_types();
 
     /* Initialize the rest of the attributes with default values. */
-    bke::fill_attribute_range_default(attributes,
-                                      bke::AttrDomain::Point,
-                                      point_attributes_to_skip,
-                                      IndexRange(last_active_point, 1));
     bke::fill_attribute_range_default(
-        attributes, bke::AttrDomain::Curve, curve_attributes_to_skip, IndexRange(active_curve, 1));
+        attributes,
+        bke::AttrDomain::Point,
+        bke::attribute_filter_from_skip_ref(point_attributes_to_skip),
+        IndexRange(last_active_point, 1));
+    bke::fill_attribute_range_default(
+        attributes,
+        bke::AttrDomain::Curve,
+        bke::attribute_filter_from_skip_ref(curve_attributes_to_skip),
+        IndexRange(active_curve, 1));
 
     drawing_->tag_topology_changed();
   }
@@ -961,10 +965,11 @@ struct PaintOperationExecutor {
     }
 
     /* Initialize the rest of the attributes with default values. */
-    bke::fill_attribute_range_default(attributes,
-                                      bke::AttrDomain::Point,
-                                      point_attributes_to_skip,
-                                      curves.points_range().take_back(1));
+    bke::fill_attribute_range_default(
+        attributes,
+        bke::AttrDomain::Point,
+        bke::attribute_filter_from_skip_ref(point_attributes_to_skip),
+        curves.points_range().take_back(1));
 
     drawing_->set_texture_matrices({self.texture_space_}, IndexRange::from_single(active_curve));
   }
@@ -1175,13 +1180,18 @@ static void trim_stroke_ends(bke::greasepencil::Drawing &drawing,
   /* Use the first and last point. */
   const Vector<Vector<int>> point_selection = {{0, int(points.index_range().last())}};
   /* Trim the stroke ends by finding self intersections using the screen space positions. */
-  bke::CurvesGeometry stroke_trimmed = ed::greasepencil::cutter::trim_curve_segments(
+  bke::CurvesGeometry stroke_trimmed = ed::greasepencil::trim::trim_curve_segments(
       stroke,
       screen_space_positions,
       {screen_space_bounds},
       IndexRange::from_single(0),
       point_selection,
       true);
+
+  /* No intersection found. */
+  if (stroke_trimmed.points_num() == 0) {
+    return;
+  }
 
   /* Remove the original stroke. */
   drawing.strokes_for_write().remove_curves(IndexRange::from_single(active_curve), {});
@@ -1283,12 +1293,12 @@ static int trim_end_points(bke::greasepencil::Drawing &drawing,
   const int last_active_point = curves.points_by_curve()[0].last();
 
   /* Shift the data before resizing to not delete the data at the end. */
-  attributes.for_all([&](const bke::AttributeIDRef &id, const bke::AttributeMetaData meta_data) {
-    if (meta_data.domain != bke::AttrDomain::Point) {
-      return true;
+  attributes.foreach_attribute([&](const bke::AttributeIter &iter) {
+    if (iter.domain != bke::AttrDomain::Point) {
+      return;
     }
 
-    bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(id);
+    bke::GSpanAttributeWriter dst = attributes.lookup_for_write_span(iter.name);
     GMutableSpan attribute_data = dst.span;
 
     bke::attribute_math::convert_to_static_type(attribute_data.type(), [&](auto dummy) {
@@ -1303,7 +1313,6 @@ static int trim_end_points(bke::greasepencil::Drawing &drawing,
       }
     });
     dst.finish();
-    return true;
   });
 
   curves.resize(curves.points_num() - num_points_to_remove, curves.curves_num());
@@ -1324,7 +1333,7 @@ static void deselect_stroke(const bContext &C,
   const IndexRange points = drawing.strokes().points_by_curve()[active_curve];
 
   bke::CurvesGeometry &curves = drawing.strokes_for_write();
-  const bke::AttrDomain selection_domain = ED_grease_pencil_selection_domain_get(
+  const bke::AttrDomain selection_domain = ED_grease_pencil_edit_selection_domain_get(
       scene->toolsettings);
 
   bke::GSpanAttributeWriter selection = ed::curves::ensure_selection_attribute(
@@ -1338,6 +1347,87 @@ static void deselect_stroke(const bContext &C,
   }
 
   selection.finish();
+}
+
+static void process_stroke_weights(const Scene &scene,
+                                   const Object &object,
+                                   bke::greasepencil::Drawing &drawing,
+                                   const int active_curve)
+{
+  bke::CurvesGeometry &curves = drawing.strokes_for_write();
+  const IndexRange points = curves.points_by_curve()[active_curve];
+
+  const int def_nr = BKE_object_defgroup_active_index_get(&object) - 1;
+
+  if (def_nr == -1) {
+    return;
+  }
+
+  const bDeformGroup *defgroup = static_cast<const bDeformGroup *>(
+      BLI_findlink(BKE_object_defgroup_list(&object), def_nr));
+
+  const StringRef vertex_group_name = defgroup->name;
+
+  blender::bke::greasepencil::assign_to_vertex_group_from_mask(
+      curves, IndexMask(points), vertex_group_name, scene.toolsettings->vgroup_weight);
+
+  if (scene.toolsettings->vgroup_weight == 0.0f) {
+    return;
+  }
+
+  /* Loop through all modifiers trying to find the pose channel for the vertex group name. */
+  bPoseChannel *channel = nullptr;
+  Object *ob_arm = nullptr;
+  LISTBASE_FOREACH (ModifierData *, md, &(&object)->modifiers) {
+    if (md->type != eModifierType_GreasePencilArmature) {
+      continue;
+    }
+
+    /* Skip not visible modifiers. */
+    if (!(md->mode & eModifierMode_Realtime)) {
+      continue;
+    }
+
+    GreasePencilArmatureModifierData *amd = reinterpret_cast<GreasePencilArmatureModifierData *>(
+        md);
+    if (amd == nullptr) {
+      continue;
+    }
+
+    ob_arm = amd->object;
+    /* Not an armature. */
+    if (ob_arm->type != OB_ARMATURE || ob_arm->pose == nullptr) {
+      continue;
+    }
+
+    channel = BKE_pose_channel_find_name(ob_arm->pose, vertex_group_name.data());
+    if (channel == nullptr) {
+      continue;
+    }
+
+    /* Found the channel. */
+    break;
+  }
+
+  /* Nothing valid was found. */
+  if (channel == nullptr) {
+    return;
+  }
+
+  const float4x4 obinv = math::invert(object.object_to_world());
+
+  const float4x4 postmat = obinv * ob_arm->object_to_world();
+  const float4x4 premat = math::invert(postmat);
+
+  const float4x4 matrix = postmat * math::invert(float4x4(channel->chan_mat)) * premat;
+
+  /* Update the position of the stroke to undo the movement caused by the modifier.*/
+  MutableSpan<float3> positions = curves.positions_for_write().slice(points);
+  threading::parallel_for(positions.index_range(), 1024, [&](const IndexRange range) {
+    for (float3 &position : positions.slice(range)) {
+      position = math::transform_point(matrix, position);
+    }
+  });
 }
 
 void PaintOperation::on_stroke_done(const bContext &C)
@@ -1392,6 +1482,9 @@ void PaintOperation::on_stroke_done(const bContext &C)
     }
     if ((settings->flag & GP_BRUSH_TRIM_STROKE) != 0) {
       trim_stroke_ends(drawing, active_curve, on_back);
+    }
+    if ((scene->toolsettings->gpencil_flags & GP_TOOL_FLAG_CREATE_WEIGHTS) != 0) {
+      process_stroke_weights(*scene, *object, drawing, active_curve);
     }
     if ((settings->flag & GP_BRUSH_OUTLINE_STROKE) != 0) {
       const float outline_radius = float(brush->unprojected_radius) * settings->outline_fac * 0.5f;

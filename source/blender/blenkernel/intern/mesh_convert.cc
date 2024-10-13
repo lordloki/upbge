@@ -709,8 +709,7 @@ static Mesh *mesh_new_from_evaluated_curve_type_object(const Object *evaluated_o
     return BKE_mesh_copy_for_eval(*mesh);
   }
   if (const Curves *curves = get_evaluated_curves_from_object(evaluated_object)) {
-    const blender::bke::AnonymousAttributePropagationInfo propagation_info;
-    return blender::bke::curve_to_wire_mesh(curves->geometry.wrap(), propagation_info);
+    return blender::bke::curve_to_wire_mesh(curves->geometry.wrap());
   }
   return nullptr;
 }
@@ -824,7 +823,12 @@ static Mesh *mesh_new_from_mesh_object(Depsgraph *depsgraph,
                                        const bool preserve_all_data_layers,
                                        const bool preserve_origindex)
 {
-  if (preserve_all_data_layers || preserve_origindex) {
+  /* This function tries to reevaluate the object from the original data. If the original object
+   * was not a mesh object, this won't work because it uses mesh object evaluation which assumes
+   * the type of the original object data. */
+  if (!(object->runtime->data_orig && GS(object->runtime->data_orig->name) != ID_ME) &&
+      (preserve_all_data_layers || preserve_origindex))
+  {
     return mesh_new_from_mesh_object_with_layers(depsgraph, object, preserve_origindex);
   }
   const Mesh *mesh_input = (const Mesh *)object->data;
@@ -1056,9 +1060,10 @@ void BKE_mesh_nomain_to_mesh(Mesh *mesh_src, Mesh *mesh_dst, Object *ob)
     BLI_assert(mesh_dst == ob->data);
   }
 
+  const bool verts_num_changed = mesh_dst->verts_num != mesh_src->verts_num;
+
   BKE_mesh_clear_geometry_and_metadata(mesh_dst);
 
-  const bool verts_num_changed = mesh_dst->verts_num != mesh_src->verts_num;
   mesh_dst->verts_num = mesh_src->verts_num;
   mesh_dst->edges_num = mesh_src->edges_num;
   mesh_dst->faces_num = mesh_src->faces_num;
@@ -1066,10 +1071,13 @@ void BKE_mesh_nomain_to_mesh(Mesh *mesh_src, Mesh *mesh_dst, Object *ob)
 
   /* Using #CD_MASK_MESH ensures that only data that should exist in Main meshes is moved. */
   const CustomData_MeshMasks mask = CD_MASK_MESH;
-  CustomData_copy(&mesh_src->vert_data, &mesh_dst->vert_data, mask.vmask, mesh_src->verts_num);
-  CustomData_copy(&mesh_src->edge_data, &mesh_dst->edge_data, mask.emask, mesh_src->edges_num);
-  CustomData_copy(&mesh_src->face_data, &mesh_dst->face_data, mask.pmask, mesh_src->faces_num);
-  CustomData_copy(
+  CustomData_init_from(
+      &mesh_src->vert_data, &mesh_dst->vert_data, mask.vmask, mesh_src->verts_num);
+  CustomData_init_from(
+      &mesh_src->edge_data, &mesh_dst->edge_data, mask.emask, mesh_src->edges_num);
+  CustomData_init_from(
+      &mesh_src->face_data, &mesh_dst->face_data, mask.pmask, mesh_src->faces_num);
+  CustomData_init_from(
       &mesh_src->corner_data, &mesh_dst->corner_data, mask.lmask, mesh_src->corners_num);
   std::swap(mesh_dst->face_offset_indices, mesh_src->face_offset_indices);
   std::swap(mesh_dst->runtime->face_offsets_sharing_info,

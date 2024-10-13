@@ -49,6 +49,9 @@ CCL_NAMESPACE_BEGIN
 #ifndef M_1_2PI_F
 #  define M_1_2PI_F (0.1591549430918953f) /* 1/(2*pi) */
 #endif
+#ifndef M_1_4PI_F
+#  define M_1_4PI_F (0.0795774715459476f) /* 1/(4*pi) */
+#endif
 #ifndef M_SQRT_PI_8_F
 #  define M_SQRT_PI_8_F (0.6266570686577501f) /* sqrt(pi/8) */
 #endif
@@ -70,6 +73,9 @@ CCL_NAMESPACE_BEGIN
 /* Float sqrt variations */
 #ifndef M_SQRT2_F
 #  define M_SQRT2_F (1.4142135623730950f) /* sqrt(2) */
+#endif
+#ifndef M_CBRT2_F
+#  define M_CBRT2_F 1.2599210498948732f /* cbrt(2) */
 #endif
 #ifndef M_SQRT1_2F
 #  define M_SQRT1_2F 0.70710678118654752440f /* sqrt(1/2) */
@@ -480,6 +486,14 @@ ccl_device_inline float nonzerof(float f, float eps)
   }
 }
 
+/* The behavior of `atan2(0, 0)` is undefined on many platforms, to ensure consistent behavior, we
+ * return 0 in this case. See !126951.
+ * Computes the angle between the positive x axis and the vector pointing from origin to (x, y). */
+ccl_device_inline float compatible_atan2(const float y, const float x)
+{
+  return (x == 0.0f && y == 0.0f) ? 0.0f : atan2f(y, x);
+}
+
 /* `signum` function testing for zero. Matches GLSL and OSL functions. */
 ccl_device_inline float compatible_signf(float f)
 {
@@ -511,6 +525,11 @@ ccl_device_inline int mod(int x, int m)
 ccl_device_inline float3 float2_to_float3(const float2 a)
 {
   return make_float3(a.x, a.y, 0.0f);
+}
+
+ccl_device_inline float3 float2_to_float3(const float2 a, const float z)
+{
+  return make_float3(a.x, a.y, z);
 }
 
 ccl_device_inline float2 float3_to_float2(const float3 a)

@@ -1214,8 +1214,6 @@ context_type_map = {
     "edit_object": [("Object", False)],
     "edit_text": [("Text", False)],
     "editable_bones": [("EditBone", True)],
-    "editable_gpencil_layers": [("GPencilLayer", True)],
-    "editable_gpencil_strokes": [("GPencilStroke", True)],
     "editable_objects": [("Object", True)],
     "editable_fcurves": [("FCurve", True)],
     "fluid": [("FluidSimulationModifier", False)],
@@ -2597,7 +2595,7 @@ def main():
 
     try:
         os.mkdir(SPHINX_IN_TMP)
-    except:
+    except Exception:
         pass
 
     # Copy extra files needed for theme.

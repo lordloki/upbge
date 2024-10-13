@@ -1497,10 +1497,9 @@ void DRW_mesh_batch_cache_create_requested(TaskGraph &task_graph,
    * Normal updates should be part of the brush loop and only run during the stroke when the
    * brush needs to sample the surface. The drawing code should only update the normals
    * per redraw when smooth shading is enabled. */
-  const bool do_update_sculpt_normals = ob.sculpt && ob.sculpt->pbvh;
+  const bool do_update_sculpt_normals = ob.sculpt && bke::object::pbvh_get(ob);
   if (do_update_sculpt_normals) {
-    Mesh *mesh = static_cast<Mesh *>(ob.data);
-    bke::pbvh::update_normals(*ob.sculpt->pbvh, mesh->runtime->subdiv_ccg.get());
+    bke::pbvh::update_normals_from_eval(ob, *bke::object::pbvh_get(ob));
   }
 
   cache.batch_ready |= batch_requested;

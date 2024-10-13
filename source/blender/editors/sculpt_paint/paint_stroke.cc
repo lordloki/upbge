@@ -42,6 +42,7 @@
 #include "IMB_imbuf_types.hh"
 
 #include "paint_intern.hh"
+#include "sculpt_cloth.hh"
 #include "sculpt_intern.hh"
 
 // #define DEBUG_TIME
@@ -207,18 +208,18 @@ static void paint_draw_line_cursor(bContext *C, int x, int y, void *customdata)
   GPU_line_smooth(false);
 }
 
-static bool paint_tool_require_location(const Brush &brush, const PaintMode mode)
+static bool image_paint_brush_type_require_location(const Brush &brush, const PaintMode mode)
 {
   switch (mode) {
     case PaintMode::Sculpt:
-      if (ELEM(brush.sculpt_tool,
-               SCULPT_TOOL_GRAB,
-               SCULPT_TOOL_ELASTIC_DEFORM,
-               SCULPT_TOOL_POSE,
-               SCULPT_TOOL_BOUNDARY,
-               SCULPT_TOOL_ROTATE,
-               SCULPT_TOOL_SNAKE_HOOK,
-               SCULPT_TOOL_THUMB))
+      if (ELEM(brush.sculpt_brush_type,
+               SCULPT_BRUSH_TYPE_GRAB,
+               SCULPT_BRUSH_TYPE_ELASTIC_DEFORM,
+               SCULPT_BRUSH_TYPE_POSE,
+               SCULPT_BRUSH_TYPE_BOUNDARY,
+               SCULPT_BRUSH_TYPE_ROTATE,
+               SCULPT_BRUSH_TYPE_SNAKE_HOOK,
+               SCULPT_BRUSH_TYPE_THUMB))
       {
         return false;
       }
@@ -246,12 +247,13 @@ static bool paint_stroke_use_scene_spacing(const Brush &brush, const PaintMode m
   return false;
 }
 
-static bool paint_tool_raycast_original(const Brush &brush, PaintMode /*mode*/)
+static bool image_paint_brush_type_raycast_original(const Brush &brush, PaintMode /*mode*/)
 {
   return brush.flag & (BRUSH_ANCHORED | BRUSH_DRAG_DOT);
 }
 
-static bool paint_tool_require_inbetween_mouse_events(const Brush &brush, const PaintMode mode)
+static bool image_paint_brush_type_require_inbetween_mouse_events(const Brush &brush,
+                                                                  const PaintMode mode)
 {
   if (brush.flag & BRUSH_ANCHORED) {
     return false;
@@ -259,15 +261,15 @@ static bool paint_tool_require_inbetween_mouse_events(const Brush &brush, const 
 
   switch (mode) {
     case PaintMode::Sculpt:
-      if (ELEM(brush.sculpt_tool,
-               SCULPT_TOOL_GRAB,
-               SCULPT_TOOL_ROTATE,
-               SCULPT_TOOL_THUMB,
-               SCULPT_TOOL_SNAKE_HOOK,
-               SCULPT_TOOL_ELASTIC_DEFORM,
-               SCULPT_TOOL_CLOTH,
-               SCULPT_TOOL_BOUNDARY,
-               SCULPT_TOOL_POSE))
+      if (ELEM(brush.sculpt_brush_type,
+               SCULPT_BRUSH_TYPE_GRAB,
+               SCULPT_BRUSH_TYPE_ROTATE,
+               SCULPT_BRUSH_TYPE_THUMB,
+               SCULPT_BRUSH_TYPE_SNAKE_HOOK,
+               SCULPT_BRUSH_TYPE_ELASTIC_DEFORM,
+               SCULPT_BRUSH_TYPE_CLOTH,
+               SCULPT_BRUSH_TYPE_BOUNDARY,
+               SCULPT_BRUSH_TYPE_POSE))
       {
         return false;
       }
@@ -394,7 +396,7 @@ bool paint_brush_update(bContext *C,
           location_success = true;
           *r_location_is_set = true;
         }
-        else if (!paint_tool_require_location(brush, mode)) {
+        else if (!image_paint_brush_type_require_location(brush, mode)) {
           hit = true;
         }
       }
@@ -464,7 +466,7 @@ bool paint_brush_update(bContext *C,
         location_success = true;
         *r_location_is_set = true;
       }
-      else if (!paint_tool_require_location(brush, mode)) {
+      else if (!image_paint_brush_type_require_location(brush, mode)) {
         location_success = true;
       }
     }
@@ -493,7 +495,7 @@ static bool paint_stroke_use_jitter(PaintMode mode, const Brush &brush, bool inv
    * kinds of stroke, so manually disable jitter usage (sergey) */
   use_jitter &= (brush.flag & (BRUSH_DRAG_DOT | BRUSH_ANCHORED)) == 0;
   use_jitter &= (!ELEM(mode, PaintMode::Texture2D, PaintMode::Texture3D) ||
-                 !(invert && brush.imagepaint_tool == PAINT_TOOL_CLONE));
+                 !(invert && brush.image_brush_type == IMAGE_PAINT_BRUSH_TYPE_CLONE));
 
   return use_jitter;
 }
@@ -920,7 +922,8 @@ PaintStroke *paint_stroke_new(bContext *C,
   stroke->ups = ups;
   stroke->stroke_mode = RNA_enum_get(op->ptr, "mode");
 
-  stroke->original = paint_tool_raycast_original(*br, BKE_paintmode_get_active_from_context(C));
+  stroke->original = image_paint_brush_type_raycast_original(
+      *br, BKE_paintmode_get_active_from_context(C));
 
   get_imapaint_zoom(C, &zoomx, &zoomy);
   stroke->zoom_2d = max_ff(zoomx, zoomy);
@@ -1028,9 +1031,9 @@ static void stroke_done(bContext *C, wmOperator *op, PaintStroke *stroke)
   paint_stroke_free(C, op, stroke);
 }
 
-static bool curves_sculpt_brush_uses_spacing(const eBrushCurvesSculptTool tool)
+static bool curves_sculpt_brush_uses_spacing(const eBrushCurvesSculptType tool)
 {
-  return ELEM(tool, CURVES_SCULPT_TOOL_ADD, CURVES_SCULPT_TOOL_DENSITY);
+  return ELEM(tool, CURVES_SCULPT_BRUSH_TYPE_ADD, CURVES_SCULPT_BRUSH_TYPE_DENSITY);
 }
 
 bool paint_space_stroke_enabled(const Brush &br, PaintMode mode)
@@ -1039,7 +1042,7 @@ bool paint_space_stroke_enabled(const Brush &br, PaintMode mode)
     return false;
   }
 
-  if (br.sculpt_tool == SCULPT_TOOL_CLOTH || cloth::is_cloth_deform_brush(br)) {
+  if (br.sculpt_brush_type == SCULPT_BRUSH_TYPE_CLOTH || cloth::is_cloth_deform_brush(br)) {
     /* The Cloth Brush is a special case for stroke spacing. Even if it has grab modes which do
      * not support dynamic size, stroke spacing needs to be enabled so it is possible to control
      * whether the simulation runs constantly or only when the brush moves when using the cloth
@@ -1048,7 +1051,7 @@ bool paint_space_stroke_enabled(const Brush &br, PaintMode mode)
   }
 
   if (mode == PaintMode::SculptCurves &&
-      !curves_sculpt_brush_uses_spacing(eBrushCurvesSculptTool(br.curves_sculpt_tool)))
+      !curves_sculpt_brush_uses_spacing(eBrushCurvesSculptType(br.curves_sculpt_brush_type)))
   {
     return false;
   }
@@ -1063,17 +1066,19 @@ bool paint_space_stroke_enabled(const Brush &br, PaintMode mode)
 
 static bool sculpt_is_grab_tool(const Brush &br)
 {
-  if (br.sculpt_tool == SCULPT_TOOL_CLOTH && br.cloth_deform_type == BRUSH_CLOTH_DEFORM_GRAB) {
+  if (br.sculpt_brush_type == SCULPT_BRUSH_TYPE_CLOTH &&
+      br.cloth_deform_type == BRUSH_CLOTH_DEFORM_GRAB)
+  {
     return true;
   }
-  return ELEM(br.sculpt_tool,
-              SCULPT_TOOL_GRAB,
-              SCULPT_TOOL_ELASTIC_DEFORM,
-              SCULPT_TOOL_POSE,
-              SCULPT_TOOL_BOUNDARY,
-              SCULPT_TOOL_THUMB,
-              SCULPT_TOOL_ROTATE,
-              SCULPT_TOOL_SNAKE_HOOK);
+  return ELEM(br.sculpt_brush_type,
+              SCULPT_BRUSH_TYPE_GRAB,
+              SCULPT_BRUSH_TYPE_ELASTIC_DEFORM,
+              SCULPT_BRUSH_TYPE_POSE,
+              SCULPT_BRUSH_TYPE_BOUNDARY,
+              SCULPT_BRUSH_TYPE_THUMB,
+              SCULPT_BRUSH_TYPE_ROTATE,
+              SCULPT_BRUSH_TYPE_SNAKE_HOOK);
 }
 
 bool paint_supports_dynamic_size(const Brush &br, PaintMode mode)
@@ -1091,7 +1096,7 @@ bool paint_supports_dynamic_size(const Brush &br, PaintMode mode)
 
     case PaintMode::Texture2D: /* fall through */
     case PaintMode::Texture3D:
-      if ((br.imagepaint_tool == PAINT_TOOL_FILL) && (br.flag & BRUSH_USE_GRADIENT)) {
+      if ((br.image_brush_type == IMAGE_PAINT_BRUSH_TYPE_FILL) && (br.flag & BRUSH_USE_GRADIENT)) {
         return false;
       }
       break;
@@ -1106,7 +1111,8 @@ bool paint_supports_smooth_stroke(PaintStroke *stroke, const Brush &brush, Paint
 {
   /* The grease pencil draw tool needs to enable this when the `stroke_mode` is set to
    * `BRUSH_STROKE_SMOOTH`. */
-  if (mode == PaintMode::GPencil && eBrushGPaintTool(brush.gpencil_tool) == GPAINT_TOOL_DRAW &&
+  if (mode == PaintMode::GPencil &&
+      eBrushGPaintType(brush.gpencil_brush_type) == GPAINT_BRUSH_TYPE_DRAW &&
       stroke->stroke_mode == BRUSH_STROKE_SMOOTH)
   {
     return true;
@@ -1459,7 +1465,8 @@ int paint_stroke_modal(bContext *C, wmOperator *op, const wmEvent *event, PaintS
   bool redraw = false;
   float pressure;
 
-  if (event->type == INBETWEEN_MOUSEMOVE && !paint_tool_require_inbetween_mouse_events(*br, mode))
+  if (event->type == INBETWEEN_MOUSEMOVE &&
+      !image_paint_brush_type_require_inbetween_mouse_events(*br, mode))
   {
     return OPERATOR_RUNNING_MODAL;
   }
@@ -1505,11 +1512,6 @@ int paint_stroke_modal(bContext *C, wmOperator *op, const wmEvent *event, PaintS
       return OPERATOR_FINISHED;
     }
 
-    if (paint_supports_smooth_stroke(stroke, *br, mode)) {
-      stroke->stroke_cursor = WM_paint_cursor_activate(
-          SPACE_TYPE_ANY, RGN_TYPE_ANY, paint_brush_tool_poll, paint_draw_smooth_cursor, stroke);
-    }
-
     stroke->stroke_init = true;
     first_modal = true;
   }
@@ -1526,6 +1528,18 @@ int paint_stroke_modal(bContext *C, wmOperator *op, const wmEvent *event, PaintS
     stroke->stroke_started = stroke->test_start(C, op, sample_average.mouse);
 
     if (stroke->stroke_started) {
+      /* StrokeTestStart often updates the currently active brush so we need to re-retrieve it
+       * here. */
+      br = BKE_paint_brush(paint);
+
+      if (paint_supports_smooth_stroke(stroke, *br, mode)) {
+        stroke->stroke_cursor = WM_paint_cursor_activate(SPACE_TYPE_ANY,
+                                                         RGN_TYPE_ANY,
+                                                         paint_brush_cursor_poll,
+                                                         paint_draw_smooth_cursor,
+                                                         stroke);
+      }
+
       if (br->flag & BRUSH_AIRBRUSH) {
         stroke->timer = WM_event_timer_add(
             CTX_wm_manager(C), CTX_wm_window(C), TIMER, stroke->brush->rate);
@@ -1533,7 +1547,7 @@ int paint_stroke_modal(bContext *C, wmOperator *op, const wmEvent *event, PaintS
 
       if (br->flag & BRUSH_LINE) {
         stroke->stroke_cursor = WM_paint_cursor_activate(
-            SPACE_TYPE_ANY, RGN_TYPE_ANY, paint_brush_tool_poll, paint_draw_line_cursor, stroke);
+            SPACE_TYPE_ANY, RGN_TYPE_ANY, paint_brush_cursor_poll, paint_draw_line_cursor, stroke);
       }
 
       first_dab = true;
@@ -1710,7 +1724,7 @@ bool paint_stroke_started(PaintStroke *stroke)
   return stroke->stroke_started;
 }
 
-bool paint_brush_tool_poll(bContext *C)
+static const bToolRef *brush_tool_get(const bContext *C)
 {
   Paint *paint = BKE_paint_get_active_from_context(C);
   Object *ob = CTX_data_active_object(C);
@@ -1721,13 +1735,34 @@ bool paint_brush_tool_poll(bContext *C)
       (area && ELEM(area->spacetype, SPACE_VIEW3D, SPACE_IMAGE)) &&
       (region && region->regiontype == RGN_TYPE_WINDOW))
   {
-    /* Check the current tool is a brush. */
-    bToolRef *tref = area->runtime.tool;
-    if (tref && tref->runtime && tref->runtime->data_block[0]) {
-      return true;
+    if (area->runtime.tool && area->runtime.tool->runtime &&
+        (area->runtime.tool->runtime->flag & TOOLREF_FLAG_USE_BRUSHES))
+    {
+      return area->runtime.tool;
     }
   }
-  return false;
+  return nullptr;
+}
+
+bool paint_brush_tool_poll(bContext *C)
+{
+  /* Check the current tool is a brush. */
+  return brush_tool_get(C) != nullptr;
+}
+
+bool paint_brush_cursor_poll(bContext *C)
+{
+  const bToolRef *tref = brush_tool_get(C);
+  if (!tref) {
+    return false;
+  }
+
+  /* Don't use brush cursor when the tool sets its own cursor. */
+  if (tref->runtime->cursor != WM_CURSOR_DEFAULT) {
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace blender::ed::sculpt_paint

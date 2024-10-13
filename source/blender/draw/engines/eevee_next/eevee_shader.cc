@@ -280,6 +280,8 @@ const char *ShaderModule::static_shader_create_info_name_get(eShaderType shader_
       return "eevee_ray_tile_classify";
     case RAY_TILE_COMPACT:
       return "eevee_ray_tile_compact";
+    case RENDERPASS_CLEAR:
+      return "eevee_renderpass_clear";
     case LIGHTPROBE_IRRADIANCE_BOUNDS:
       return "eevee_lightprobe_volume_bounds";
     case LIGHTPROBE_IRRADIANCE_OFFSET:
@@ -338,6 +340,8 @@ const char *ShaderModule::static_shader_create_info_name_get(eShaderType shader_
       return "eevee_shadow_page_tile_store";
     case SHADOW_TILEMAP_TAG_USAGE_VOLUME:
       return "eevee_shadow_tag_usage_volume";
+    case SHADOW_VIEW_VISIBILITY:
+      return "eevee_shadow_view_visibility";
     case SUBSURFACE_CONVOLVE:
       return "eevee_subsurface_convolve";
     case SUBSURFACE_SETUP:

@@ -2,14 +2,20 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
-#pragma BLENDER_REQUIRE(common_hair_lib.glsl)
+#include "common_hair_lib.glsl"
+#include "common_view_clipping_lib.glsl"
+#include "common_view_lib.glsl"
+#include "gpu_shader_utildefines_lib.glsl"
 
 uint outline_colorid_get(void)
 {
+#ifdef OBINFO_NEW
+  eObjectInfoFlag ob_flag = eObjectInfoFlag(floatBitsToUint(drw_infos[resource_id].infos.w));
+  bool is_active = flag_test(ob_flag, OBJECT_ACTIVE);
+#else
   int flag = int(abs(ObjectInfo.w));
   bool is_active = (flag & DRW_BASE_ACTIVE) != 0;
+#endif
 
   if (isTransform) {
     return 0u; /* colorTransform */
@@ -55,7 +61,7 @@ void main()
     thick_time = thickness * (thick_time * 2.0 - 1.0);
     /* Take object scale into account.
      * NOTE: This only works fine with uniform scaling. */
-    float scale = 1.0 / length(mat3(ModelMatrixInverse) * binor);
+    float scale = 1.0 / length(to_float3x3(ModelMatrixInverse) * binor);
     world_pos = center_wpos + binor * thick_time * scale;
   }
   else {

@@ -737,7 +737,6 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       ss << "flat in vec4 gpu_pos[3];\n";
       ss << "smooth in vec3 gpu_BaryCoord;\n";
       ss << "noperspective in vec3 gpu_BaryCoordNoPersp;\n";
-      ss << "#define gpu_position_at_vertex(v) gpu_pos[v]\n";
     }
     else if (epoxy_has_gl_extension("GL_AMD_shader_explicit_vertex_parameter")) {
       /* NOTE(fclem): This won't work with geometry shader. Hopefully, we don't need geometry
@@ -756,11 +755,6 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       ss << "  return bary.xyz;\n";
       ss << "}\n";
       ss << "\n";
-      ss << "vec4 gpu_position_at_vertex(int v) {\n";
-      ss << "  if (interpolateAtVertexAMD(gpu_pos, 0) == gpu_pos_flat) { v = (v + 2) % 3; }\n";
-      ss << "  if (interpolateAtVertexAMD(gpu_pos, 2) == gpu_pos_flat) { v = (v + 1) % 3; }\n";
-      ss << "  return interpolateAtVertexAMD(gpu_pos, v);\n";
-      ss << "}\n";
 
       pre_main += "  gpu_BaryCoord = stable_bary_(gl_BaryCoordSmoothAMD);\n";
       pre_main += "  gpu_BaryCoordNoPersp = stable_bary_(gl_BaryCoordNoPerspAMD);\n";
@@ -769,9 +763,7 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   if (info.early_fragment_test_) {
     ss << "layout(early_fragment_tests) in;\n";
   }
-  if (epoxy_has_gl_extension("GL_ARB_conservative_depth")) {
-    ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
-  }
+  ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
 
   ss << "\n/* Sub-pass Inputs. */\n";
   for (const ShaderCreateInfo::SubpassIn &input : info.subpass_inputs_) {
@@ -1039,9 +1031,6 @@ static const char *glsl_patch_default_get()
     ss << "#define GPU_ARB_shader_draw_parameters\n";
     ss << "#define gpu_BaseInstance gl_BaseInstanceARB\n";
   }
-  if (epoxy_has_gl_extension("GL_ARB_conservative_depth")) {
-    ss << "#extension GL_ARB_conservative_depth : enable\n";
-  }
   if (GLContext::layered_rendering_support) {
     ss << "#extension GL_ARB_shader_viewport_layer_array: enable\n";
     ss << "#define gpu_Layer gl_Layer\n";
@@ -1069,10 +1058,6 @@ static const char *glsl_patch_default_get()
 
   /* Array compatibility. */
   ss << "#define gpu_Array(_type) _type[]\n";
-
-  /* Derivative sign can change depending on implementation. */
-  ss << "#define DFDX_SIGN " << std::setprecision(2) << GLContext::derivative_signs[0] << "\n";
-  ss << "#define DFDY_SIGN " << std::setprecision(2) << GLContext::derivative_signs[1] << "\n";
 
   /* GLSL Backend Lib. */
   ss << datatoc_glsl_shader_defines_glsl;

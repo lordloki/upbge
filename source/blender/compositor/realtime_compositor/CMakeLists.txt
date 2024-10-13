@@ -31,6 +31,7 @@ set(SRC
   intern/meta_data.cc
   intern/node_operation.cc
   intern/operation.cc
+  intern/pixel_operation.cc
   intern/profiler.cc
   intern/realize_on_domain_operation.cc
   intern/reduce_to_single_value_operation.cc
@@ -54,6 +55,7 @@ set(SRC
   COM_meta_data.hh
   COM_node_operation.hh
   COM_operation.hh
+  COM_pixel_operation.hh
   COM_profiler.hh
   COM_realize_on_domain_operation.hh
   COM_reduce_to_single_value_operation.hh
@@ -67,7 +69,9 @@ set(SRC
   COM_texture_pool.hh
   COM_utilities.hh
 
+  algorithms/intern/compute_preview.cc
   algorithms/intern/deriche_gaussian_blur.cc
+  algorithms/intern/extract_alpha.cc
   algorithms/intern/jump_flooding.cc
   algorithms/intern/morphological_blur.cc
   algorithms/intern/morphological_distance.cc
@@ -82,7 +86,9 @@ set(SRC
   algorithms/intern/transform.cc
   algorithms/intern/van_vliet_gaussian_blur.cc
 
+  algorithms/COM_algorithm_compute_preview.hh
   algorithms/COM_algorithm_deriche_gaussian_blur.hh
+  algorithms/COM_algorithm_extract_alpha.hh
   algorithms/COM_algorithm_jump_flooding.hh
   algorithms/COM_algorithm_morphological_blur.hh
   algorithms/COM_algorithm_morphological_distance.hh
@@ -276,7 +282,7 @@ set(GLSL_SRC
 
 set(GLSL_C)
 foreach(GLSL_FILE ${GLSL_SRC})
-  data_to_c_simple(${GLSL_FILE} GLSL_C STRIP_LEADING_C_COMMENTS)
+  glsl_to_c(${GLSL_FILE} GLSL_C)
 endforeach()
 
 blender_add_lib(bf_compositor_shaders "${GLSL_C}" "" "" "")
@@ -371,7 +377,7 @@ file(GENERATE OUTPUT ${shader_create_info_list_file} CONTENT "${SHADER_CREATE_IN
 if(WITH_TBB)
   if(WIN32)
     # TBB includes Windows.h which will define min/max macros
-    # that will collide with the stl versions.
+    # that will collide with the STL versions.
     add_definitions(-DNOMINMAX)
   endif()
 endif()

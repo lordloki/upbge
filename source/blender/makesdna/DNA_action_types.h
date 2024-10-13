@@ -45,7 +45,6 @@ typedef struct GPUVertBufHandle GPUVertBufHandle;
 /* Forward declarations so the actual declarations can happen top-down. */
 struct ActionLayer;
 struct ActionSlot;
-struct ActionSlot_runtime;
 struct ActionStrip;
 struct ActionChannelBag;
 
@@ -56,9 +55,10 @@ class Action;
 class Slot;
 class SlotRuntime;
 class ChannelBag;
-class KeyframeStrip;
+class ChannelGroup;
 class Layer;
 class Strip;
+class StripKeyframeData;
 }  // namespace blender::animrig
 using ActionSlotRuntimeHandle = blender::animrig::SlotRuntime;
 #else
@@ -677,10 +677,35 @@ typedef struct bActionGroup {
   struct bActionGroup *next, *prev;
 
   /**
+   * List of channels in this group for legacy actions.
+   *
    * NOTE: this must not be touched by standard listbase functions
    * which would clear links to other channels.
    */
   ListBase channels;
+
+  /**
+   * Span of channels in this group for layered actions.
+   *
+   * This specifies that span as a range of items in a ChannelBag's fcurve
+   * array.
+   *
+   * Note that empty groups (`fcurve_range_length == 0`) are allowed, and they
+   * still have a position in the fcurves array, as specified by
+   * `fcurve_range_start`. You can imagine these cases as a zero-width range
+   * that sits at the border between the element at `fcurve_range_start` and the
+   * element just before it.
+   */
+  int fcurve_range_start;
+  int fcurve_range_length;
+
+  /**
+   * For layered actions: the ChannelBag this group belongs to.
+   *
+   * This is needed in the keyframe drawing code, etc., to give direct access to
+   * the fcurves in this group.
+   */
+  struct ActionChannelBag *channel_bag;
 
   /** Settings for this action-group. */
   int flag;
@@ -694,6 +719,11 @@ typedef struct bActionGroup {
 
   /** Color set to use when customCol == -1. */
   ThemeWireColor cs;
+
+#ifdef __cplusplus
+  blender::animrig::ChannelGroup &wrap();
+  const blender::animrig::ChannelGroup &wrap() const;
+#endif
 } bActionGroup;
 
 /* Action Group flags */
@@ -745,6 +775,14 @@ typedef struct bAction {
   int slot_array_num;
   int32_t last_slot_handle;
 
+  /* Storage for the underlying data of strips. Each strip type has its own
+   * array, and strips reference this data with an enum indicating the strip
+   * type and an int containing the index in the array to use. */
+  struct ActionStripKeyframeData **strip_keyframe_data_array;
+  int strip_keyframe_data_array_num;
+
+  char _pad0[4];
+
   /* Note about legacy animation data:
    *
    * Blender 2.5 introduced a new animation system 'Animato'. This replaced the
@@ -777,7 +815,7 @@ typedef struct bAction {
    * (if 0, will be set to whatever ID first evaluates it).
    */
   int idroot;
-  char _pad[4];
+  char _pad1[4];
 
   /**
    * Start and end of the manually set intended playback frame range. Used by UI and
@@ -1130,13 +1168,12 @@ typedef struct ActionSlot {
    * \see #AnimData::slot_name
    */
   char name[66]; /* MAX_ID_NAME */
-  uint8_t _pad0[2];
 
   /**
    * Type of ID-blocks that this slot can be assigned to.
    * If 0, will be set to whatever ID is first assigned.
    */
-  int idtype;
+  int16_t idtype;
 
   /**
    * Identifier of this Slot within the Action.
@@ -1153,7 +1190,7 @@ typedef struct ActionSlot {
 
   /** \see #blender::animrig::Slot::flags() */
   int8_t slot_flags;
-  uint8_t _pad1[3];
+  uint8_t _pad1[7];
 
   /** Runtime data. Set to nullptr when writing to disk. */
   ActionSlotRuntimeHandle *runtime;
@@ -1174,6 +1211,17 @@ typedef struct ActionStrip {
   int8_t strip_type;
   uint8_t _pad0[3];
 
+  /**
+   * The index of the "strip data" item that this strip uses, in the array of
+   * strip data that corresponds to `strip_type`.
+   *
+   * Note that -1 indicates "no data".  This is an invalid state outside of
+   * specific internal APIs, but it's the default value and therefore helps us
+   * catch when strips aren't fully initialized before making their way outside
+   * of those APIs.
+   */
+  int data_index;
+
   float frame_start; /** Start frame of the strip, in Animation time. */
   float frame_end;   /** End frame of the strip, in Animation time. */
 
@@ -1186,6 +1234,8 @@ typedef struct ActionStrip {
    */
   float frame_offset;
 
+  uint8_t _pad1[4];
+
 #ifdef __cplusplus
   blender::animrig::Strip &wrap();
   const blender::animrig::Strip &wrap() const;
@@ -1195,27 +1245,44 @@ typedef struct ActionStrip {
 /**
  * #ActionStrip::type = #Strip::Type::Keyframe.
  *
- * \see #blender::animrig::KeyframeStrip
+ * \see #blender::animrig::StripKeyframeData
  */
-typedef struct KeyframeActionStrip {
-  ActionStrip strip;
-
+typedef struct ActionStripKeyframeData {
   struct ActionChannelBag **channelbag_array;
   int channelbag_array_num;
 
   uint8_t _pad[4];
 
 #ifdef __cplusplus
-  blender::animrig::KeyframeStrip &wrap();
-  const blender::animrig::KeyframeStrip &wrap() const;
+  blender::animrig::StripKeyframeData &wrap();
+  const blender::animrig::StripKeyframeData &wrap() const;
 #endif
-} KeyframeActionStrip;
+} ActionStripKeyframeData;
 
 /**
  * \see #blender::animrig::ChannelBag
  */
 typedef struct ActionChannelBag {
   int32_t slot_handle;
+
+  /* Channel groups. These index into the `fcurve_array` below to specify group
+   * membership of the fcurves.
+   *
+   * Note that although the fcurves also have pointers back to the groups they
+   * belong to, those pointers are not the source of truth. The source of truth
+   * for membership is the information in the channel groups here.
+   *
+   * Invariants:
+   * 1. The groups are sorted by their `fcurve_range_start` field. In other
+   *    words, they are in the same order as their starting positions in the
+   *    fcurve array.
+   * 2. The grouped fcurves are tightly packed, starting at the first fcurve and
+   *    having no gaps of ungrouped fcurves between them. Ungrouped fcurves come
+   *    at the end, after all of the grouped fcurves. */
+  int group_array_num;
+  struct bActionGroup **group_array;
+
+  uint8_t _pad[4];
 
   int fcurve_array_num;
   struct FCurve **fcurve_array; /* Array of 'fcurve_array_num' FCurves. */
@@ -1226,7 +1293,7 @@ typedef struct ActionChannelBag {
   blender::animrig::ChannelBag &wrap();
   const blender::animrig::ChannelBag &wrap() const;
 #endif
-} ChannelBag;
+} ActionChannelBag;
 
 #ifdef __cplusplus
 /* Some static assertions that things that should have the same type actually do. */

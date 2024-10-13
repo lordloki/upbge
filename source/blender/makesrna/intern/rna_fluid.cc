@@ -10,7 +10,7 @@
 #include <cstdlib>
 
 #include "BLI_math_vector.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_sys_types.h"
 #include "BLI_utildefines.h"
 
@@ -1365,7 +1365,7 @@ static void rna_def_fluid_domain_settings(BlenderRNA *brna)
   };
 
   static const EnumPropertyItem gridlines_color_field_items[] = {
-      {0, "NONE", 0, "None", "None"},
+      {FLUID_GRIDLINE_COLOR_TYPE_NONE, "NONE", 0, "None", "None"},
       {FLUID_GRIDLINE_COLOR_TYPE_FLAGS, "FLAGS", 0, "Flags", "Flag grid of the fluid domain"},
       {FLUID_GRIDLINE_COLOR_TYPE_RANGE,
        "RANGE",

@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(gpu_shader_common_hash.glsl)
-#pragma BLENDER_REQUIRE(gpu_shader_compositor_texture_utilities.glsl)
+#include "gpu_shader_common_hash.glsl"
+#include "gpu_shader_compositor_texture_utilities.glsl"
 
 /* A model that approximates lens distortion parameterized by a distortion parameter and dependent
  * on the squared distance to the center of the image. The distorted pixel is then computed as the
@@ -98,8 +98,9 @@ vec3 integrate_distortion(int start, int end, float distance_squared, vec2 uv, i
   vec3 accumulated_color = vec3(0.0);
   float distortion_amount = chromatic_distortion[end] - chromatic_distortion[start];
   for (int i = 0; i < steps; i++) {
-    /* The increment will be in the [0, 1) range across iterations. */
-    float increment = (i + get_jitter(i)) / steps;
+    /* The increment will be in the [0, 1) range across iterations. Include the start channel in
+     * the jitter seed to make sure each channel gets a different jitter. */
+    float increment = (i + get_jitter(start * steps + i)) / steps;
     float distortion = chromatic_distortion[start] + increment * distortion_amount;
     float distortion_scale = compute_distortion_scale(distortion, distance_squared);
 

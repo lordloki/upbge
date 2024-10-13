@@ -27,6 +27,8 @@
 #include "BLI_time.h"
 #include "BLI_utildefines.h"
 
+#include "BLT_translation.hh"
+
 #include "BLO_readfile.hh"
 
 #include "DNA_brush_types.h"
@@ -95,12 +97,15 @@
 
 #include "UI_interface_icons.hh"
 
+#include "ANIM_action.hh"
+#include "ANIM_pose.hh"
+
 #ifndef NDEBUG
 /* Used for database init assert(). */
 #  include "BLI_threads.h"
 #endif
 
-static void icon_copy_rect(ImBuf *ibuf, uint w, uint h, uint *rect);
+static void icon_copy_rect(const ImBuf *ibuf, uint w, uint h, uint *rect);
 
 /* -------------------------------------------------------------------- */
 /** \name Local Structs
@@ -961,7 +966,8 @@ static PoseBackup *action_preview_render_prepare(IconPreview *preview)
   /* Apply the Action as pose, so that it can be rendered. This assumes the Action represents a
    * single pose, and that thus the evaluation time doesn't matter. */
   AnimationEvalContext anim_eval_context = {preview->depsgraph, 0.0f};
-  BKE_pose_apply_action_all_bones(object, action, &anim_eval_context);
+  const blender::animrig::slot_handle_t slot_handle = blender::animrig::first_slot_handle(*action);
+  blender::animrig::pose_apply_action_all_bones(object, action, slot_handle, &anim_eval_context);
 
   /* Force evaluation of the new pose, before the preview is rendered. */
   DEG_id_tag_update(&object->id, ID_RECALC_GEOMETRY);
@@ -1003,6 +1009,7 @@ static void action_preview_render(IconPreview *preview, IconPreviewSize *preview
   if (camera_eval == nullptr) {
     printf("Scene has no camera, unable to render preview of %s without it.\n",
            preview->id->name + 2);
+    action_preview_render_cleanup(preview, pose_backup);
     return;
   }
 
@@ -1334,51 +1341,43 @@ static ImBuf *icon_preview_imbuf_from_brush(Brush *brush)
   return brush->icon_imbuf;
 }
 
-static void icon_copy_rect(ImBuf *ibuf, uint w, uint h, uint *rect)
+static void icon_copy_rect(const ImBuf *ibuf, uint w, uint h, uint *rect)
 {
-  ImBuf *ima;
-  uint *drect, *srect;
-  float scaledx, scaledy;
-  short ex, ey, dx, dy;
-
-  /* paranoia test */
-  if (ibuf == nullptr || (ibuf->byte_buffer.data == nullptr && ibuf->float_buffer.data == nullptr))
+  if (ibuf == nullptr ||
+      (ibuf->byte_buffer.data == nullptr && ibuf->float_buffer.data == nullptr) || rect == nullptr)
   {
     return;
   }
 
-  /* Waste of cpu cycles... but the imbuf API has no other way to scale fast (ton). */
-  ima = IMB_dupImBuf(ibuf);
-
-  if (!ima) {
-    return;
-  }
-
-  if (ima->x > ima->y) {
+  float scaledx, scaledy;
+  if (ibuf->x > ibuf->y) {
     scaledx = float(w);
-    scaledy = (float(ima->y) / float(ima->x)) * float(w);
+    scaledy = (float(ibuf->y) / float(ibuf->x)) * float(w);
   }
   else {
-    scaledx = (float(ima->x) / float(ima->y)) * float(h);
+    scaledx = (float(ibuf->x) / float(ibuf->y)) * float(h);
     scaledy = float(h);
   }
 
   /* Scaling down must never assign zero width/height, see: #89868. */
-  ex = std::max(short(1), short(scaledx));
-  ey = std::max(short(1), short(scaledy));
+  int ex = std::max<int>(1, scaledx);
+  int ey = std::max<int>(1, scaledy);
 
-  dx = (w - ex) / 2;
-  dy = (h - ey) / 2;
+  int dx = (w - ex) / 2;
+  int dy = (h - ey) / 2;
 
-  IMB_scalefastImBuf(ima, ex, ey);
+  ImBuf *ima = IMB_scale_into_new(ibuf, ex, ey, IMBScaleFilter::Nearest, false);
+  if (ima == nullptr) {
+    return;
+  }
 
   /* if needed, convert to 32 bits */
   if (ima->byte_buffer.data == nullptr) {
     IMB_rect_from_float(ima);
   }
 
-  srect = reinterpret_cast<uint *>(ima->byte_buffer.data);
-  drect = rect;
+  const uint *srect = reinterpret_cast<const uint *>(ima->byte_buffer.data);
+  uint *drect = rect;
 
   drect += dy * w + dx;
   for (; ey > 0; ey--) {
@@ -1605,9 +1604,8 @@ static void icon_preview_startjob_all_sizes(void *customdata, wmJobWorkerStatus 
           if (object_preview_is_type_supported((Object *)ip->id)) {
             /* Much simpler than the ShaderPreview mess used for other ID types. */
             object_preview_render(ip, cur_size);
-            continue;
           }
-          break;
+          continue;
         case ID_GR:
           BLI_assert(collection_preview_contains_geometry_recursive((Collection *)ip->id));
           /* A collection instance empty was created, so this can just reuse the object preview
@@ -1805,7 +1803,7 @@ void PreviewLoadJob::run_fn(void *customdata, wmJobWorkerStatus *worker_status)
       continue;
     }
 
-    // printf("loading deferred %d×%d preview for %s\n", request->sizex, request->sizey, filepath);
+    // printf("loading deferred %dx%d preview for %s\n", request->sizex, request->sizey, filepath);
 
     IMB_thumb_path_lock(filepath);
     ImBuf *thumb = IMB_thumb_manage(filepath, THB_LARGE, ThumbSource(*source));
@@ -1893,22 +1891,37 @@ static void icon_preview_free(void *customdata)
   MEM_freeN(ip);
 }
 
-bool ED_preview_id_is_supported(const ID *id)
+bool ED_preview_id_is_supported(const ID *id, const char **r_disabled_hint)
 {
   if (id == nullptr) {
     return false;
   }
-  if (GS(id->name) == ID_NT) {
-    /* Node groups don't support standard preview generation. */
-    return false;
+
+  /* Get both the result and the "potential" disabled hint. After that we can decide if the
+   * disabled hint needs to be returned to the caller. */
+  const auto [result, disabled_hint] = [id]() -> std::pair<bool, const char *> {
+    switch (GS(id->name)) {
+      case ID_NT:
+        return {false, RPT_("Node groups do not support automatic previews")};
+      case ID_OB:
+        return {object_preview_is_type_supported((const Object *)id),
+                RPT_("Object type does not support automatic previews")};
+      case ID_GR:
+        return {
+            collection_preview_contains_geometry_recursive((const Collection *)id),
+            RPT_("Collection does not contain object types that can be rendered for the automatic "
+                 "preview")};
+      default:
+        return {BKE_previewimg_id_get_p(id) != nullptr,
+                RPT_("Data-block type does not support automatic previews")};
+    }
+  }();
+
+  if (result == false && disabled_hint && r_disabled_hint) {
+    *r_disabled_hint = disabled_hint;
   }
-  if (GS(id->name) == ID_OB) {
-    return object_preview_is_type_supported((const Object *)id);
-  }
-  if (GS(id->name) == ID_GR) {
-    return collection_preview_contains_geometry_recursive((const Collection *)id);
-  }
-  return BKE_previewimg_id_get_p(id) != nullptr;
+
+  return result;
 }
 
 void ED_preview_icon_render(

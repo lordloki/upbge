@@ -16,8 +16,8 @@
 #include "GPU_framebuffer.hh"
 #include "GPU_state.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 #include "gpu_py.hh"
 #include "gpu_py_framebuffer.hh"
@@ -491,11 +491,11 @@ static PyObject *pygpu_state_program_point_size_set(PyObject * /*self*/, PyObjec
 
 PyDoc_STRVAR(
     /* Wrap. */
-    pygpu_state_framebuffer_active_get_doc,
-    ".. function:: framebuffer_active_get(enable)\n"
+    pygpu_state_active_framebuffer_get_doc,
+    ".. function:: active_framebuffer_get(enable)\n"
     "\n"
     "   Return the active frame-buffer in context.\n");
-static PyObject *pygpu_state_framebuffer_active_get(PyObject * /*self*/)
+static PyObject *pygpu_state_active_framebuffer_get(PyObject * /*self*/)
 {
   BPYGPU_IS_INIT_OR_ERROR_OBJ;
 
@@ -587,9 +587,9 @@ static PyMethodDef pygpu_state__tp_methods[] = {
      METH_O,
      pygpu_state_program_point_size_set_doc},
     {"active_framebuffer_get",
-     (PyCFunction)pygpu_state_framebuffer_active_get,
+     (PyCFunction)pygpu_state_active_framebuffer_get,
      METH_NOARGS,
-     pygpu_state_framebuffer_active_get_doc},
+     pygpu_state_active_framebuffer_get_doc},
     {nullptr, nullptr, 0, nullptr},
 };
 

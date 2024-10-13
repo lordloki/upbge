@@ -2,8 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma BLENDER_REQUIRE(common_view_clipping_lib.glsl)
-#pragma BLENDER_REQUIRE(common_view_lib.glsl)
+#include "common_view_clipping_lib.glsl"
+#include "common_view_lib.glsl"
+#include "select_lib.glsl"
 
 /* project to screen space */
 vec2 proj(vec4 pos)
@@ -91,6 +92,8 @@ vec3 get_outline_point(vec2 pos,
 
 void main()
 {
+  select_id_set(in_select_buf[gl_InstanceID]);
+
   float dst_head = distance(headSphere.xyz, drw_view.viewinv[3].xyz);
   float dst_tail = distance(tailSphere.xyz, drw_view.viewinv[3].xyz);
   // float dst_head = -dot(headSphere.xyz, drw_view.viewmat[2].xyz);

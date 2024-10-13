@@ -229,7 +229,13 @@ bool OneapiDevice::load_kernels(const uint requested_features)
 {
   assert(device_queue_);
 
-  kernel_features = requested_features;
+  /* Kernel loading is expected to be a cumulative operation; for example, if
+   * a device is asked to load kernel A and then kernel B, then after these
+   * operations, both A and B should be available for use. So we need to store
+   * and use a cumulative mask of the requested kernel features, and not just
+   * the latest requested features.
+   */
+  kernel_features |= requested_features;
 
   bool is_finished_ok = oneapi_run_test_kernel(device_queue_);
   if (is_finished_ok == false) {
@@ -985,13 +991,13 @@ void OneapiDevice::get_adjusted_global_and_local_sizes(SyclQueue *queue,
 
 /* Compute-runtime (ie. NEO) version is what gets returned by sycl/L0 on Windows
  * since Windows driver 101.3268. */
-static const int lowest_supported_driver_version_win = 1015518;
+static const int lowest_supported_driver_version_win = 1015730;
 #  ifdef _WIN32
-/* For Windows driver 101.5518, compute-runtime version is 28044.
+/* For Windows driver 101.5730, compute-runtime version is 29550.
  * This information is returned by `ocloc query OCL_DRIVER_VERSION`.*/
-static const int lowest_supported_driver_version_neo = 29283;
+static const int lowest_supported_driver_version_neo = 29550;
 #  else
-static const int lowest_supported_driver_version_neo = 27642;
+static const int lowest_supported_driver_version_neo = 29735;
 #  endif
 
 int parse_driver_build_version(const sycl::device &device)

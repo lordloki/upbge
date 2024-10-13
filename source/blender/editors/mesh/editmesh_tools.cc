@@ -4358,7 +4358,6 @@ static int edbm_separate_exec(bContext *C, wmOperator *op)
     for (const int base_index : bases.index_range()) {
       Base *base = bases[base_index];
       BMEditMesh *em = BKE_editmesh_from_object(base->object);
-      bool changed = false;
 
       if (type == 0) {
         if ((em->bm->totvertsel == 0) && (em->bm->totedgesel == 0) && (em->bm->totfacesel == 0)) {
@@ -4371,6 +4370,7 @@ static int edbm_separate_exec(bContext *C, wmOperator *op)
       }
 
       /* editmode separate */
+      bool changed = false;
       switch (type) {
         case MESH_SEPARATE_SELECTED:
           changed = mesh_separate_selected(bmain, scene, view_layer, base, em->bm);
@@ -4405,45 +4405,46 @@ static int edbm_separate_exec(bContext *C, wmOperator *op)
     /* object mode separate */
     CTX_DATA_BEGIN (C, Base *, base_iter, selected_editable_bases) {
       Object *ob = base_iter->object;
-      if (ob->type == OB_MESH) {
-        Mesh *mesh = static_cast<Mesh *>(ob->data);
-        if (BKE_id_is_editable(bmain, &mesh->id)) {
-          BMesh *bm_old = nullptr;
-          bool changed = false;
-
-          BMeshCreateParams create_params{};
-          create_params.use_toolflags = true;
-          bm_old = BM_mesh_create(&bm_mesh_allocsize_default, &create_params);
-
-          BMeshFromMeshParams from_mesh_params{};
-          BM_mesh_bm_from_me(bm_old, mesh, &from_mesh_params);
-
-          switch (type) {
-            case MESH_SEPARATE_MATERIAL:
-              changed = mesh_separate_material(bmain, scene, view_layer, base_iter, bm_old);
-              break;
-            case MESH_SEPARATE_LOOSE:
-              changed = mesh_separate_loose(bmain, scene, view_layer, base_iter, bm_old);
-              break;
-            default:
-              BLI_assert(0);
-              break;
-          }
-
-          if (changed) {
-            BMeshToMeshParams to_mesh_params{};
-            to_mesh_params.calc_object_remap = true;
-            BM_mesh_bm_to_me(bmain, bm_old, mesh, &to_mesh_params);
-
-            DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY_ALL_MODES);
-            WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
-          }
-
-          BM_mesh_free(bm_old);
-
-          changed_multi |= changed;
-        }
+      if (ob->type != OB_MESH) {
+        continue;
       }
+      Mesh *mesh = static_cast<Mesh *>(ob->data);
+      if (!BKE_id_is_editable(bmain, &mesh->id)) {
+        continue;
+      }
+
+      BMeshCreateParams create_params{};
+      create_params.use_toolflags = true;
+      BMesh *bm_old = BM_mesh_create(&bm_mesh_allocsize_default, &create_params);
+
+      BMeshFromMeshParams from_mesh_params{};
+      BM_mesh_bm_from_me(bm_old, mesh, &from_mesh_params);
+
+      bool changed = false;
+      switch (type) {
+        case MESH_SEPARATE_MATERIAL:
+          changed = mesh_separate_material(bmain, scene, view_layer, base_iter, bm_old);
+          break;
+        case MESH_SEPARATE_LOOSE:
+          changed = mesh_separate_loose(bmain, scene, view_layer, base_iter, bm_old);
+          break;
+        default:
+          BLI_assert(0);
+          break;
+      }
+
+      if (changed) {
+        BMeshToMeshParams to_mesh_params{};
+        to_mesh_params.calc_object_remap = true;
+        BM_mesh_bm_to_me(bmain, bm_old, mesh, &to_mesh_params);
+
+        DEG_id_tag_update(&mesh->id, ID_RECALC_GEOMETRY_ALL_MODES);
+        WM_event_add_notifier(C, NC_GEOM | ND_DATA, mesh);
+      }
+
+      BM_mesh_free(bm_old);
+
+      changed_multi |= changed;
     }
     CTX_DATA_END;
   }
@@ -5229,6 +5230,10 @@ void MESH_OT_quads_convert_to_tris(wmOperatorType *ot)
 /** \name Convert to Quads Operator
  * \{ */
 
+#if 0 /* See comments at top of bmo_join_triangles.cc */
+#  define USE_JOIN_TRIANGLE_TESTING_API
+#endif
+
 static int edbm_tris_convert_to_quads_exec(bContext *C, wmOperator *op)
 {
   const Scene *scene = CTX_data_scene(C);
@@ -5242,6 +5247,14 @@ static int edbm_tris_convert_to_quads_exec(bContext *C, wmOperator *op)
   const bool do_uvs = RNA_boolean_get(op->ptr, "uvs");
   const bool do_vcols = RNA_boolean_get(op->ptr, "vcols");
   const bool do_materials = RNA_boolean_get(op->ptr, "materials");
+
+#ifdef USE_JOIN_TRIANGLE_TESTING_API
+  int merge_limit = RNA_int_get(op->ptr, "merge_limit");
+  int neighbor_debug = RNA_int_get(op->ptr, "neighbor_debug");
+#endif
+
+  const float topology_influence = RNA_float_get(op->ptr, "topology_influence");
+  const bool deselect_joined = RNA_boolean_get(op->ptr, "deselect_joined");
 
   float angle_face_threshold, angle_shape_threshold;
   bool is_face_pair;
@@ -5281,13 +5294,25 @@ static int edbm_tris_convert_to_quads_exec(bContext *C, wmOperator *op)
 
     BM_custom_loop_normals_to_vector_layer(em->bm);
 
+    bool extend_selection = (deselect_joined == false);
+
+#ifdef USE_JOIN_TRIANGLE_TESTING_API
+    if (merge_limit != -1) {
+      extend_selection = false;
+    }
+#endif
+
     if (!EDBM_op_call_and_selectf(
             em,
             op,
             "faces.out",
-            true,
+            extend_selection,
             "join_triangles faces=%hf angle_face_threshold=%f angle_shape_threshold=%f "
-            "cmp_seam=%b cmp_sharp=%b cmp_uvs=%b cmp_vcols=%b cmp_materials=%b",
+            "cmp_seam=%b cmp_sharp=%b cmp_uvs=%b cmp_vcols=%b cmp_materials=%b "
+#ifdef USE_JOIN_TRIANGLE_TESTING_API
+            "merge_limit=%i neighbor_debug=%i "
+#endif
+            "topology_influence=%f deselect_joined=%b",
             BM_ELEM_SELECT,
             angle_face_threshold,
             angle_shape_threshold,
@@ -5295,9 +5320,23 @@ static int edbm_tris_convert_to_quads_exec(bContext *C, wmOperator *op)
             do_sharp,
             do_uvs,
             do_vcols,
-            do_materials))
+            do_materials,
+#ifdef USE_JOIN_TRIANGLE_TESTING_API
+            merge_limit + 1,
+            neighbor_debug,
+#endif
+            topology_influence,
+            deselect_joined))
     {
       continue;
+    }
+
+    if (deselect_joined) {
+      /* When de-selecting faces outside of face mode:
+       * failing to flush would leave an invalid selection. */
+      if (em->selectmode & (SCE_SELECT_VERTEX | SCE_SELECT_EDGE)) {
+        EDBM_selectmode_flush_ex(em, em->selectmode);
+      }
     }
 
     BM_custom_loop_normals_from_vector_layer(em->bm, false);
@@ -5315,6 +5354,30 @@ static int edbm_tris_convert_to_quads_exec(bContext *C, wmOperator *op)
 static void join_triangle_props(wmOperatorType *ot)
 {
   PropertyRNA *prop;
+
+#ifdef USE_JOIN_TRIANGLE_TESTING_API
+  prop = RNA_def_int(ot->srna,
+                     "merge_limit",
+                     0,
+                     -1,
+                     INT_MAX,
+                     "Merge Limit",
+                     "Maximum number of merges",
+                     -1,
+                     INT_MAX);
+  RNA_def_property_int_default(prop, -1);
+
+  prop = RNA_def_int(ot->srna,
+                     "neighbor_debug",
+                     0,
+                     0,
+                     INT_MAX,
+                     "Neighbor Debug",
+                     "Neighbor to highlight",
+                     0,
+                     INT_MAX);
+  RNA_def_property_int_default(prop, 0);
+#endif
 
   prop = RNA_def_float_rotation(ot->srna,
                                 "face_threshold",
@@ -5340,11 +5403,28 @@ static void join_triangle_props(wmOperatorType *ot)
                                 DEG2RADF(180.0f));
   RNA_def_property_float_default(prop, DEG2RADF(40.0f));
 
+  prop = RNA_def_float_factor(ot->srna,
+                              "topology_influence",
+                              0.0f,
+                              0.0f,
+                              2.0f,
+                              "Topology Influence",
+                              "How much to prioritize regular grids of quads as well as "
+                              "quads that touch existing quads",
+                              0.0f,
+                              2.0f);
+
   RNA_def_boolean(ot->srna, "uvs", false, "Compare UVs", "");
   RNA_def_boolean(ot->srna, "vcols", false, "Compare Color Attributes", "");
   RNA_def_boolean(ot->srna, "seam", false, "Compare Seam", "");
   RNA_def_boolean(ot->srna, "sharp", false, "Compare Sharp", "");
   RNA_def_boolean(ot->srna, "materials", false, "Compare Materials", "");
+
+  RNA_def_boolean(ot->srna,
+                  "deselect_joined",
+                  false,
+                  "Deselect Joined",
+                  "Only select remaining triangles that were not merged");
 }
 
 void MESH_OT_tris_convert_to_quads(wmOperatorType *ot)
@@ -6923,8 +7003,18 @@ static int edbm_bridge_edge_loops_for_single_editmesh(wmOperator *op,
   int totface_del = 0;
   BMFace **totface_del_arr = nullptr;
   const bool use_faces = (em->bm->totfacesel != 0);
+  bool changed = false;
 
   if (use_faces) {
+    /* NOTE: When all faces are selected, all faces will be deleted with no edge-loops remaining.
+     * In this case bridge will fail with a waning and delete all faces.
+     * Ideally it's possible to detect cases when deleting faces leaves remaining edge-loops.
+     * While this can be done in trivial cases - by checking the number of selected faces matches
+     * the number of faces, that won't work for more involved cases involving hidden faces
+     * and wire edges. One option could be to copy & restore the edit-mesh however
+     * this is quite an expensive operation - to properly handle clearly invalid input.
+     * Accept this limitation, the user must undo to restore the previous state, see: #123405. */
+
     BMIter iter;
     BMFace *f;
     int i;
@@ -6968,6 +7058,7 @@ static int edbm_bridge_edge_loops_for_single_editmesh(wmOperator *op,
                  "delete geom=%hf context=%i",
                  BM_ELEM_TAG,
                  DEL_FACES_KEEP_BOUNDARY);
+    changed = true;
   }
 
   BMO_op_exec(em->bm, &bmop);
@@ -6978,6 +7069,8 @@ static int edbm_bridge_edge_loops_for_single_editmesh(wmOperator *op,
       EDBM_flag_disable_all(em, BM_ELEM_SELECT);
       BMO_slot_buffer_hflag_enable(
           em->bm, bmop.slots_out, "faces.out", BM_FACE, BM_ELEM_SELECT, true);
+
+      changed = true;
     }
 
     if (use_merge == false) {
@@ -7005,6 +7098,8 @@ static int edbm_bridge_edge_loops_for_single_editmesh(wmOperator *op,
         BMO_slot_buffer_hflag_enable(
             em->bm, bmop_subd.slots_out, "faces.out", BM_FACE, BM_ELEM_SELECT, true);
         BMO_op_finish(em->bm, &bmop_subd);
+
+        changed = true;
       }
     }
   }
@@ -7014,6 +7109,10 @@ static int edbm_bridge_edge_loops_for_single_editmesh(wmOperator *op,
   }
 
   if (EDBM_op_finish(em, &bmop, op, true)) {
+    changed = true;
+  }
+
+  if (changed) {
     EDBMUpdate_Params params{};
     params.calc_looptris = true;
     params.calc_normals = false;

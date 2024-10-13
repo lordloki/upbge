@@ -32,28 +32,28 @@
 
 #include "WM_api.hh" /* For #WM_ghost_backend */
 
-#include "bpy.h"
-#include "bpy_app.h"
-#include "bpy_cli_command.h"
-#include "bpy_driver.h"
-#include "bpy_library.h"
-#include "bpy_operator.h"
-#include "bpy_props.h"
-#include "bpy_rna.h"
-#include "bpy_rna_data.h"
-#include "bpy_rna_gizmo.h"
-#include "bpy_rna_types_capi.h"
-#include "bpy_utils_previews.h"
-#include "bpy_utils_units.h"
+#include "bpy.hh"
+#include "bpy_app.hh"
+#include "bpy_cli_command.hh"
+#include "bpy_driver.hh"
+#include "bpy_library.hh"
+#include "bpy_operator.hh"
+#include "bpy_props.hh"
+#include "bpy_rna.hh"
+#include "bpy_rna_data.hh"
+#include "bpy_rna_gizmo.hh"
+#include "bpy_rna_types_capi.hh"
+#include "bpy_utils_previews.hh"
+#include "bpy_utils_units.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_compat.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_compat.hh"
+#include "../generic/python_utildefines.hh"
 
 /* external util modules */
-#include "../generic/idprop_py_api.h"
-#include "../generic/idprop_py_ui_api.h"
-#include "bpy_msgbus.h"
+#include "../generic/idprop_py_api.hh"
+#include "../generic/idprop_py_ui_api.hh"
+#include "bpy_msgbus.hh"
 
 #ifdef WITH_FREESTYLE
 #  include "BPy_Freestyle.h"
@@ -741,7 +741,8 @@ void BPy_init_modules(bContext *C)
   Py_DECREF(mod);
 
   /* needs to be first so bpy_types can run */
-  PyModule_AddObject(mod, "types", BPY_rna_types());
+  PyObject *bpy_types = BPY_rna_types();
+  PyModule_AddObject(mod, "types", bpy_types);
 
   /* needs to be first so bpy_types can run */
   BPY_library_load_type_ready();
@@ -753,6 +754,8 @@ void BPy_init_modules(bContext *C)
   bpy_import_test("bpy_types");
   PyModule_AddObject(mod, "data", BPY_rna_module()); /* imports bpy_types by running this */
   bpy_import_test("bpy_types");
+  BPY_rna_types_finalize_external_types(bpy_types);
+
   PyModule_AddObject(mod, "props", BPY_rna_props());
   /* ops is now a python module that does the conversion from SOME_OT_foo -> some.foo */
   PyModule_AddObject(mod, "ops", BPY_operator_module());

@@ -313,22 +313,15 @@ enum FileListTags {
   FILELIST_TAGS_NO_THREADS = (1 << 2),
 };
 
-#define SPECIAL_IMG_SIZE 256
-#define SPECIAL_IMG_ROWS 1
-#define SPECIAL_IMG_COLS 7
-
-enum {
-  SPECIAL_IMG_DOCUMENT = 0,
-  SPECIAL_IMG_DRIVE_DISC = 1,
-  SPECIAL_IMG_FOLDER = 2,
-  SPECIAL_IMG_PARENT = 3,
-  SPECIAL_IMG_DRIVE_FIXED = 4,
-  SPECIAL_IMG_DRIVE_ATTACHED = 5,
-  SPECIAL_IMG_DRIVE_REMOTE = 6,
-  SPECIAL_IMG_MAX,
+enum class SpecialFileImages {
+  Document,
+  Folder,
+  Parent,
+  /* Keep this last. */
+  _Max,
 };
 
-static ImBuf *gSpecialFileImages[SPECIAL_IMG_MAX];
+static ImBuf *gSpecialFileImages[int(SpecialFileImages::_Max)];
 
 static void filelist_readjob_main(FileListReadJob *job_params,
                                   bool *stop,
@@ -1132,38 +1125,11 @@ void filelist_setlibrary(FileList *filelist, const AssetLibraryReference *asset_
 
 /* ********** Icon/image helpers ********** */
 
-static ImBuf *fileimage_from_icon(int icon_id)
-{
-  int width;
-  int height;
-  blender::Array<uchar> bitmap = BLF_svg_icon_bitmap(icon_id, 256.0f, &width, &height);
-  if (bitmap.is_empty()) {
-    return nullptr;
-  }
-  ImBuf *ibuf = IMB_allocFromBuffer(bitmap.data(), nullptr, width, height, 4);
-  IMB_flipy(ibuf);
-  return ibuf;
-}
-
-void filelist_init_icons()
-{
-  BLI_assert(G.background == false);
-#ifndef WITH_HEADLESS
-  gSpecialFileImages[SPECIAL_IMG_DOCUMENT] = fileimage_from_icon(ICON_FILE_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_DRIVE_DISC] = fileimage_from_icon(ICON_DISC_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_FOLDER] = fileimage_from_icon(ICON_FILE_FOLDER_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_PARENT] = fileimage_from_icon(ICON_FILE_PARENT_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_DRIVE_FIXED] = fileimage_from_icon(ICON_DISK_DRIVE_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_DRIVE_ATTACHED] = fileimage_from_icon(ICON_EXTERNAL_DRIVE_LARGE);
-  gSpecialFileImages[SPECIAL_IMG_DRIVE_REMOTE] = fileimage_from_icon(ICON_NETWORK_DRIVE_LARGE);
-#endif
-}
-
 void filelist_free_icons()
 {
   BLI_assert(G.background == false);
 
-  for (int i = 0; i < SPECIAL_IMG_MAX; i++) {
+  for (int i = 0; i < int(SpecialFileImages::_Max); i++) {
     IMB_freeImBuf(gSpecialFileImages[i]);
     gSpecialFileImages[i] = nullptr;
   }
@@ -1210,20 +1176,29 @@ ImBuf *filelist_file_getimage(const FileDirEntry *file)
   return file->preview_icon_id ? BKE_icon_imbuf_get_buffer(file->preview_icon_id) : nullptr;
 }
 
+static ImBuf *filelist_ensure_special_file_image(SpecialFileImages image, int icon)
+{
+  ImBuf *ibuf = gSpecialFileImages[int(image)];
+  if (ibuf) {
+    return ibuf;
+  }
+  return gSpecialFileImages[int(image)] = UI_svg_icon_bitmap(icon, 256.0f, false);
+}
+
 ImBuf *filelist_geticon_image_ex(const FileDirEntry *file)
 {
   ImBuf *ibuf = nullptr;
 
   if (file->typeflag & FILE_TYPE_DIR) {
     if (FILENAME_IS_PARENT(file->relpath)) {
-      ibuf = gSpecialFileImages[SPECIAL_IMG_PARENT];
+      ibuf = filelist_ensure_special_file_image(SpecialFileImages::Parent, ICON_FILE_PARENT_LARGE);
     }
     else {
-      ibuf = gSpecialFileImages[SPECIAL_IMG_FOLDER];
+      ibuf = filelist_ensure_special_file_image(SpecialFileImages::Folder, ICON_FILE_FOLDER_LARGE);
     }
   }
   else {
-    ibuf = gSpecialFileImages[SPECIAL_IMG_DOCUMENT];
+    ibuf = filelist_ensure_special_file_image(SpecialFileImages::Document, ICON_FILE_LARGE);
   }
 
   return ibuf;
@@ -1374,24 +1349,31 @@ static bool filelist_intern_entry_is_main_file(const FileListInternEntry *intern
 
 static void parent_dir_until_exists_or_default_root(char *dir)
 {
-  if (!BLI_path_parent_dir_until_exists(dir)) {
-#ifdef WIN32
-    BLI_windows_get_default_root_dir(dir);
-#else
-    ARRAY_SET_ITEMS(dir, '/', '\0');
-#endif
+  /* Only allow absolute paths as CWD relative doesn't make sense from the UI. */
+  if (BLI_path_is_abs_from_cwd(dir) && BLI_path_parent_dir_until_exists(dir)) {
+    return;
   }
+
+#ifdef WIN32
+  BLI_windows_get_default_root_dir(dir);
+#else
+  ARRAY_SET_ITEMS(dir, '/', '\0');
+#endif
 }
 
 static bool filelist_checkdir_dir(const FileList * /*filelist*/,
                                   char dirpath[FILE_MAX_LIBEXTRA],
                                   const bool do_change)
 {
+  bool is_valid;
   if (do_change) {
     parent_dir_until_exists_or_default_root(dirpath);
-    return true;
+    is_valid = true;
   }
-  return BLI_is_dir(dirpath);
+  else {
+    is_valid = BLI_path_is_abs_from_cwd(dirpath) && BLI_is_dir(dirpath);
+  }
+  return is_valid;
 }
 
 static bool filelist_checkdir_lib(const FileList * /*filelist*/,
@@ -3726,7 +3708,7 @@ static void filelist_readjob_recursive_dir_add_items(const bool do_lib,
 
     BLI_stack_discard(todo_dirs);
 
-    /* ARRRG! We have to be very careful *not to use* common BLI_path_util helpers over
+    /* ARRRG! We have to be very careful *not to use* common `BLI_path_utils.hh` helpers over
      * entry->relpath itself (nor any path containing it), since it may actually be a datablock
      * name inside .blend file, which can have slashes and backslashes! See #46827.
      * Note that in the end, this means we 'cache' valid relative subdir once here,

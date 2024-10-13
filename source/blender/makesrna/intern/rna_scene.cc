@@ -72,16 +72,44 @@
 
 #ifdef WITH_OPENEXR
 const EnumPropertyItem rna_enum_exr_codec_items[] = {
-    {R_IMF_EXR_CODEC_NONE, "NONE", 0, "None", ""},
-    {R_IMF_EXR_CODEC_PXR24, "PXR24", 0, "Pxr24 (lossy)", ""},
-    {R_IMF_EXR_CODEC_ZIP, "ZIP", 0, "ZIP (lossless)", ""},
-    {R_IMF_EXR_CODEC_PIZ, "PIZ", 0, "PIZ (lossless)", ""},
-    {R_IMF_EXR_CODEC_RLE, "RLE", 0, "RLE (lossless)", ""},
-    {R_IMF_EXR_CODEC_ZIPS, "ZIPS", 0, "ZIPS (lossless)", ""},
-    {R_IMF_EXR_CODEC_B44, "B44", 0, "B44 (lossy)", ""},
-    {R_IMF_EXR_CODEC_B44A, "B44A", 0, "B44A (lossy)", ""},
-    {R_IMF_EXR_CODEC_DWAA, "DWAA", 0, "DWAA (lossy)", ""},
-    {R_IMF_EXR_CODEC_DWAB, "DWAB", 0, "DWAB (lossy)", ""},
+    {R_IMF_EXR_CODEC_NONE, "NONE", 0, "None", "No compression"},
+    {R_IMF_EXR_CODEC_ZIP, "ZIP", 0, "ZIP", "Lossless zip compression of 16 row image blocks"},
+    {R_IMF_EXR_CODEC_PIZ,
+     "PIZ",
+     0,
+     "PIZ",
+     "Lossless wavelet compression, effective for noisy/grainy images"},
+    {R_IMF_EXR_CODEC_DWAA,
+     "DWAA",
+     0,
+     "DWAA (lossy)",
+     "JPEG-like lossy compression on 32 row image blocks"},
+    {R_IMF_EXR_CODEC_DWAB,
+     "DWAB",
+     0,
+     "DWAB (lossy)",
+     "JPEG-like lossy compression on 256 row image blocks"},
+    {R_IMF_EXR_CODEC_ZIPS,
+     "ZIPS",
+     0,
+     "ZIPS",
+     "Lossless zip compression, each image row compressed separately"},
+    {R_IMF_EXR_CODEC_RLE, "RLE", 0, "RLE", "Lossless run length encoding compression"},
+    {R_IMF_EXR_CODEC_PXR24,
+     "PXR24",
+     0,
+     "Pxr24 (lossy)",
+     "Lossy compression for 32 bit float images (stores 24 bits of each float)"},
+    {R_IMF_EXR_CODEC_B44,
+     "B44",
+     0,
+     "B44 (lossy)",
+     "Lossy compression for 16 bit float images, at fixed 2.3:1 ratio"},
+    {R_IMF_EXR_CODEC_B44A,
+     "B44A",
+     0,
+     "B44A (lossy)",
+     "Lossy compression for 16 bit float images, at fixed 2.3:1 ratio"},
     {0, nullptr, 0, nullptr, nullptr},
 };
 #endif
@@ -776,50 +804,6 @@ static void rna_ToolSettings_snap_uv_mode_set(PointerRNA *ptr, int value)
   }
 }
 
-/* Grease Pencil update cache */
-static void rna_GPencil_update(Main * /*bmain*/, Scene *scene, PointerRNA * /*ptr*/)
-{
-  if (scene != nullptr) {
-    ED_gpencil_tag_scene_gpencil(scene);
-  }
-}
-
-static void rna_Gpencil_extend_selection(bContext *C, PointerRNA * /*ptr*/)
-{
-  /* Extend selection to all points in all selected strokes. */
-  const Scene *scene = CTX_data_scene(C);
-  ViewLayer *view_layer = CTX_data_view_layer(C);
-  BKE_view_layer_synced_ensure(scene, view_layer);
-  Object *ob = BKE_view_layer_active_object_get(view_layer);
-  if ((ob) && (ob->type == OB_GPENCIL_LEGACY)) {
-    bGPdata *gpd = (bGPdata *)ob->data;
-    CTX_DATA_BEGIN (C, bGPDstroke *, gps, editable_gpencil_strokes) {
-      if ((gps->flag & GP_STROKE_SELECT) && (gps->totpoints > 1)) {
-        bGPDspoint *pt;
-        for (int i = 0; i < gps->totpoints; i++) {
-          pt = &gps->points[i];
-          pt->flag |= GP_SPOINT_SELECT;
-        }
-      }
-    }
-    CTX_DATA_END;
-
-    gpd->flag |= GP_DATA_CACHE_IS_DIRTY;
-    DEG_id_tag_update(&gpd->id, ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY);
-  }
-}
-
-static void rna_Gpencil_selectmode_update(bContext *C, PointerRNA *ptr)
-{
-  ToolSettings *ts = (ToolSettings *)ptr->data;
-  /* If the mode is not Stroke, don't extend selection. */
-  if ((ts->gpencil_selectmode_edit & GP_SELECTMODE_STROKE) == 0) {
-    return;
-  }
-
-  rna_Gpencil_extend_selection(C, ptr);
-}
-
 static void rna_Gpencil_mask_point_update(bContext * /*C*/, PointerRNA *ptr)
 {
   ToolSettings *ts = (ToolSettings *)ptr->data;
@@ -828,14 +812,12 @@ static void rna_Gpencil_mask_point_update(bContext * /*C*/, PointerRNA *ptr)
   ts->gpencil_selectmode_sculpt &= ~GP_SCULPT_MASK_SELECTMODE_SEGMENT;
 }
 
-static void rna_Gpencil_mask_stroke_update(bContext *C, PointerRNA *ptr)
+static void rna_Gpencil_mask_stroke_update(bContext * /*C*/, PointerRNA *ptr)
 {
   ToolSettings *ts = (ToolSettings *)ptr->data;
 
   ts->gpencil_selectmode_sculpt &= ~GP_SCULPT_MASK_SELECTMODE_POINT;
   ts->gpencil_selectmode_sculpt &= ~GP_SCULPT_MASK_SELECTMODE_SEGMENT;
-
-  rna_Gpencil_extend_selection(C, ptr);
 }
 
 static void rna_Gpencil_mask_segment_update(bContext * /*C*/, PointerRNA *ptr)
@@ -846,36 +828,28 @@ static void rna_Gpencil_mask_segment_update(bContext * /*C*/, PointerRNA *ptr)
   ts->gpencil_selectmode_sculpt &= ~GP_SCULPT_MASK_SELECTMODE_STROKE;
 }
 
-static void rna_Gpencil_vertex_mask_point_update(bContext *C, PointerRNA *ptr)
+static void rna_Gpencil_vertex_mask_point_update(bContext * /*C*/, PointerRNA *ptr)
 {
   ToolSettings *ts = (ToolSettings *)ptr->data;
 
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_STROKE;
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_SEGMENT;
-
-  ED_gpencil_tag_scene_gpencil(CTX_data_scene(C));
 }
 
-static void rna_Gpencil_vertex_mask_stroke_update(bContext *C, PointerRNA *ptr)
+static void rna_Gpencil_vertex_mask_stroke_update(bContext * /*C*/, PointerRNA *ptr)
 {
   ToolSettings *ts = (ToolSettings *)ptr->data;
 
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_POINT;
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_SEGMENT;
-
-  rna_Gpencil_extend_selection(C, ptr);
-
-  ED_gpencil_tag_scene_gpencil(CTX_data_scene(C));
 }
 
-static void rna_Gpencil_vertex_mask_segment_update(bContext *C, PointerRNA *ptr)
+static void rna_Gpencil_vertex_mask_segment_update(bContext * /*C*/, PointerRNA *ptr)
 {
   ToolSettings *ts = (ToolSettings *)ptr->data;
 
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_POINT;
   ts->gpencil_selectmode_vertex &= ~GP_VERTEX_MASK_SELECTMODE_STROKE;
-
-  ED_gpencil_tag_scene_gpencil(CTX_data_scene(C));
 }
 
 static void rna_active_grease_pencil_update(bContext *C, PointerRNA * /*ptr*/)
@@ -1569,7 +1543,7 @@ static const EnumPropertyItem *rna_ImageFormatSettings_exr_codec_itemf(bContext 
   }
 
   for (i = 0; i < R_IMF_EXR_CODEC_MAX; i++) {
-    if (ELEM(i, R_IMF_EXR_CODEC_B44, R_IMF_EXR_CODEC_B44A)) {
+    if (ELEM(rna_enum_exr_codec_items[i].value, R_IMF_EXR_CODEC_B44, R_IMF_EXR_CODEC_B44A)) {
       continue; /* B44 and B44A are not defined for 32 bit floats */
     }
 
@@ -3638,6 +3612,15 @@ static void rna_def_tool_settings(BlenderRNA *brna)
       prop, "Align Rotation to Target", "Align rotation with the snapping target");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr); /* header redraw */
 
+  prop = RNA_def_property(srna, "use_snap_grid_absolute", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "snap_flag", SCE_SNAP_ABS_GRID);
+  RNA_def_property_flag(prop, PROP_DEG_SYNC_ONLY);
+  RNA_def_property_ui_text(
+      prop,
+      "Absolute Increment Snap",
+      "Absolute grid alignment while translating (based on the pivot center)");
+  RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr); /* header redraw */
+
   prop = RNA_def_property(srna, "snap_angle_increment_2d", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "snap_angle_increment_2d");
   RNA_def_property_ui_text(
@@ -3975,7 +3958,7 @@ static void rna_def_tool_settings(BlenderRNA *brna)
   RNA_def_property_ui_text(prop, "Select Mode", "");
   RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
   RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
-  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, "rna_Gpencil_selectmode_update");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
 
   /* Grease Pencil - Select mode Sculpt */
   prop = RNA_def_property(srna, "use_gpencil_select_mask_point", PROP_BOOLEAN, PROP_NONE);
@@ -4095,7 +4078,7 @@ static void rna_def_tool_settings(BlenderRNA *brna)
   RNA_def_property_flag(prop, PROP_DEG_SYNC_ONLY);
   RNA_def_property_range(prop, 1, 10);
   RNA_def_property_ui_text(prop, "Annotation Stroke Thickness", "Thickness of annotation strokes");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   /* Auto Keying */
   prop = RNA_def_property(srna, "use_keyframe_insert_auto", PROP_BOOLEAN, PROP_NONE);
@@ -7014,7 +6997,7 @@ static void rna_def_scene_image_format_data(BlenderRNA *brna)
   RNA_def_property_enum_sdna(prop, nullptr, "exr_codec");
   RNA_def_property_enum_items(prop, rna_enum_exr_codec_items);
   RNA_def_property_enum_funcs(prop, nullptr, nullptr, "rna_ImageFormatSettings_exr_codec_itemf");
-  RNA_def_property_ui_text(prop, "Codec", "Codec settings for OpenEXR");
+  RNA_def_property_ui_text(prop, "Codec", "Compression codec settings for OpenEXR");
   RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
 #  endif
 
@@ -8163,39 +8146,39 @@ static void rna_def_scene_render_data(BlenderRNA *brna)
   prop = RNA_def_property(srna, "simplify_gpencil", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_ENABLE);
   RNA_def_property_ui_text(prop, "Simplify", "Simplify Grease Pencil drawing");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_onplay", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_ON_PLAY);
   RNA_def_property_ui_text(
       prop, "Playback Only", "Simplify Grease Pencil only during animation playback");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_antialiasing", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_AA);
   RNA_def_property_ui_text(prop, "Antialiasing", "Use Antialiasing to smooth stroke edges");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_view_fill", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_FILL);
   RNA_def_property_ui_text(prop, "Fill", "Display fill strokes in the viewport");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_modifier", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(
       prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_MODIFIER);
   RNA_def_property_ui_text(prop, "Modifiers", "Display modifiers");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_shader_fx", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_FX);
   RNA_def_property_ui_text(prop, "Shader Effects", "Display Shader Effects");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   prop = RNA_def_property(srna, "simplify_gpencil_tint", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "simplify_gpencil", SIMPLIFY_GPENCIL_TINT);
   RNA_def_property_ui_text(prop, "Layers Tinting", "Display layer tint");
-  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, "rna_GPencil_update");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_DATA, nullptr);
 
   /* persistent data */
   prop = RNA_def_property(srna, "use_persistent_data", PROP_BOOLEAN, PROP_NONE);

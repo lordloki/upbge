@@ -7,6 +7,9 @@
  * \ingroup bke
  */
 
+#include "BLI_implicit_sharing.hh"
+#include "BLI_string_ref.hh"
+
 #define RET_OK 0
 #define RET_ERROR 1
 
@@ -44,7 +47,8 @@ PackedFile *BKE_packedfile_duplicate(const PackedFile *pf_src);
 PackedFile *BKE_packedfile_new(ReportList *reports,
                                const char *filepath_rel,
                                const char *basepath);
-PackedFile *BKE_packedfile_new_from_memory(void *mem, int memlen);
+PackedFile *BKE_packedfile_new_from_memory(
+    const void *mem, int memlen, const blender::ImplicitSharingInfo *sharing_info = nullptr);
 
 /**
  * No libraries for now.
@@ -106,7 +110,20 @@ void BKE_packedfile_free(PackedFile *pf);
 
 /* Info. */
 
-int BKE_packedfile_count_all(Main *bmain);
+struct PackedFileCount {
+  /** Counts e.g. packed images and sounds. */
+  int individual_files = 0;
+  /** Counts bakes that may consist of multiple files. */
+  int bakes = 0;
+
+  int total() const
+  {
+    return this->individual_files + this->bakes;
+  }
+};
+
+PackedFileCount BKE_packedfile_count_all(Main *bmain);
+
 /**
  * This function compares a packed file to a 'real' file.
  * It returns an integer indicating if:
@@ -135,4 +152,6 @@ bool BKE_packedfile_id_check(const ID *id);
 void BKE_packedfile_id_unpack(Main *bmain, ID *id, ReportList *reports, enum ePF_FileStatus how);
 
 void BKE_packedfile_blend_write(BlendWriter *writer, const PackedFile *pf);
-void BKE_packedfile_blend_read(BlendDataReader *reader, PackedFile **pf_p);
+void BKE_packedfile_blend_read(BlendDataReader *reader,
+                               PackedFile **pf_p,
+                               blender::StringRefNull filepath);

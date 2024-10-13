@@ -244,7 +244,7 @@ void USDCurvesReader::read_curve_sample(Curves *curves_id, const double motionSa
 
   if (!usdWidths.empty()) {
     bke::MutableAttributeAccessor attributes = curves.attributes_for_write();
-    bke::SpanAttributeWriter<float> radii = attributes.lookup_or_add_for_write_span<float>(
+    bke::SpanAttributeWriter<float> radii = attributes.lookup_or_add_for_write_only_span<float>(
         "radius", bke::AttrDomain::Point);
 
     pxr::TfToken widths_interp = curve_prim_.GetWidthsInterpolation();
@@ -322,7 +322,7 @@ void USDCurvesReader::read_custom_data(bke::CurvesGeometry &curves,
 
 void USDCurvesReader::read_geometry(bke::GeometrySet &geometry_set,
                                     const USDMeshReadParams params,
-                                    const char ** /*err_str*/)
+                                    const char ** /*r_err_str*/)
 {
   if (!curve_prim_) {
     return;

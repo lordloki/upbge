@@ -6,6 +6,8 @@
  * \ingroup edtransform
  */
 
+#include "ANIM_keyframing.hh"
+
 #include "BKE_context.hh"
 
 #include "DEG_depsgraph_query.hh"
@@ -32,6 +34,9 @@ static void createTransGreasePencilVerts(bContext *C, TransInfo *t)
   MutableSpan<TransDataContainer> trans_data_contrainers(t->data_container, t->data_container_len);
   const bool use_proportional_edit = (t->flag & T_PROP_EDIT_ALL) != 0;
   const bool use_connected_only = (t->flag & T_PROP_CONNECTED) != 0;
+  ToolSettings *ts = scene->toolsettings;
+  const bool is_scale_thickness = ((t->mode == TFM_CURVE_SHRINKFATTEN) ||
+                                   (ts->gp_sculpt.flag & GP_SCULPT_SETT_FLAG_SCALE_THICKNESS));
 
   Vector<int> handle_selection;
 
@@ -42,8 +47,23 @@ static void createTransGreasePencilVerts(bContext *C, TransInfo *t)
     TransDataContainer &tc = trans_data_contrainers[i];
     GreasePencil &grease_pencil = *static_cast<GreasePencil *>(tc.obedit->data);
 
-    const Vector<ed::greasepencil::MutableDrawingInfo> drawings =
+    Vector<ed::greasepencil::MutableDrawingInfo> drawings =
         ed::greasepencil::retrieve_editable_drawings(*scene, grease_pencil);
+
+    if (blender::animrig::is_autokey_on(scene)) {
+      for (const int info_i : drawings.index_range()) {
+        blender::bke::greasepencil::Layer &target_layer = grease_pencil.layer(
+            drawings[info_i].layer_index);
+        const int current_frame = scene->r.cfra;
+        std::optional<int> start_frame = target_layer.start_frame_at(current_frame);
+        if (start_frame.has_value() && (start_frame.value() != current_frame)) {
+          grease_pencil.insert_duplicate_frame(
+              target_layer, *target_layer.start_frame_at(current_frame), current_frame, false);
+        }
+      }
+      drawings = ed::greasepencil::retrieve_editable_drawings(*scene, grease_pencil);
+    }
+
     all_drawings.append(drawings);
     total_number_of_drawings += drawings.size();
   }
@@ -181,7 +201,7 @@ static void createTransGreasePencilVerts(bContext *C, TransInfo *t)
       bke::CurvesGeometry &curves = info.drawing.strokes_for_write();
 
       std::optional<MutableSpan<float>> value_attribute;
-      if (t->mode == TFM_CURVE_SHRINKFATTEN) {
+      if (is_scale_thickness) {
         MutableSpan<float> radii = info.drawing.radii_for_write();
         value_attribute = radii;
       }

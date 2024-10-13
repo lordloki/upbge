@@ -10,10 +10,10 @@
 
 #include <Python.h>
 
-#include "mathutils.h"
+#include "mathutils.hh"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 #include "BLI_math_matrix.h"
 #include "BLI_math_rotation.h"
 #include "BLI_math_vector.h"
@@ -426,7 +426,7 @@ static PyObject *Euler_richcmpr(PyObject *a, PyObject *b, int op)
       return nullptr;
   }
 
-  return Py_INCREF_RET(res);
+  return Py_NewRef(res);
 }
 
 /** \} */

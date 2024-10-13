@@ -44,7 +44,6 @@ struct Sculpt;
 struct SculptSession;
 struct SubdivCCG;
 struct SubdivCCGCoord;
-struct SubdivCCGNeighbors;
 namespace blender {
 namespace bke::pbvh {
 class Node;
@@ -82,44 +81,6 @@ void translations_from_new_positions(Span<float3> new_positions,
 void transform_positions(Span<float3> src, const float4x4 &transform, MutableSpan<float3> dst);
 void transform_positions(const float4x4 &transform, MutableSpan<float3> positions);
 
-/**
- * Note on the various positions arrays:
- * - positions_orig: Positions owned by the original mesh. Not the same as `positions_eval` if
- *   there are deform modifiers.
- * - positions_eval: Positions after procedural deformation, used to build the
- * blender::bke::pbvh::Tree. Translations are built for these values, then applied to
- * `positions_orig`.
- */
-
-/** Fill the output array with all positions in the geometry referenced by the indices. */
-void gather_grids_positions(const CCGKey &key,
-                            Span<CCGElem *> elems,
-                            Span<int> grids,
-                            MutableSpan<float3> positions);
-inline MutableSpan<float3> gather_grids_positions(const SubdivCCG &subdiv_ccg,
-                                                  const Span<int> grids,
-                                                  Vector<float3> &positions)
-{
-  const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
-  positions.resize(key.grid_area * grids.size());
-  gather_grids_positions(key, subdiv_ccg.grids, grids, positions);
-  return positions;
-}
-void gather_bmesh_positions(const Set<BMVert *, 0> &verts, MutableSpan<float3> positions);
-inline MutableSpan<float3> gather_bmesh_positions(const Set<BMVert *, 0> &verts,
-                                                  Vector<float3> &positions)
-{
-  positions.resize(verts.size());
-  gather_bmesh_positions(verts, positions.as_mutable_span());
-  return positions;
-}
-
-/** Fill the output array with all normals in the grids referenced by the indices. */
-void gather_grids_normals(const SubdivCCG &subdiv_ccg,
-                          Span<int> grids,
-                          MutableSpan<float3> normals);
-void gather_bmesh_normals(const Set<BMVert *, 0> &verts, MutableSpan<float3> normals);
-
 /** Gather data from an array aligned with all geometry vertices. */
 template<typename T> void gather_data_mesh(Span<T> src, Span<int> indices, MutableSpan<T> dst);
 template<typename T>
@@ -147,14 +108,12 @@ MutableSpan<T> gather_data_grids(const SubdivCCG &subdiv_ccg,
 }
 
 template<typename T>
-void gather_data_vert_bmesh(Span<T> src, const Set<BMVert *, 0> &verts, MutableSpan<T> node_data);
+void gather_data_bmesh(Span<T> src, const Set<BMVert *, 0> &verts, MutableSpan<T> node_data);
 template<typename T>
-MutableSpan<T> gather_data_vert_bmesh(const Span<T> src,
-                                      const Set<BMVert *, 0> &verts,
-                                      Vector<T> &dst)
+MutableSpan<T> gather_data_bmesh(const Span<T> src, const Set<BMVert *, 0> &verts, Vector<T> &dst)
 {
   dst.resize(verts.size());
-  gather_data_vert_bmesh(src, verts, dst.as_mutable_span());
+  gather_data_bmesh(src, verts, dst.as_mutable_span());
   return dst;
 }
 
@@ -166,12 +125,116 @@ void scatter_data_grids(const SubdivCCG &subdiv_ccg,
                         Span<int> grids,
                         MutableSpan<T> dst);
 template<typename T>
-void scatter_data_vert_bmesh(Span<T> node_data, const Set<BMVert *, 0> &verts, MutableSpan<T> dst);
+void scatter_data_bmesh(Span<T> node_data, const Set<BMVert *, 0> &verts, MutableSpan<T> dst);
+
+/** Fill the output array with all positions in the geometry referenced by the indices. */
+inline MutableSpan<float3> gather_grids_positions(const SubdivCCG &subdiv_ccg,
+                                                  const Span<int> grids,
+                                                  Vector<float3> &positions)
+{
+  const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
+  positions.resize(key.grid_area * grids.size());
+  gather_data_grids(subdiv_ccg, subdiv_ccg.positions.as_span(), grids, positions);
+  return positions;
+}
+void gather_bmesh_positions(const Set<BMVert *, 0> &verts, MutableSpan<float3> positions);
+inline MutableSpan<float3> gather_bmesh_positions(const Set<BMVert *, 0> &verts,
+                                                  Vector<float3> &positions)
+{
+  positions.resize(verts.size());
+  gather_bmesh_positions(verts, positions.as_mutable_span());
+  return positions;
+}
+
+/** Fill the output array with all normals in the grids referenced by the indices. */
+void gather_grids_normals(const SubdivCCG &subdiv_ccg,
+                          Span<int> grids,
+                          MutableSpan<float3> normals);
+void gather_bmesh_normals(const Set<BMVert *, 0> &verts, MutableSpan<float3> normals);
+
+/**
+ * Common set of mesh attributes used by a majority of brushes when calculating influence.
+ */
+struct MeshAttributeData {
+  /* Point Domain */
+  VArraySpan<float> mask;
+  VArraySpan<bool> hide_vert;
+
+  /* Face Domain */
+  VArraySpan<bool> hide_poly;
+  VArraySpan<int> face_sets;
+
+  explicit MeshAttributeData(const bke::AttributeAccessor &attributes)
+  {
+    this->mask = *attributes.lookup<float>(".sculpt_mask", bke::AttrDomain::Point);
+    this->hide_vert = *attributes.lookup<bool>(".hide_vert", bke::AttrDomain::Point);
+    this->hide_poly = *attributes.lookup<bool>(".hide_poly", bke::AttrDomain::Face);
+    this->face_sets = *attributes.lookup<int>(".sculpt_face_set", bke::AttrDomain::Face);
+  }
+};
+
+void calc_factors_common_mesh(const Depsgraph &depsgraph,
+                              const Brush &brush,
+                              const Object &object,
+                              const MeshAttributeData &attribute_data,
+                              Span<float3> positions,
+                              Span<float3> vert_normals,
+                              const bke::pbvh::MeshNode &node,
+                              Vector<float> &r_factors,
+                              Vector<float> &r_distances);
+void calc_factors_common_mesh_indexed(const Depsgraph &depsgraph,
+                                      const Brush &brush,
+                                      const Object &object,
+                                      const MeshAttributeData &attribute_data,
+                                      Span<float3> vert_positions,
+                                      Span<float3> vert_normals,
+                                      const bke::pbvh::MeshNode &node,
+                                      Vector<float> &r_factors,
+                                      Vector<float> &r_distances);
+void calc_factors_common_grids(const Depsgraph &depsgraph,
+                               const Brush &brush,
+                               const Object &object,
+                               Span<float3> positions,
+                               const bke::pbvh::GridsNode &node,
+                               Vector<float> &r_factors,
+                               Vector<float> &r_distances);
+void calc_factors_common_bmesh(const Depsgraph &depsgraph,
+                               const Brush &brush,
+                               const Object &object,
+                               Span<float3> positions,
+                               bke::pbvh::BMeshNode &node,
+                               Vector<float> &r_factors,
+                               Vector<float> &r_distances);
+void calc_factors_common_from_orig_data_mesh(const Depsgraph &depsgraph,
+                                             const Brush &brush,
+                                             const Object &object,
+                                             const MeshAttributeData &attribute_data,
+                                             Span<float3> positions,
+                                             Span<float3> normals,
+                                             const bke::pbvh::MeshNode &node,
+                                             Vector<float> &r_factors,
+                                             Vector<float> &r_distances);
+void calc_factors_common_from_orig_data_grids(const Depsgraph &depsgraph,
+                                              const Brush &brush,
+                                              const Object &object,
+                                              Span<float3> positions,
+                                              Span<float3> normals,
+                                              const bke::pbvh::GridsNode &node,
+                                              Vector<float> &r_factors,
+                                              Vector<float> &r_distances);
+void calc_factors_common_from_orig_data_bmesh(const Depsgraph &depsgraph,
+                                              const Brush &brush,
+                                              const Object &object,
+                                              Span<float3> positions,
+                                              Span<float3> normals,
+                                              bke::pbvh::BMeshNode &node,
+                                              Vector<float> &r_factors,
+                                              Vector<float> &r_distances);
 
 /**
  * Calculate initial influence factors based on vertex visibility.
  */
-void fill_factor_from_hide(const Mesh &mesh, Span<int> vert_indices, MutableSpan<float> r_factors);
+void fill_factor_from_hide(Span<bool> hide_vert, Span<int> verts, MutableSpan<float> r_factors);
 void fill_factor_from_hide(const SubdivCCG &subdiv_ccg,
                            Span<int> grids,
                            MutableSpan<float> r_factors);
@@ -180,8 +243,9 @@ void fill_factor_from_hide(const Set<BMVert *, 0> &verts, MutableSpan<float> r_f
 /**
  * Calculate initial influence factors based on vertex visibility and masking.
  */
-void fill_factor_from_hide_and_mask(const Mesh &mesh,
-                                    Span<int> vert_indices,
+void fill_factor_from_hide_and_mask(Span<bool> hide_vert,
+                                    Span<float> mask,
+                                    Span<int> verts,
                                     MutableSpan<float> r_factors);
 void fill_factor_from_hide_and_mask(const SubdivCCG &subdiv_ccg,
                                     Span<int> grids,
@@ -272,7 +336,7 @@ void apply_hardness_to_distances(float radius, float hardness, MutableSpan<float
 inline void apply_hardness_to_distances(const StrokeCache &cache,
                                         const MutableSpan<float> distances)
 {
-  apply_hardness_to_distances(cache.radius, cache.paint_brush.hardness, distances);
+  apply_hardness_to_distances(cache.radius, cache.hardness, distances);
 }
 
 /**
@@ -295,40 +359,6 @@ void calc_brush_texture_factors(const SculptSession &ss,
                                 const Brush &brush,
                                 Span<float3> positions,
                                 MutableSpan<float> factors);
-
-namespace auto_mask {
-
-/**
- * Calculate all auto-masking influence on each vertex.
- */
-void calc_vert_factors(const Object &object,
-                       const Cache &cache,
-                       const bke::pbvh::Node &node,
-                       Span<int> verts,
-                       MutableSpan<float> factors);
-void calc_grids_factors(const Object &object,
-                        const Cache &cache,
-                        const bke::pbvh::Node &node,
-                        Span<int> grids,
-                        MutableSpan<float> factors);
-void calc_vert_factors(const Object &object,
-                       const Cache &cache,
-                       const bke::pbvh::Node &node,
-                       const Set<BMVert *, 0> &verts,
-                       MutableSpan<float> factors);
-
-/**
- * Calculate all auto-masking influence on each face.
- */
-void calc_face_factors(const Object &object,
-                       OffsetIndices<int> faces,
-                       Span<int> corner_verts,
-                       const Cache &cache,
-                       const bke::pbvh::Node &node,
-                       Span<int> face_indices,
-                       MutableSpan<float> factors);
-
-}  // namespace auto_mask
 
 /**
  * Many brushes end up calculating translations from the original positions. Instead of applying
@@ -383,40 +413,26 @@ void clip_and_lock_translations(const Sculpt &sd,
  * shape key positions must be kept in sync, and shape keys dependent on the active key must also
  * be modified.
  */
-void apply_translations_to_shape_keys(Object &object,
-                                      Span<int> verts,
-                                      Span<float3> translations,
-                                      MutableSpan<float3> positions_mesh);
-
-/**
- * Currently the pbvh::Tree owns its own copy of deformed positions that needs to be updated to
- * stay in sync with brush deformations.
- * \todo This should be removed one the pbvh::Tree no longer stores this copy of deformed
- * positions.
- */
-void apply_translations_to_pbvh(bke::pbvh::Tree &pbvh, Span<int> verts, Span<float3> translations);
-
-/**
- * Write the new translated positions to the original mesh, taking into account inverse
- * deformation from modifiers, axis locking, and clipping. Flush the deformation to shape keys as
- * well.
- */
-void write_translations(const Sculpt &sd,
-                        Object &object,
-                        Span<float3> positions_eval,
-                        Span<int> verts,
-                        MutableSpan<float3> translations,
-                        MutableSpan<float3> positions_orig);
+void update_shape_keys(Object &object,
+                       const Mesh &mesh,
+                       const KeyBlock &active_key,
+                       Span<int> verts,
+                       Span<float3> translations,
+                       Span<float3> positions_orig);
 
 /**
  * Creates OffsetIndices based on each node's unique vertex count, allowing for easy slicing of a
  * new array.
  */
-OffsetIndices<int> create_node_vert_offsets(Span<bke::pbvh::Node *> nodes, Array<int> &node_data);
-OffsetIndices<int> create_node_vert_offsets(Span<bke::pbvh::Node *> nodes,
-                                            const CCGKey &key,
+OffsetIndices<int> create_node_vert_offsets(const Span<bke::pbvh::MeshNode> nodes,
+                                            const IndexMask &nodes_mask,
                                             Array<int> &node_data);
-OffsetIndices<int> create_node_vert_offsets_bmesh(Span<bke::pbvh::Node *> nodes,
+OffsetIndices<int> create_node_vert_offsets(const CCGKey &key,
+                                            const Span<bke::pbvh::GridsNode> nodes,
+                                            const IndexMask &nodes_mask,
+                                            Array<int> &node_data);
+OffsetIndices<int> create_node_vert_offsets_bmesh(const Span<bke::pbvh::BMeshNode> nodes,
+                                                  const IndexMask &nodes_mask,
                                                   Array<int> &node_data);
 
 /**

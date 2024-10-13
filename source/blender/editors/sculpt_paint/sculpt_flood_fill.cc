@@ -1,12 +1,14 @@
 /* SPDX-FileCopyrightText: 2024 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
+#include "sculpt_flood_fill.hh"
 
 #include "BKE_mesh.hh"
 
 #include "DNA_mesh_types.h"
 
 #include "paint_intern.hh"
+#include "sculpt_hide.hh"
 #include "sculpt_intern.hh"
 
 /* -------------------------------------------------------------------- */
@@ -15,26 +17,18 @@
  * Iterate over connected vertices, starting from one or more initial vertices.
  * \{ */
 
-namespace blender::ed::sculpt_paint {
-
-namespace flood_fill {
-
-FillData init_fill(SculptSession &ss)
-{
-  SCULPT_vertex_random_access_ensure(ss);
-  FillData data;
-  data.visited_verts.resize(SCULPT_vertex_count_get(ss));
-  return data;
-}
-
-void add_initial(FillData &flood, PBVHVertRef vertex)
-{
-  flood.queue.push(vertex);
-}
+namespace blender::ed::sculpt_paint::flood_fill {
 
 void FillDataMesh::add_initial(const int vertex)
 {
   this->queue.push(vertex);
+}
+
+void FillDataMesh::add_initial(const Span<int> verts)
+{
+  for (const int vert : verts) {
+    this->add_initial(vert);
+  }
 }
 
 void FillDataGrids::add_initial(const SubdivCCGCoord vertex)
@@ -42,21 +36,29 @@ void FillDataGrids::add_initial(const SubdivCCGCoord vertex)
   this->queue.push(vertex);
 }
 
+void FillDataGrids::add_initial(const CCGKey &key, const Span<int> verts)
+{
+  for (const int vert : verts) {
+    this->add_initial(SubdivCCGCoord::from_index(key, vert));
+  }
+}
+
 void FillDataBMesh::add_initial(BMVert *vertex)
 {
   this->queue.push(vertex);
 }
 
-void add_and_skip_initial(FillData &flood, PBVHVertRef vertex)
+void FillDataBMesh::add_initial(BMesh &bm, const Span<int> verts)
 {
-  flood.queue.push(vertex);
-  flood.visited_verts[vertex.i].set(vertex.i);
+  for (const int vert : verts) {
+    this->add_initial(BM_vert_at_index(&bm, vert));
+  }
 }
 
-void FillDataMesh::add_and_skip_initial(const int vertex, const int index)
+void FillDataMesh::add_and_skip_initial(const int vertex)
 {
   this->queue.push(vertex);
-  this->visited_verts[index].set();
+  this->visited_verts[vertex].set();
 }
 
 void FillDataGrids::add_and_skip_initial(const SubdivCCGCoord vertex, const int index)
@@ -69,184 +71,6 @@ void FillDataBMesh::add_and_skip_initial(BMVert *vertex, const int index)
 {
   this->queue.push(vertex);
   this->visited_verts[index].set();
-}
-
-void add_initial_with_symmetry(const Object &ob,
-                               const SculptSession &ss,
-                               FillData &flood,
-                               PBVHVertRef vertex,
-                               const float radius)
-{
-  if (radius <= 0.0f) {
-    if (vertex.i != PBVH_REF_NONE) {
-      add_initial(flood, vertex);
-    }
-    return;
-  }
-
-  /* Add active vertex and symmetric vertices to the queue. */
-  const char symm = SCULPT_mesh_symmetry_xyz_get(ob);
-  for (char i = 0; i <= symm; ++i) {
-    if (!SCULPT_is_symmetry_iteration_valid(i, symm)) {
-      continue;
-    }
-    PBVHVertRef v = {PBVH_REF_NONE};
-
-    if (i == 0) {
-      v = vertex;
-    }
-    else {
-      BLI_assert(radius > 0.0f);
-      const float radius_squared = (radius == FLT_MAX) ? FLT_MAX : radius * radius;
-      float3 location = symmetry_flip(SCULPT_vertex_co_get(ss, vertex), ePaintSymmetryFlags(i));
-      v = nearest_vert_calc(ob, location, radius_squared, false);
-    }
-
-    if (v.i != PBVH_REF_NONE) {
-      add_initial(flood, v);
-    }
-  }
-}
-
-void FillDataMesh::add_initial_with_symmetry(const Object &object,
-                                             const bke::pbvh::Tree &pbvh,
-                                             const int vertex,
-                                             const float radius)
-{
-  if (radius <= 0.0f) {
-    this->add_initial(vertex);
-    return;
-  }
-
-  const Mesh &mesh = *static_cast<const Mesh *>(object.data);
-  const Span<float3> vert_positions = BKE_pbvh_get_vert_positions(pbvh);
-  const bke::AttributeAccessor attributes = mesh.attributes();
-  VArraySpan<bool> hide_vert = *attributes.lookup<bool>(".hide_vert", bke::AttrDomain::Point);
-
-  const char symm = SCULPT_mesh_symmetry_xyz_get(object);
-  for (char i = 0; i <= symm; ++i) {
-    if (!SCULPT_is_symmetry_iteration_valid(i, symm)) {
-      continue;
-    }
-
-    std::optional<int> vert_to_add;
-    if (i == 0) {
-      vert_to_add = vertex;
-    }
-    else {
-      BLI_assert(radius > 0.0f);
-      const float radius_squared = (radius == FLT_MAX) ? FLT_MAX : radius * radius;
-      float3 location = symmetry_flip(vert_positions[vertex], ePaintSymmetryFlags(i));
-      vert_to_add = nearest_vert_calc_mesh(
-          pbvh, vert_positions, hide_vert, location, radius_squared, false);
-    }
-
-    if (vert_to_add) {
-      this->add_initial(*vert_to_add);
-    }
-  }
-}
-
-void FillDataGrids::add_initial_with_symmetry(const Object &object,
-                                              const bke::pbvh::Tree &pbvh,
-                                              const SubdivCCG &subdiv_ccg,
-                                              const SubdivCCGCoord vertex,
-                                              const float radius)
-{
-  if (radius <= 0.0f) {
-    this->add_initial(vertex);
-    return;
-  }
-
-  const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
-
-  const char symm = SCULPT_mesh_symmetry_xyz_get(object);
-  for (char i = 0; i <= symm; ++i) {
-    if (!SCULPT_is_symmetry_iteration_valid(i, symm)) {
-      continue;
-    }
-
-    std::optional<SubdivCCGCoord> vert_to_add;
-    if (i == 0) {
-      vert_to_add = vertex;
-    }
-    else {
-      BLI_assert(radius > 0.0f);
-      const float radius_squared = (radius == FLT_MAX) ? FLT_MAX : radius * radius;
-      CCGElem *elem = subdiv_ccg.grids[vertex.grid_index];
-      float3 location = symmetry_flip(CCG_grid_elem_co(key, elem, vertex.x, vertex.y),
-                                      ePaintSymmetryFlags(i));
-      vert_to_add = nearest_vert_calc_grids(pbvh, subdiv_ccg, location, radius_squared, false);
-    }
-
-    if (vert_to_add) {
-      this->add_initial(*vert_to_add);
-    }
-  }
-}
-
-void FillDataBMesh::add_initial_with_symmetry(const Object &object,
-                                              const bke::pbvh::Tree &pbvh,
-                                              BMVert *vertex,
-                                              const float radius)
-{
-  if (radius <= 0.0f) {
-    this->add_initial(vertex);
-    return;
-  }
-
-  const char symm = SCULPT_mesh_symmetry_xyz_get(object);
-  for (char i = 0; i <= symm; ++i) {
-    if (!SCULPT_is_symmetry_iteration_valid(i, symm)) {
-      continue;
-    }
-
-    std::optional<BMVert *> vert_to_add;
-    if (i == 0) {
-      vert_to_add = vertex;
-    }
-    else {
-      BLI_assert(radius > 0.0f);
-      const float radius_squared = (radius == FLT_MAX) ? FLT_MAX : radius * radius;
-      float3 location = symmetry_flip(vertex->co, ePaintSymmetryFlags(i));
-      vert_to_add = nearest_vert_calc_bmesh(pbvh, location, radius_squared, false);
-    }
-
-    if (vert_to_add) {
-      this->add_initial(*vert_to_add);
-    }
-  }
-}
-
-void execute(SculptSession &ss,
-             FillData &flood,
-             FunctionRef<bool(PBVHVertRef from_v, PBVHVertRef to_v, bool is_duplicate)> func)
-{
-  while (!flood.queue.empty()) {
-    PBVHVertRef from_v = flood.queue.front();
-    flood.queue.pop();
-
-    SculptVertexNeighborIter ni;
-    SCULPT_VERTEX_DUPLICATES_AND_NEIGHBORS_ITER_BEGIN (ss, from_v, ni) {
-      const PBVHVertRef to_v = ni.vertex;
-      int to_v_i = BKE_pbvh_vertex_to_index(*ss.pbvh, to_v);
-
-      if (flood.visited_verts[to_v_i]) {
-        continue;
-      }
-
-      if (!hide::vert_visible_get(ss, to_v)) {
-        continue;
-      }
-
-      flood.visited_verts[BKE_pbvh_vertex_to_index(*ss.pbvh, to_v)].set();
-
-      if (func(from_v, to_v, ni.is_duplicate)) {
-        flood.queue.push(to_v);
-      }
-    }
-    SCULPT_VERTEX_NEIGHBORS_ITER_END(ni);
-  }
 }
 
 void FillDataMesh::execute(Object &object,
@@ -267,7 +91,7 @@ void FillDataMesh::execute(Object &object,
     this->queue.pop();
 
     for (const int neighbor : vert_neighbors_get_mesh(
-             from_v, faces, corner_verts, vert_to_face_map, hide_poly, neighbors))
+             faces, corner_verts, vert_to_face_map, hide_poly, from_v, neighbors))
     {
       if (this->visited_verts[neighbor]) {
         continue;
@@ -332,7 +156,6 @@ void FillDataBMesh::execute(Object & /*object*/,
     BMVert *from_v = this->queue.front();
     this->queue.pop();
 
-    neighbors.clear();
     for (BMVert *neighbor : vert_neighbors_get_bmesh(*from_v, neighbors)) {
       const int neighbor_idx = BM_elem_index_get(neighbor);
       if (this->visited_verts[neighbor_idx]) {
@@ -351,8 +174,6 @@ void FillDataBMesh::execute(Object & /*object*/,
   }
 }
 
-}  // namespace flood_fill
-
-}  // namespace blender::ed::sculpt_paint
+}  // namespace blender::ed::sculpt_paint::flood_fill
 
 /** \} */

@@ -9,6 +9,7 @@
 #include "BKE_pbvh_pixels.hh"
 
 #include "DNA_image_types.h"
+#include "DNA_object_types.h"
 
 #include "BLI_listbase.h"
 #include "BLI_math_geom.h"
@@ -17,6 +18,7 @@
 
 #include "BKE_global.hh"
 #include "BKE_image_wrappers.hh"
+#include "BKE_paint.hh"
 
 #include "pbvh_intern.hh"
 #include "pbvh_pixels_copy.hh"
@@ -145,7 +147,7 @@ static void do_encode_pixels(const uv_islands::MeshData &mesh_data,
                              const UVPrimitiveLookup &uv_prim_lookup,
                              Image &image,
                              ImageUser &image_user,
-                             Node &node)
+                             MeshNode &node)
 {
   NodeData *node_data = static_cast<NodeData *>(node.pixels_);
 
@@ -161,44 +163,46 @@ static void do_encode_pixels(const uv_islands::MeshData &mesh_data,
     tile_data.tile_number = image_tile.get_tile_number();
     float2 tile_offset = float2(image_tile.get_tile_offset());
 
-    for (const int geom_prim_index : node.prim_indices_) {
-      for (const UVPrimitiveLookup::Entry &entry : uv_prim_lookup.lookup[geom_prim_index]) {
-        uv_islands::UVBorder uv_border = entry.uv_primitive->extract_border();
-        float2 uvs[3] = {
-            entry.uv_primitive->get_uv_vertex(mesh_data, 0)->uv - tile_offset,
-            entry.uv_primitive->get_uv_vertex(mesh_data, 1)->uv - tile_offset,
-            entry.uv_primitive->get_uv_vertex(mesh_data, 2)->uv - tile_offset,
-        };
-        const float minv = clamp_f(min_fff(uvs[0].y, uvs[1].y, uvs[2].y), 0.0f, 1.0f);
-        const int miny = floor(minv * image_buffer->y);
-        const float maxv = clamp_f(max_fff(uvs[0].y, uvs[1].y, uvs[2].y), 0.0f, 1.0f);
-        const int maxy = min_ii(ceil(maxv * image_buffer->y), image_buffer->y);
-        const float minu = clamp_f(min_fff(uvs[0].x, uvs[1].x, uvs[2].x), 0.0f, 1.0f);
-        const int minx = floor(minu * image_buffer->x);
-        const float maxu = clamp_f(max_fff(uvs[0].x, uvs[1].x, uvs[2].x), 0.0f, 1.0f);
-        const int maxx = min_ii(ceil(maxu * image_buffer->x), image_buffer->x);
+    for (const int face : node.faces()) {
+      for (const int tri : bke::mesh::face_triangles_range(mesh_data.faces, face)) {
+        for (const UVPrimitiveLookup::Entry &entry : uv_prim_lookup.lookup[tri]) {
+          uv_islands::UVBorder uv_border = entry.uv_primitive->extract_border();
+          float2 uvs[3] = {
+              entry.uv_primitive->get_uv_vertex(mesh_data, 0)->uv - tile_offset,
+              entry.uv_primitive->get_uv_vertex(mesh_data, 1)->uv - tile_offset,
+              entry.uv_primitive->get_uv_vertex(mesh_data, 2)->uv - tile_offset,
+          };
+          const float minv = clamp_f(min_fff(uvs[0].y, uvs[1].y, uvs[2].y), 0.0f, 1.0f);
+          const int miny = floor(minv * image_buffer->y);
+          const float maxv = clamp_f(max_fff(uvs[0].y, uvs[1].y, uvs[2].y), 0.0f, 1.0f);
+          const int maxy = min_ii(ceil(maxv * image_buffer->y), image_buffer->y);
+          const float minu = clamp_f(min_fff(uvs[0].x, uvs[1].x, uvs[2].x), 0.0f, 1.0f);
+          const int minx = floor(minu * image_buffer->x);
+          const float maxu = clamp_f(max_fff(uvs[0].x, uvs[1].x, uvs[2].x), 0.0f, 1.0f);
+          const int maxx = min_ii(ceil(maxu * image_buffer->x), image_buffer->x);
 
-        /* TODO: Perform bounds check */
-        int uv_prim_index = node_data->uv_primitives.size();
-        node_data->uv_primitives.append(geom_prim_index);
-        UVPrimitivePaintInput &paint_input = node_data->uv_primitives.last();
+          /* TODO: Perform bounds check */
+          int uv_prim_index = node_data->uv_primitives.size();
+          node_data->uv_primitives.append(tri);
+          UVPrimitivePaintInput &paint_input = node_data->uv_primitives.last();
 
-        /* Calculate barycentric delta */
-        paint_input.delta_barycentric_coord_u = calc_barycentric_delta_x(
-            image_buffer, uvs, minx, miny);
+          /* Calculate barycentric delta */
+          paint_input.delta_barycentric_coord_u = calc_barycentric_delta_x(
+              image_buffer, uvs, minx, miny);
 
-        /* Extract the pixels. */
-        extract_barycentric_pixels(tile_data,
-                                   image_buffer,
-                                   uv_masks,
-                                   entry.uv_island_index,
-                                   uv_prim_index,
-                                   uvs,
-                                   tile_offset,
-                                   minx,
-                                   miny,
-                                   maxx,
-                                   maxy);
+          /* Extract the pixels. */
+          extract_barycentric_pixels(tile_data,
+                                     image_buffer,
+                                     uv_masks,
+                                     entry.uv_island_index,
+                                     uv_prim_index,
+                                     uvs,
+                                     tile_offset,
+                                     minx,
+                                     miny,
+                                     maxx,
+                                     maxy);
+        }
       }
     }
     BKE_image_release_ibuf(&image, image_buffer, nullptr);
@@ -232,7 +236,7 @@ static bool should_pixels_be_updated(const Node &node)
 static int count_nodes_to_update(Tree &pbvh)
 {
   int result = 0;
-  for (Node &node : pbvh.nodes_) {
+  for (Node &node : pbvh.nodes<MeshNode>()) {
     if (should_pixels_be_updated(node)) {
       result++;
     }
@@ -249,7 +253,7 @@ static int count_nodes_to_update(Tree &pbvh)
  *
  * returns if there were any nodes found (true).
  */
-static bool find_nodes_to_update(Tree &pbvh, Vector<Node *> &r_nodes_to_update)
+static bool find_nodes_to_update(Tree &pbvh, Vector<MeshNode *> &r_nodes_to_update)
 {
   int nodes_to_update_len = count_nodes_to_update(pbvh);
   if (nodes_to_update_len == 0) {
@@ -268,7 +272,7 @@ static bool find_nodes_to_update(Tree &pbvh, Vector<Node *> &r_nodes_to_update)
 
   r_nodes_to_update.reserve(nodes_to_update_len);
 
-  for (Node &node : pbvh.nodes_) {
+  for (MeshNode &node : pbvh.nodes<MeshNode>()) {
     if (!should_pixels_be_updated(node)) {
       continue;
     }
@@ -298,7 +302,7 @@ static void apply_watertight_check(Tree &pbvh, Image &image, ImageUser &image_us
     if (image_buffer == nullptr) {
       continue;
     }
-    for (Node &node : pbvh.nodes_) {
+    for (Node &node : pbvh.nodes<MeshNode>()) {
       if ((node.flag_ & PBVH_Leaf) == 0) {
         continue;
       }
@@ -328,13 +332,18 @@ static void apply_watertight_check(Tree &pbvh, Image &image, ImageUser &image_us
   BKE_image_partial_update_mark_full_update(&image);
 }
 
-static bool update_pixels(Tree &pbvh, const Mesh &mesh, Image &image, ImageUser &image_user)
+static bool update_pixels(const Depsgraph &depsgraph,
+                          const Object &object,
+                          Tree &pbvh,
+                          Image &image,
+                          ImageUser &image_user)
 {
-  Vector<Node *> nodes_to_update;
+  Vector<MeshNode *> nodes_to_update;
   if (!find_nodes_to_update(pbvh, nodes_to_update)) {
     return false;
   }
 
+  const Mesh &mesh = *static_cast<const Mesh *>(object.data);
   const StringRef active_uv_name = CustomData_get_active_layer_name(&mesh.corner_data,
                                                                     CD_PROP_FLOAT2);
   if (active_uv_name.is_empty()) {
@@ -344,8 +353,11 @@ static bool update_pixels(Tree &pbvh, const Mesh &mesh, Image &image, ImageUser 
   const AttributeAccessor attributes = mesh.attributes();
   const VArraySpan uv_map = *attributes.lookup<float2>(active_uv_name, AttrDomain::Corner);
 
-  uv_islands::MeshData mesh_data(
-      mesh.corner_tris(), mesh.corner_verts(), uv_map, pbvh.vert_positions_);
+  uv_islands::MeshData mesh_data(mesh.faces(),
+                                 mesh.corner_tris(),
+                                 mesh.corner_verts(),
+                                 uv_map,
+                                 bke::pbvh::vert_positions_eval(depsgraph, object));
   uv_islands::UVIslands islands(mesh_data);
 
   uv_islands::UVIslandsMask uv_masks;
@@ -395,7 +407,7 @@ static bool update_pixels(Tree &pbvh, const Mesh &mesh, Image &image, ImageUser 
   }
 
   /* Add PBVH_TexLeaf flag */
-  for (Node &node : pbvh.nodes_) {
+  for (Node &node : pbvh.nodes<MeshNode>()) {
     if (node.flag_ & PBVH_Leaf) {
       node.flag_ = (PBVHNodeFlags)(int(node.flag_) | int(PBVH_TexLeaf));
     }
@@ -475,9 +487,10 @@ void collect_dirty_tiles(Node &node, Vector<image::TileNumber> &r_dirty_tiles)
 
 namespace blender::bke::pbvh {
 
-void build_pixels(Tree &pbvh, const Mesh &mesh, Image &image, ImageUser &image_user)
+void build_pixels(const Depsgraph &depsgraph, Object &object, Image &image, ImageUser &image_user)
 {
-  pixels::update_pixels(pbvh, mesh, image, image_user);
+  Tree &pbvh = *object::pbvh_get(object);
+  pixels::update_pixels(depsgraph, object, pbvh, image, image_user);
 }
 
 void node_pixels_free(Node *node)

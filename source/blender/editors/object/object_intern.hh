@@ -129,7 +129,6 @@ void OBJECT_OT_armature_add(wmOperatorType *ot);
 void OBJECT_OT_empty_add(wmOperatorType *ot);
 void OBJECT_OT_lightprobe_add(wmOperatorType *ot);
 void OBJECT_OT_empty_image_add(wmOperatorType *ot);
-void OBJECT_OT_gpencil_add(wmOperatorType *ot);
 void OBJECT_OT_grease_pencil_add(wmOperatorType *ot);
 void OBJECT_OT_light_add(wmOperatorType *ot);
 void OBJECT_OT_effector_add(wmOperatorType *ot);
@@ -354,6 +353,8 @@ void OBJECT_OT_simulation_nodes_cache_bake(wmOperatorType *ot);
 void OBJECT_OT_simulation_nodes_cache_delete(wmOperatorType *ot);
 void OBJECT_OT_geometry_node_bake_single(wmOperatorType *ot);
 void OBJECT_OT_geometry_node_bake_delete_single(wmOperatorType *ot);
+void OBJECT_OT_geometry_node_bake_pack_single(wmOperatorType *ot);
+void OBJECT_OT_geometry_node_bake_unpack_single(wmOperatorType *ot);
 
 }  // namespace bake_simulation
 

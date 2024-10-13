@@ -78,20 +78,17 @@ static const char *object_mode_op_string(eObjectMode mode)
   if (mode == OB_MODE_POSE) {
     return "OBJECT_OT_posemode_toggle";
   }
-  if (mode == OB_MODE_EDIT_GPENCIL_LEGACY) {
-    return "GPENCIL_OT_editmode_toggle";
+  if (mode == OB_MODE_PAINT_GREASE_PENCIL) {
+    return "GREASE_PENCIL_OT_paintmode_toggle";
   }
-  if (mode == OB_MODE_PAINT_GPENCIL_LEGACY) {
-    return "GPENCIL_OT_paintmode_toggle";
+  if (mode == OB_MODE_SCULPT_GREASE_PENCIL) {
+    return "GREASE_PENCIL_OT_sculptmode_toggle";
   }
-  if (mode == OB_MODE_SCULPT_GPENCIL_LEGACY) {
-    return "GPENCIL_OT_sculptmode_toggle";
+  if (mode == OB_MODE_WEIGHT_GREASE_PENCIL) {
+    return "GREASE_PENCIL_OT_weightmode_toggle";
   }
-  if (mode == OB_MODE_WEIGHT_GPENCIL_LEGACY) {
-    return "GPENCIL_OT_weightmode_toggle";
-  }
-  if (mode == OB_MODE_VERTEX_GPENCIL_LEGACY) {
-    return "GPENCIL_OT_vertexmode_toggle";
+  if (mode == OB_MODE_VERTEX_GREASE_PENCIL) {
+    return "GREASE_PENCIL_OT_vertexmode_toggle";
   }
   if (mode == OB_MODE_SCULPT_CURVES) {
     return "CURVES_OT_sculptmode_toggle";
@@ -144,8 +141,8 @@ bool mode_compat_test(const Object *ob, eObjectMode mode)
       }
       break;
     case OB_GREASE_PENCIL:
-      if (mode & (OB_MODE_EDIT | OB_MODE_PAINT_GPENCIL_LEGACY | OB_MODE_SCULPT_GPENCIL_LEGACY |
-                  OB_MODE_WEIGHT_GPENCIL_LEGACY))
+      if (mode & (OB_MODE_EDIT | OB_MODE_PAINT_GREASE_PENCIL | OB_MODE_SCULPT_GREASE_PENCIL |
+                  OB_MODE_WEIGHT_GREASE_PENCIL | OB_MODE_VERTEX_GREASE_PENCIL))
       {
         return true;
       }
@@ -295,22 +292,14 @@ static bool ed_object_mode_generic_exit_ex(
     }
     ED_object_particle_edit_mode_exit_ex(scene, ob);
   }
-  else if (ob->type == OB_GPENCIL_LEGACY) {
-    /* Accounted for above. */
-    BLI_assert((ob->mode & OB_MODE_OBJECT) == 0);
-    if (only_test) {
-      return true;
-    }
-    ED_object_gpencil_exit(bmain, ob);
-  }
   else if (ob->type == OB_GREASE_PENCIL) {
     BLI_assert((ob->mode & OB_MODE_OBJECT) == 0);
     if (only_test) {
       return true;
     }
     ob->restore_mode = ob->mode;
-    ob->mode &= ~(OB_MODE_PAINT_GPENCIL_LEGACY | OB_MODE_EDIT | OB_MODE_SCULPT_GPENCIL_LEGACY |
-                  OB_MODE_WEIGHT_GPENCIL_LEGACY | OB_MODE_VERTEX_GPENCIL_LEGACY);
+    ob->mode &= ~(OB_MODE_PAINT_GREASE_PENCIL | OB_MODE_EDIT | OB_MODE_SCULPT_GREASE_PENCIL |
+                  OB_MODE_WEIGHT_GREASE_PENCIL | OB_MODE_VERTEX_GREASE_PENCIL);
 
     /* Inform all evaluated versions that we changed the mode. */
     DEG_id_tag_update_ex(bmain, &ob->id, ID_RECALC_SYNC_TO_EVAL);

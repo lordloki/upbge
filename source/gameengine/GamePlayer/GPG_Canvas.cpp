@@ -34,7 +34,7 @@
 #include "BKE_context.hh"
 #include "BKE_image.h"
 #include "BKE_image_format.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "DNA_space_types.h"
 #include "DNA_windowmanager_types.h"
@@ -182,7 +182,7 @@ bool GPG_Canvas::GetSwapInterval(int &intervalOut)
   return false;
 }
 
-void GPG_Canvas::GetDisplayDimensions(int &width, int &height)
+void GPG_Canvas::GetDisplayDimensions(blender::int2 &scr_size)
 {
   unsigned int uiwidth;
   unsigned int uiheight;
@@ -190,8 +190,8 @@ void GPG_Canvas::GetDisplayDimensions(int &width, int &height)
   GHOST_ISystem *system = GHOST_ISystem::getSystem();
   system->getMainDisplayDimensions(uiwidth, uiheight);
 
-  width = uiwidth;
-  height = uiheight;
+  scr_size[0] = uiwidth;
+  scr_size[1] = uiheight;
 }
 
 void GPG_Canvas::ResizeWindow(int width, int height)

@@ -51,7 +51,7 @@
 #include "../editors/asset/ED_asset_shelf.hh"
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 using blender::Span;
@@ -481,6 +481,14 @@ void BKE_screen_gizmo_tag_refresh(bScreen *screen)
   }
 }
 
+void BKE_screen_runtime_refresh_for_blendfile(bScreen *screen)
+{
+  LISTBASE_FOREACH (ScrArea *, area, &screen->areabase) {
+    area->runtime.tool = nullptr;
+    area->runtime.is_tool_set = false;
+  }
+}
+
 /**
  * Avoid bad-level calls to #WM_gizmomap_delete.
  */
@@ -543,8 +551,10 @@ static void area_region_panels_free_recursive(Panel *panel)
 void BKE_area_region_panels_free(ListBase *panels)
 {
   LISTBASE_FOREACH_MUTABLE (Panel *, panel, panels) {
-    /* Free custom data just for parent panels to avoid a double free. */
-    MEM_SAFE_FREE(panel->runtime->custom_data_ptr);
+    /* Delete custom data just for parent panels to avoid a double deletion. */
+    if (panel->runtime->custom_data_ptr) {
+      MEM_delete(panel->runtime->custom_data_ptr);
+    }
     area_region_panels_free_recursive(panel);
   }
   BLI_listbase_clear(panels);
@@ -877,11 +887,11 @@ std::optional<std::string> BKE_screen_path_from_screen_to_space(const PointerRNA
     return std::nullopt;
   }
 
-  bScreen *screen = reinterpret_cast<bScreen *>(ptr->owner_id);
-  SpaceLink *link = static_cast<SpaceLink *>(ptr->data);
+  const bScreen *screen = reinterpret_cast<const bScreen *>(ptr->owner_id);
+  const SpaceLink *link = static_cast<const SpaceLink *>(ptr->data);
 
   int area_index;
-  LISTBASE_FOREACH_INDEX (ScrArea *, area, &screen->areabase, area_index) {
+  LISTBASE_FOREACH_INDEX (const ScrArea *, area, &screen->areabase, area_index) {
     const int space_index = BLI_findindex(&area->spacedata, link);
     if (space_index != -1) {
       return fmt::format("areas[{}].spaces[{}]", area_index, space_index);

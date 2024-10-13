@@ -78,7 +78,7 @@ void Film::init_aovs(const Set<std::string> &passes_used_by_viewport_compositor)
   }
 
   if (aovs.size() > AOV_MAX) {
-    inst_.info += "Error: Too many AOVs\n";
+    inst_.info_append_i18n("Error: Too many AOVs");
     return;
   }
 
@@ -98,6 +98,10 @@ void Film::init_aovs(const Set<std::string> &passes_used_by_viewport_compositor)
 float *Film::read_aov(ViewLayerAOV *aov)
 {
   GPUTexture *pass_tx = this->get_aov_texture(aov);
+
+  if (pass_tx == nullptr) {
+    return nullptr;
+  }
 
   GPU_memory_barrier(GPU_BARRIER_TEXTURE_UPDATE);
 
@@ -282,7 +286,7 @@ void Film::init(const int2 &extent, const rcti *output_rect)
       enabled_passes_ = eViewLayerEEVEEPassType(inst_.v3d->shading.render_pass) |
                         viewport_compositor_enabled_passes_;
 
-      if (inst_.overlays_enabled() || inst_.gpencil_engine_enabled) {
+      if (inst_.overlays_enabled() || inst_.gpencil_engine_enabled()) {
         /* Overlays and Grease Pencil needs the depth for correct compositing.
          * Using the render pass ensure we store the center depth. */
         enabled_passes_ |= EEVEE_RENDER_PASS_Z;
@@ -419,7 +423,7 @@ void Film::init(const int2 &extent, const rcti *output_rect)
       int index = -1;
       if (enabled_passes_ & pass_type) {
         index = cryptomatte_id;
-        cryptomatte_id += data_.cryptomatte_samples_len / 2;
+        cryptomatte_id += divide_ceil_u(data_.cryptomatte_samples_len, 2u);
 
         if (inst_.is_viewport() && inst_.v3d->shading.render_pass == pass_type) {
           data_.display_id = index;
@@ -464,7 +468,8 @@ void Film::init(const int2 &extent, const rcti *output_rect)
                                              (data_.value_len > 0) ? data_.extent : int2(1),
                                              (data_.value_len > 0) ? data_.value_len : 1);
     /* Divided by two as two cryptomatte samples fit in pixel (RG, BA). */
-    int cryptomatte_array_len = cryptomatte_layer_len_get() * data_.cryptomatte_samples_len / 2;
+    int cryptomatte_array_len = cryptomatte_layer_len_get() *
+                                divide_ceil_u(data_.cryptomatte_samples_len, 2u);
     reset += cryptomatte_tx_.ensure_2d_array(cryptomatte_format,
                                              (cryptomatte_array_len > 0) ? data_.extent : int2(1),
                                              (cryptomatte_array_len > 0) ? cryptomatte_array_len :
@@ -864,7 +869,7 @@ GPUTexture *Film::get_pass_texture(eViewLayerEEVEEPassType pass_type, int layer_
 
 bool Film::is_viewport_compositor_enabled() const
 {
-  return DRW_is_viewport_compositor_enabled();
+  return inst_.is_viewport() && DRW_is_viewport_compositor_enabled();
 }
 
 /* Gets the appropriate shader to write the given pass type. This is because passes of different

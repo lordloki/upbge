@@ -6,11 +6,12 @@
  * \ingroup edsculpt
  * Common helper methods and structures for gesture operations.
  */
+#include "sculpt_gesture.hh"
+
 #include "MEM_guardedalloc.h"
 
 #include "DNA_vec_types.h"
 
-#include "BLI_bit_vector.hh"
 #include "BLI_bitmap_draw_2d.h"
 #include "BLI_lasso_2d.hh"
 #include "BLI_math_geom.h"
@@ -320,9 +321,9 @@ static void flip_for_symmetry_pass(GestureData &gesture_data, const ePaintSymmet
   flip_plane(gesture_data.line.side_plane[1], gesture_data.line.true_side_plane[1], symmpass);
 }
 
-static Vector<bke::pbvh::Node *> update_affected_nodes_by_line_plane(GestureData &gesture_data)
+static void update_affected_nodes_by_line_plane(GestureData &gesture_data)
 {
-  SculptSession &ss = *gesture_data.ss;
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(*gesture_data.vc.obact);
   float clip_planes[3][4];
   copy_v4_v4(clip_planes[0], gesture_data.line.plane);
   copy_v4_v4(clip_planes[1], gesture_data.line.side_plane[0]);
@@ -332,14 +333,15 @@ static Vector<bke::pbvh::Node *> update_affected_nodes_by_line_plane(GestureData
   frustum.planes = clip_planes;
   frustum.num_planes = gesture_data.line.use_side_planes ? 3 : 1;
 
-  return gesture_data.nodes = bke::pbvh::search_gather(*ss.pbvh, [&](bke::pbvh::Node &node) {
-           return BKE_pbvh_node_frustum_contain_AABB(&node, &frustum);
-         });
+  gesture_data.node_mask = bke::pbvh::search_nodes(
+      pbvh, gesture_data.node_mask_memory, [&](const bke::pbvh::Node &node) {
+        return BKE_pbvh_node_frustum_contain_AABB(&node, &frustum);
+      });
 }
 
 static void update_affected_nodes_by_clip_planes(GestureData &gesture_data)
 {
-  SculptSession &ss = *gesture_data.ss;
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(*gesture_data.vc.obact);
   float clip_planes[4][4];
   copy_m4_m4(clip_planes, gesture_data.clip_planes);
   negate_m4(clip_planes);
@@ -348,23 +350,23 @@ static void update_affected_nodes_by_clip_planes(GestureData &gesture_data)
   frustum.planes = clip_planes;
   frustum.num_planes = 4;
 
-  gesture_data.nodes = bke::pbvh::search_gather(*ss.pbvh, [&](bke::pbvh::Node &node) {
-    switch (gesture_data.selection_type) {
-      case SelectionType::Inside:
-        return BKE_pbvh_node_frustum_contain_AABB(&node, &frustum);
-      case SelectionType::Outside:
-        /* Certain degenerate cases of a lasso shape can cause the resulting
-         * frustum planes to enclose a node's AABB, therefore we must submit it
-         * to be more thoroughly evaluated. */
-        if (gesture_data.shape_type == ShapeType::Lasso) {
-          return true;
+  gesture_data.node_mask = bke::pbvh::search_nodes(
+      pbvh, gesture_data.node_mask_memory, [&](const bke::pbvh::Node &node) {
+        switch (gesture_data.selection_type) {
+          case SelectionType::Inside:
+            return BKE_pbvh_node_frustum_contain_AABB(&node, &frustum);
+          case SelectionType::Outside:
+            /* Certain degenerate cases of a lasso shape can cause the resulting
+             * frustum planes to enclose a node's AABB, therefore we must submit it
+             * to be more thoroughly evaluated. */
+            if (gesture_data.shape_type == ShapeType::Lasso) {
+              return true;
+            }
+            return BKE_pbvh_node_frustum_exclude_AABB(&node, &frustum);
         }
-        return BKE_pbvh_node_frustum_exclude_AABB(&node, &frustum);
-      default:
         BLI_assert_unreachable();
-        return true;
-    }
-  });
+        return false;
+      });
 }
 
 static void update_affected_nodes(GestureData &gesture_data)

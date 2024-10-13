@@ -1743,7 +1743,7 @@ def fbx_data_video_elements(root, vid, scene_data):
                     with open(filepath, 'br') as f:
                         elem_data_single_bytes(fbx_vid, b"Content", f.read())
                 except Exception as e:
-                    print("WARNING: embedding file {} failed ({})".format(filepath, e))
+                    print("WARNING: embedding file {:s} failed ({:s})".format(filepath, str(e)))
                     elem_data_single_bytes(fbx_vid, b"Content", b"")
                 msetts.embedded_set.add(filepath)
     # Looks like we'd rather not write any 'Content' element in this case (see T44442).
@@ -3494,7 +3494,7 @@ def save_single(operator, scene, depsgraph, filepath="",
     import bpy_extras.io_utils
 
     print('\nFBX export starting... %r' % filepath)
-    start_time = time.process_time()
+    start_time = time.time()
 
     # Generate some data about exported scene...
     scene_data = fbx_data_from_scene(scene, depsgraph, settings)
@@ -3537,7 +3537,7 @@ def save_single(operator, scene, depsgraph, filepath="",
     if not media_settings.embed_textures:
         bpy_extras.io_utils.path_reference_copy(media_settings.copy_set)
 
-    print('export finished in %.4f sec.' % (time.process_time() - start_time))
+    print('export finished in %.4f sec.' % (time.time() - start_time))
     return {'FINISHED'}
 
 

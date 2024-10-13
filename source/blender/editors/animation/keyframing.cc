@@ -24,7 +24,7 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_data.hh"
 #include "BKE_animsys.h"
 #include "BKE_armature.hh"
@@ -33,11 +33,12 @@
 #include "BKE_global.hh"
 #include "BKE_idtype.hh"
 #include "BKE_lib_id.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 
 #include "DEG_depsgraph.hh"
+#include "DEG_depsgraph_query.hh"
 
 #include "ED_anim_api.hh"
 #include "ED_keyframing.hh"
@@ -46,6 +47,7 @@
 
 #include "ANIM_action.hh"
 #include "ANIM_action_iterators.hh"
+#include "ANIM_action_legacy.hh"
 #include "ANIM_animdata.hh"
 #include "ANIM_bone_collections.hh"
 #include "ANIM_driver.hh"
@@ -444,6 +446,16 @@ static int insert_key_exec(bContext *C, wmOperator *op)
   return insert_key(C, op);
 }
 
+static int insert_key_invoke(bContext *C, wmOperator *op, const wmEvent * /*event*/)
+{
+  /* The depsgraph needs to be in an evaluated state to ensure the values we get from the
+   * properties are actually the values of the current frame. However we cannot do that in the exec
+   * function, as that would mean every call to the operator via python has to re-evaluate the
+   * depsgraph, causing performance regressions.*/
+  CTX_data_ensure_evaluated_depsgraph(C);
+  return insert_key_exec(C, op);
+}
+
 void ANIM_OT_keyframe_insert(wmOperatorType *ot)
 {
   /* identifiers */
@@ -454,6 +466,7 @@ void ANIM_OT_keyframe_insert(wmOperatorType *ot)
       "preferences if no keying set is active";
 
   /* callbacks */
+  ot->invoke = insert_key_invoke;
   ot->exec = insert_key_exec;
   ot->poll = modify_key_op_poll;
 
@@ -755,7 +768,7 @@ static int clear_anim_v3d_exec(bContext *C, wmOperator * /*op*/)
       Action &action = dna_action->wrap();
       if (action.is_action_layered()) {
         blender::Vector<FCurve *> fcurves_to_delete;
-        action_foreach_fcurve(action, adt->slot_handle, [&](FCurve &fcurve) {
+        foreach_fcurve_in_action_slot(action, adt->slot_handle, [&](FCurve &fcurve) {
           if (can_delete_fcurve(&fcurve, ob)) {
             fcurves_to_delete.append(&fcurve);
           }
@@ -904,7 +917,7 @@ static int delete_key_v3d_without_keying_set(bContext *C, wmOperator *op)
       Action &action = act->wrap();
       if (action.is_action_layered()) {
         blender::Vector<FCurve *> modified_fcurves;
-        action_foreach_fcurve(action, adt->slot_handle, [&](FCurve &fcurve) {
+        foreach_fcurve_in_action_slot(action, adt->slot_handle, [&](FCurve &fcurve) {
           if (!can_delete_key(&fcurve, ob, op->reports)) {
             return;
           }
@@ -934,7 +947,11 @@ static int delete_key_v3d_without_keying_set(bContext *C, wmOperator *op)
         }
       }
 
-      DEG_id_tag_update(&ob->adt->action->id, ID_RECALC_ANIMATION_NO_FLUSH);
+      if (ob->adt->action) {
+        /* The Action might have been unassigned, if it is legacy and the last
+         * F-Curve was removed. */
+        DEG_id_tag_update(&ob->adt->action->id, ID_RECALC_ANIMATION_NO_FLUSH);
+      }
     }
 
     /* Only for reporting. */
@@ -1392,25 +1409,27 @@ bool fcurve_is_changed(PointerRNA ptr,
 }
 
 /**
- * Checks whether an Action has a keyframe for a given frame
- * Since we're only concerned whether a keyframe exists,
- * we can simply loop until a match is found.
+ * Checks whether the Action assigned to `adt` (if any) has any keyframes at the
+ * given frame. Since we're only concerned whether a keyframe exists, we can
+ * simply loop until a match is found.
+ *
+ * For layered actions, this only checks for keyframes in the assigned slot.
  */
-static bool action_frame_has_keyframe(bAction *act, float frame)
+static bool assigned_action_has_keyframe_at(AnimData &adt, float frame)
 {
   /* can only find if there is data */
-  if (act == nullptr) {
+  if (adt.action == nullptr) {
     return false;
   }
 
-  if (act->flag & ACT_MUTED) {
+  if (adt.action->flag & ACT_MUTED) {
     return false;
   }
 
   /* loop over F-Curves, using binary-search to try to find matches
    * - this assumes that keyframes are only beztriples
    */
-  LISTBASE_FOREACH (FCurve *, fcu, &act->curves) {
+  for (FCurve *fcu : blender::animrig::legacy::fcurves_for_assigned_action(&adt)) {
     /* only check if there are keyframes (currently only of type BezTriple) */
     if (fcu->bezt && fcu->totvert) {
       if (fcurve_frame_has_keyframe(fcu, frame)) {
@@ -1439,7 +1458,7 @@ static bool object_frame_has_keyframe(Object *ob, float frame)
      */
     float ob_frame = BKE_nla_tweakedit_remap(ob->adt, frame, NLATIME_CONVERT_UNMAP);
 
-    if (action_frame_has_keyframe(ob->adt->action, ob_frame)) {
+    if (assigned_action_has_keyframe_at(*ob->adt, ob_frame)) {
       return true;
     }
   }
@@ -1472,7 +1491,7 @@ bool id_frame_has_keyframe(ID *id, float frame)
 
       /* only check keyframes in active action */
       if (adt) {
-        return action_frame_has_keyframe(adt->action, frame);
+        return assigned_action_has_keyframe_at(*adt, frame);
       }
       break;
     }

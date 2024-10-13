@@ -43,13 +43,13 @@ static const char *try_get_supported_socket_type(const StringRef socket_type)
 {
   /* Make a copy of the string for `.c_str()` until the socket type map uses C++ types. */
   const std::string idname(socket_type);
-  const blender::bke::bNodeSocketType *typeinfo = bke::nodeSocketTypeFind(idname.c_str());
+  const blender::bke::bNodeSocketType *typeinfo = bke::node_socket_type_find(idname.c_str());
   if (typeinfo == nullptr) {
     return nullptr;
   }
   /* For builtin socket types only the base type is supported. */
-  if (nodeIsStaticSocketType(typeinfo)) {
-    return bke::nodeStaticSocketType(typeinfo->type, PROP_NONE);
+  if (node_is_static_socket_type(typeinfo)) {
+    return bke::node_static_socket_type(typeinfo->type, PROP_NONE);
   }
   return typeinfo->idname;
 }
@@ -363,10 +363,16 @@ template<> void socket_data_read_data_impl(BlendDataReader *reader, bNodeSocketV
 
 static void socket_data_read_data(BlendDataReader *reader, bNodeTreeInterfaceSocket &socket)
 {
+  bool data_read = false;
   socket_data_to_static_type_tag(socket.socket_type, [&](auto type_tag) {
     using SocketDataType = typename decltype(type_tag)::type;
     socket_data_read_data_impl(reader, reinterpret_cast<SocketDataType **>(&socket.socket_data));
+    data_read = true;
   });
+  if (!data_read && socket.socket_data) {
+    /* Not sure how this can happen exactly, but it did happen in #127855. */
+    socket.socket_data = nullptr;
+  }
 }
 
 /** \} */
@@ -652,7 +658,7 @@ using namespace blender::bke::node_interface;
 
 blender::bke::bNodeSocketType *bNodeTreeInterfaceSocket::socket_typeinfo() const
 {
-  return blender::bke::nodeSocketTypeFind(socket_type);
+  return blender::bke::node_socket_type_find(socket_type);
 }
 
 blender::ColorGeometry4f bNodeTreeInterfaceSocket::socket_color() const

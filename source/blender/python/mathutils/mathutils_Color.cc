@@ -10,12 +10,12 @@
 
 #include <Python.h>
 
-#include "mathutils.h"
+#include "mathutils.hh"
 
 #include "BLI_utildefines.h"
 
-#include "../generic/py_capi_utils.h"
-#include "../generic/python_utildefines.h"
+#include "../generic/py_capi_utils.hh"
+#include "../generic/python_utildefines.hh"
 
 #ifndef MATH_STANDALONE
 #  include "IMB_colormanagement.hh"
@@ -344,7 +344,7 @@ static PyObject *Color_richcmpr(PyObject *a, PyObject *b, int op)
       return nullptr;
   }
 
-  return Py_INCREF_RET(res);
+  return Py_NewRef(res);
 }
 
 /** \} */

@@ -24,7 +24,6 @@ struct BMesh;
 struct BMeshNormalsUpdate_Params;
 struct Base;
 struct Depsgraph;
-struct ID;
 struct KeyBlock;
 struct MDeformVert;
 struct Mesh;
@@ -38,7 +37,6 @@ struct UvVertMap;
 struct View3D;
 struct ViewContext;
 struct bContext;
-struct bDeformGroup;
 struct wmKeyConfig;
 struct wmOperator;
 struct UvElement;
@@ -175,12 +173,12 @@ UvVertMap *BM_uv_vert_map_create(BMesh *bm, bool use_select);
 void EDBM_flag_enable_all(BMEditMesh *em, char hflag);
 void EDBM_flag_disable_all(BMEditMesh *em, char hflag);
 
-bool BMBVH_EdgeVisible(BMBVHTree *tree,
-                       BMEdge *e,
-                       Depsgraph *depsgraph,
-                       ARegion *region,
-                       View3D *v3d,
-                       Object *obedit);
+bool BMBVH_EdgeVisible(const BMBVHTree *tree,
+                       const BMEdge *e,
+                       const Depsgraph *depsgraph,
+                       const ARegion *region,
+                       const View3D *v3d,
+                       const Object *obedit);
 
 void EDBM_project_snap_verts(
     bContext *C, Depsgraph *depsgraph, ARegion *region, Object *obedit, BMEditMesh *em);

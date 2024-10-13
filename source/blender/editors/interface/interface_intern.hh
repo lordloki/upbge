@@ -213,6 +213,10 @@ struct uiBut {
   char *poin = nullptr;
   float hardmin = 0, hardmax = 0, softmin = 0, softmax = 0;
 
+  /**
+   * Optional color for monochrome icon. Also used as text
+   * color for labels without icons. Set with #UI_but_color_set().
+   */
   uchar col[4] = {0};
 
   /** See \ref UI_but_func_identity_compare_set(). */
@@ -240,6 +244,11 @@ struct uiBut {
   uiButHandleRenameFunc rename_func = nullptr;
   void *rename_arg1 = nullptr;
   void *rename_orig = nullptr;
+
+  /* When defined, and the button edits a string RNA property, the new name is _not_ set at all,
+   * instead this function is called with the new name. */
+  std::function<void(std::string &new_name)> rename_full_func = nullptr;
+  std::string rename_full_new = "";
 
   /** Run an action when holding the button down. */
   uiButHandleHoldFunc hold_func = nullptr;
@@ -406,8 +415,8 @@ struct uiButSearch : public uiBut {
  * Decorators have their own RNA data, using the normal #uiBut RNA members has many side-effects.
  */
 struct uiButDecorator : public uiBut {
-  struct PointerRNA decorated_rnapoin = {};
-  struct PropertyRNA *decorated_rnaprop = nullptr;
+  PointerRNA decorated_rnapoin = {};
+  PropertyRNA *decorated_rnaprop = nullptr;
   int decorated_rnaindex = -1;
 };
 
@@ -504,6 +513,9 @@ struct ColorPicker {
   bool use_color_lock;
   bool use_luminosity_lock;
   float luminosity_lock_value;
+
+  /* Alpha component. */
+  bool has_alpha;
 };
 
 struct ColorPickerData {
@@ -757,10 +769,9 @@ void ui_but_hsv_set(uiBut *but);
  * For buttons pointing to color for example.
  */
 void ui_but_v3_get(uiBut *but, float vec[3]);
-/**
- * For buttons pointing to color for example.
- */
 void ui_but_v3_set(uiBut *but, const float vec[3]);
+void ui_but_v4_get(uiBut *but, float vec[4]);
+void ui_but_v4_set(uiBut *but, const float vec[4]);
 
 void ui_hsvcircle_vals_from_pos(
     const rcti *rect, float mx, float my, float *r_val_rad, float *r_val_dist);
@@ -976,6 +987,11 @@ void ui_color_picker_hsv_to_rgb(const float r_cp[3], float rgb[3]);
  * or if it's a color picker for such a button.
  */
 bool ui_but_is_color_gamma(uiBut *but);
+
+/**
+ * Returns true if the button represents a color with an Alpha component.
+ */
+bool ui_but_color_has_alpha(uiBut *but);
 
 void ui_scene_linear_to_perceptual_space(uiBut *but, float rgb[3]);
 void ui_perceptual_to_scene_linear_space(uiBut *but, float rgb[3]);
@@ -1270,14 +1286,14 @@ enum {
 blender::gpu::Batch *ui_batch_roundbox_widget_get();
 blender::gpu::Batch *ui_batch_roundbox_shadow_get();
 
-void ui_draw_menu_back(uiStyle *style, uiBlock *block, rcti *rect);
-void ui_draw_popover_back(ARegion *region, uiStyle *style, uiBlock *block, rcti *rect);
+void ui_draw_menu_back(uiStyle *style, uiBlock *block, const rcti *rect);
+void ui_draw_popover_back(ARegion *region, uiStyle *style, uiBlock *block, const rcti *rect);
 void ui_draw_pie_center(uiBlock *block);
 const uiWidgetColors *ui_tooltip_get_theme();
 
 void ui_draw_widget_menu_back_color(const rcti *rect, bool use_shadow, const float color[4]);
 void ui_draw_widget_menu_back(const rcti *rect, bool use_shadow);
-void ui_draw_tooltip_background(const uiStyle *style, uiBlock *block, rcti *rect);
+void ui_draw_tooltip_background(const uiStyle *style, uiBlock *block, const rcti *rect);
 
 void ui_draw_search_back(struct uiStyle *style, uiBlock *block, rcti *rect);
 bool ui_link_bezier_points(const rcti *rect, float coord_array[][2], int resol);
@@ -1564,6 +1580,9 @@ void UI_OT_eyedropper_color(wmOperatorType *ot);
 namespace blender::ui {
 void UI_OT_eyedropper_colorramp(wmOperatorType *ot);
 void UI_OT_eyedropper_colorramp_point(wmOperatorType *ot);
+
+void UI_OT_eyedropper_bone(wmOperatorType *ot);
+
 }  // namespace blender::ui
 
 /* interface_eyedropper_datablock.c */
@@ -1578,9 +1597,9 @@ void UI_OT_eyedropper_depth(wmOperatorType *ot);
 
 void UI_OT_eyedropper_driver(wmOperatorType *ot);
 
-/* interface_eyedropper_gpencil_color.c */
+/* eyedropper_grease_pencil_color.cc */
 
-void UI_OT_eyedropper_gpencil_color(wmOperatorType *ot);
+void UI_OT_eyedropper_grease_pencil_color(wmOperatorType *ot);
 
 /* interface_template_asset_shelf_popover.cc */
 std::optional<blender::StringRefNull> UI_asset_shelf_idname_from_button_context(const uiBut *but);

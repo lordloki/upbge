@@ -189,7 +189,7 @@ class QuickFur(ObjectModeOperator, Operator):
                 with context.temp_override(object=curves_object):
                     try:
                         bpy.ops.object.modifier_apply(modifier=generate_modifier.name)
-                    except BaseException:
+                    except Exception:
                         modifier_apply_error = True
 
             curves_object.modifiers.move(0, len(curves_object.modifiers) - 1)
@@ -486,6 +486,8 @@ class QuickSmoke(ObjectModeOperator, Operator):
         # setup smoke domain
         bpy.ops.object.modifier_add(type='FLUID')
         obj.modifiers[-1].fluid_type = 'DOMAIN'
+        # The default value leads to unstable simulations (see #126924).
+        obj.modifiers[-1].domain_settings.cfl_condition = 4.0
         if self.style == {'FIRE', 'BOTH'}:
             obj.modifiers[-1].domain_settings.use_noise = True
 

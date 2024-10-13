@@ -4,6 +4,7 @@
 
 import unittest
 import sys
+import pathlib
 
 import bpy
 
@@ -224,6 +225,31 @@ class LegacyAPIOnLayeredActionTest(unittest.TestCase):
         # After this, there is no need to test the rest of the functions, as the
         # Action will be in the same state as in test_fcurves_on_layered_action().
 
+    def test_groups(self) -> None:
+        # Create a group by using the legacy API to create an F-Curve with group name.
+        group_name = "Object Transfoibles"
+        self.action.fcurves.new("scale", index=1, action_group=group_name)
+
+        layer = self.action.layers[0]
+        strip = layer.strips[0]
+        channelbag = strip.channelbags[0]
+
+        self.assertEqual(1, len(channelbag.groups), "The new group should be available on the channelbag")
+        self.assertEqual(group_name, channelbag.groups[0].name)
+        self.assertEqual(1, len(self.action.groups), "The new group should be available with the legacy group API")
+        self.assertEqual(group_name, self.action.groups[0].name)
+
+        # Create a group via the legacy API.
+        group = self.action.groups.new(group_name)
+        self.assertEqual("{}.001".format(group_name), group.name, "The group should have a unique name")
+        self.assertEqual(group, self.action.groups[1], "The group should be accessible via the legacy API")
+        self.assertEqual(group, channelbag.groups[1], "The group should be accessible via the channelbag")
+
+        # Remove a group via the legacy API.
+        self.action.groups.remove(group)
+        self.assertNotIn(group, self.action.groups[:], "A group should be removable via the legacy API")
+        self.assertNotIn(group, channelbag.groups[:], "A group should be removable via the legacy API")
+
 
 class TestLegacyLayered(unittest.TestCase):
     """Test boundaries between legacy & layered Actions.
@@ -252,20 +278,6 @@ class TestLegacyLayered(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             act.slots.new()
         self.assertSequenceEqual([], act.slots)
-
-    def test_layered_action(self) -> None:
-        """Test legacy operations on a layered Action"""
-
-        act = bpy.data.actions.new('LayeredAction')
-        act.layers.new("laagje")  # Add a layer to make this a non-empty legacy Action.
-        self.assertFalse(act.is_action_legacy)
-        self.assertTrue(act.is_action_layered)
-        self.assertFalse(act.is_empty)
-
-        # Adding an ActionGroup should be prevented, at least until grouping is supported.
-        with self.assertRaises(RuntimeError):
-            act.groups.new("groepie")
-        self.assertSequenceEqual([], act.groups)
 
 
 class ChannelBagsTest(unittest.TestCase):
@@ -335,6 +347,68 @@ class ChannelBagsTest(unittest.TestCase):
         channelbag.fcurves.clear()
         self.assertEquals([], channelbag.fcurves[:])
 
+    def test_channel_groups(self):
+        channelbag = self.strip.channelbags.new(self.slot)
+
+        # Create some fcurves to play with.
+        fcurve0 = channelbag.fcurves.new('location', index=0)
+        fcurve1 = channelbag.fcurves.new('location', index=1)
+        fcurve2 = channelbag.fcurves.new('location', index=2)
+        fcurve3 = channelbag.fcurves.new('scale', index=0)
+        fcurve4 = channelbag.fcurves.new('scale', index=1)
+        fcurve5 = channelbag.fcurves.new('scale', index=2)
+
+        self.assertEquals([], channelbag.groups[:])
+
+        # Create some channel groups.
+        group0 = channelbag.groups.new('group0')
+        group1 = channelbag.groups.new('group1')
+        self.assertEquals([group0, group1], channelbag.groups[:])
+        self.assertEquals([], group0.channels[:])
+        self.assertEquals([], group1.channels[:])
+
+        # Assign some fcurves to the channel groups. Intentionally not in order
+        # so we can test that the fcurves get moved around properly.
+        fcurve5.group = group1
+        fcurve3.group = group1
+        fcurve2.group = group0
+        fcurve4.group = group0
+        self.assertEquals([fcurve2, fcurve4], group0.channels[:])
+        self.assertEquals([fcurve5, fcurve3], group1.channels[:])
+        self.assertEquals([fcurve2, fcurve4, fcurve5, fcurve3, fcurve0, fcurve1], channelbag.fcurves[:])
+
+        # Weird case to be consistent with the legacy API: assigning None to an
+        # fcurve's group does *not* unassign it from its group. This is stupid,
+        # and we should change it at some point.  But it's how the legacy API
+        # already works (presumably an oversight), so sticking to that for now.
+        fcurve3.group = None
+        self.assertEquals(group1, fcurve3.group)
+        self.assertEquals([fcurve2, fcurve4], group0.channels[:])
+        self.assertEquals([fcurve5, fcurve3], group1.channels[:])
+        self.assertEquals([fcurve2, fcurve4, fcurve5, fcurve3, fcurve0, fcurve1], channelbag.fcurves[:])
+
+        # Removing a group.
+        channelbag.groups.remove(group0)
+        self.assertEquals([group1], channelbag.groups[:])
+        self.assertEquals([fcurve5, fcurve3], group1.channels[:])
+        self.assertEquals([fcurve5, fcurve3, fcurve2, fcurve4, fcurve0, fcurve1], channelbag.fcurves[:])
+
+        # Attempting to remove a channel group that belongs to a different
+        # channel bag should fail.
+        other_slot = self.action.slots.new()
+        other_cbag = self.strip.channelbags.new(other_slot)
+        other_group = other_cbag.groups.new('group1')
+        with self.assertRaises(RuntimeError):
+            channelbag.groups.remove(other_group)
+
+        # Another weird case that we reproduce from the legacy API: attempting
+        # to assign a group to an fcurve that doesn't belong to the same channel
+        # bag should silently fail (just does a printf to stdout).
+        fcurve0.group = other_group
+        self.assertEquals([group1], channelbag.groups[:])
+        self.assertEquals([fcurve5, fcurve3], group1.channels[:])
+        self.assertEquals([fcurve5, fcurve3, fcurve2, fcurve4, fcurve0, fcurve1], channelbag.fcurves[:])
+
 
 class DataPathTest(unittest.TestCase):
     def setUp(self):
@@ -359,6 +433,96 @@ class DataPathTest(unittest.TestCase):
         self.assertEqual("bpy.data.actions['TestAction'].layers[\"Layer\"].strips[0].channelbags[0]", repr(channelbag))
 
 
+class VersioningTest(unittest.TestCase):
+    def setUp(self):
+        enable_experimental_animation_baklava()
+        bpy.ops.wm.open_mainfile(filepath=str(args.testdir / "layered_action_versioning_42.blend"), load_ui=False)
+
+    def tearDown(self) -> None:
+        disable_experimental_animation_baklava()
+
+    def test_nla_conversion(self):
+        nla_object = bpy.data.objects["nla_object"]
+        nla_anim_data = nla_object.animation_data
+        self.assertTrue(nla_anim_data.action.is_action_layered)
+        self.assertNotEqual(nla_anim_data.action_slot_handle, 0)
+
+        # The action that is not pushed into an NLA strip.
+        active_action = nla_anim_data.action
+        strip = active_action.layers[0].strips[0]
+        for fcurve_index, fcurve in enumerate(strip.channelbags[0].fcurves):
+            self.assertEqual(fcurve.data_path, "rotation_euler")
+            self.assertEqual(fcurve.group.name, "Object Transforms")
+            self.assertEqual(fcurve.array_index, fcurve_index)
+
+        self.assertEqual(len(nla_anim_data.nla_tracks), 2)
+        self.assertTrue(nla_anim_data.nla_tracks[0].strips[0].action.is_action_layered)
+        self.assertNotEqual(nla_anim_data.nla_tracks[0].strips[0].action_slot_handle, 0)
+
+        self.assertTrue(nla_anim_data.nla_tracks[1].strips[0].action.is_action_layered)
+        self.assertNotEqual(nla_anim_data.nla_tracks[1].strips[0].action_slot_handle, 0)
+
+    def test_multi_use_action(self):
+        object_a = bpy.data.objects["multi_user_object_a"]
+        object_b = bpy.data.objects["multi_user_object_b"]
+        self.assertTrue(object_a.animation_data.action.is_action_layered)
+        self.assertNotEqual(object_a.animation_data.action_slot_handle, 0)
+
+        self.assertTrue(object_b.animation_data.action.is_action_layered)
+        self.assertNotEqual(object_b.animation_data.action_slot_handle, 0)
+
+        self.assertEqual(object_a.animation_data.action, object_b.animation_data.action)
+        self.assertEqual(object_a.animation_data.action_slot_handle, object_b.animation_data.action_slot_handle)
+
+        action = object_a.animation_data.action
+        strip = action.layers[0].strips[0]
+        self.assertEqual(len(strip.channelbags[0].fcurves), 9)
+        self.assertEqual(len(strip.channelbags[0].groups), 1)
+        self.assertEqual(len(strip.channelbags[0].groups[0].channels), 9)
+
+        # Multi user slots do not get named after their users.
+        self.assertEqual(action.slots[0].name, "OBSlot")
+
+    def test_action_constraint(self):
+        constrained_object = bpy.data.objects["action_constraint_constrained"]
+        action_constraint = constrained_object.constraints[0]
+        self.assertTrue(action_constraint.action.is_action_layered)
+        self.assertNotEqual(action_constraint.action_slot_handle, 0)
+
+        action_owner_object = bpy.data.objects["action_constraint_action_owner"]
+        action = action_owner_object.animation_data.action
+        self.assertTrue(action.is_action_layered)
+        self.assertEqual(action, action_constraint.action)
+        self.assertEqual(action_owner_object.animation_data.action_slot_handle, action_constraint.action_slot_handle)
+        strip = action.layers[0].strips[0]
+        self.assertEqual(len(strip.channelbags[0].fcurves), 1)
+        fcurve = strip.channelbags[0].fcurves[0]
+        self.assertEqual(fcurve.data_path, "location")
+        self.assertEqual(fcurve.array_index, 2)
+        self.assertEqual(fcurve.group.name, "Object Transforms")
+
+    def test_armature_action_conversion(self):
+        armature_object = bpy.data.objects["armature_object"]
+        action = armature_object.animation_data.action
+        self.assertTrue(action.is_action_layered)
+        strip = action.layers[0].strips[0]
+        self.assertEqual(len(strip.channelbags[0].groups), 2)
+        self.assertEqual(strip.channelbags[0].groups[0].name, "Bone")
+        self.assertEqual(strip.channelbags[0].groups[1].name, "Bone.001")
+        self.assertEqual(len(strip.channelbags[0].fcurves), 20)
+        self.assertEqual(len(strip.channelbags[0].groups[0].channels), 10)
+        self.assertEqual(len(strip.channelbags[0].groups[1].channels), 10)
+
+        # Slots with a single user are named after their user.
+        self.assertEqual(action.slots[0].name, "OBarmature_object")
+
+        for fcurve in strip.channelbags[0].groups[0].channels:
+            self.assertEqual(fcurve.group.name, "Bone")
+
+        for fcurve in strip.channelbags[0].groups[1].channels:
+            self.assertEqual(fcurve.group.name, "Bone.001")
+
+
 def main():
     global args
     import argparse
@@ -368,6 +532,7 @@ def main():
         argv += sys.argv[sys.argv.index('--') + 1:]
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--testdir', required=True, type=pathlib.Path)
     args, remaining = parser.parse_known_args(argv)
 
     unittest.main(argv=remaining)

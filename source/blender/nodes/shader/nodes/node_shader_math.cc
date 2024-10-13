@@ -51,7 +51,7 @@ static void sh_node_math_gather_link_searches(GatherLinkSearchOpParams &params)
   }
 
   const bool is_geometry_node_tree = params.node_tree().type == NTREE_GEOMETRY;
-  const int weight = ELEM(params.other_socket().type, SOCK_FLOAT, SOCK_BOOLEAN, SOCK_INT) ? 0 : -1;
+  const int weight = ELEM(params.other_socket().type, SOCK_FLOAT, SOCK_INT, SOCK_BOOLEAN) ? 0 : -1;
 
   for (const EnumPropertyItem *item = rna_enum_node_math_items; item->identifier != nullptr;
        item++)
@@ -451,5 +451,5 @@ void register_node_type_sh_math()
   ntype.eval_inverse_elem = file_ns::node_eval_inverse_elem;
   ntype.eval_inverse = file_ns::node_eval_inverse;
 
-  blender::bke::nodeRegisterType(&ntype);
+  blender::bke::node_register_type(&ntype);
 }

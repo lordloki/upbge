@@ -78,9 +78,11 @@ set(INC_SYS
 set(SRC
   intern/derived_node_tree.cc
   intern/geometry_nodes_execute.cc
+  intern/geometry_nodes_foreach_geometry_element_zone.cc
   intern/geometry_nodes_gizmos.cc
   intern/geometry_nodes_lazy_function.cc
   intern/geometry_nodes_log.cc
+  intern/geometry_nodes_repeat_zone.cc
   intern/inverse_eval.cc
   intern/math_functions.cc
   intern/node_common.cc
@@ -122,7 +124,9 @@ set(SRC
   NOD_socket_declarations.hh
   NOD_socket_declarations_geometry.hh
   NOD_socket_items.hh
+  NOD_socket_items_blend.hh
   NOD_socket_items_ops.hh
+  NOD_socket_items_ui.hh
   NOD_socket_search_link.hh
   NOD_static_types.h
   NOD_texture.h
@@ -146,6 +150,7 @@ set(LIB
   bf_nodes_shader
   bf_nodes_texture
   PRIVATE bf::extern::fmtlib
+  PRIVATE bf::extern::xxhash
 )
 
 if(WITH_BULLET)
@@ -162,7 +167,7 @@ endif()
 if(WITH_TBB)
   if(WIN32)
     # TBB includes Windows.h which will define min/max macros
-    # that will collide with the stl versions.
+    # that will collide with the STL versions.
     add_definitions(-DNOMINMAX)
   endif()
 endif()

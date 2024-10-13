@@ -189,6 +189,14 @@ void VKCommandBufferWrapper::dispatch_indirect(VkBuffer buffer, VkDeviceSize off
   vkCmdDispatchIndirect(vk_command_buffer_, buffer, offset);
 }
 
+void VKCommandBufferWrapper::update_buffer(VkBuffer dst_buffer,
+                                           VkDeviceSize dst_offset,
+                                           VkDeviceSize data_size,
+                                           const void *p_data)
+{
+  vkCmdUpdateBuffer(vk_command_buffer_, dst_buffer, dst_offset, data_size, p_data);
+}
+
 void VKCommandBufferWrapper::copy_buffer(VkBuffer src_buffer,
                                          VkBuffer dst_buffer,
                                          uint32_t region_count,
@@ -330,6 +338,25 @@ void VKCommandBufferWrapper::end_rendering()
   const VKDevice &device = VKBackend::get().device;
   BLI_assert(device.functions.vkCmdEndRendering);
   device.functions.vkCmdEndRendering(vk_command_buffer_);
+}
+
+void VKCommandBufferWrapper::begin_query(VkQueryPool vk_query_pool,
+                                         uint32_t query_index,
+                                         VkQueryControlFlags vk_query_control_flags)
+{
+  vkCmdBeginQuery(vk_command_buffer_, vk_query_pool, query_index, vk_query_control_flags);
+}
+
+void VKCommandBufferWrapper::end_query(VkQueryPool vk_query_pool, uint32_t query_index)
+{
+  vkCmdEndQuery(vk_command_buffer_, vk_query_pool, query_index);
+}
+
+void VKCommandBufferWrapper::reset_query_pool(VkQueryPool vk_query_pool,
+                                              uint32_t first_query,
+                                              uint32_t query_count)
+{
+  vkCmdResetQueryPool(vk_command_buffer_, vk_query_pool, first_query, query_count);
 }
 
 void VKCommandBufferWrapper::begin_debug_utils_label(

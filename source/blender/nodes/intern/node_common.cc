@@ -121,16 +121,16 @@ int node_group_ui_class(const bNode *node)
 
 bool node_group_poll_instance(const bNode *node,
                               const bNodeTree *nodetree,
-                              const char **disabled_hint)
+                              const char **r_disabled_hint)
 {
-  if (!node->typeinfo->poll(node->typeinfo, nodetree, disabled_hint)) {
+  if (!node->typeinfo->poll(node->typeinfo, nodetree, r_disabled_hint)) {
     return false;
   }
   const bNodeTree *grouptree = reinterpret_cast<const bNodeTree *>(node->id);
   if (!grouptree) {
     return true;
   }
-  return blender::bke::nodeGroupPoll(nodetree, grouptree, disabled_hint);
+  return blender::bke::node_group_poll(nodetree, grouptree, r_disabled_hint);
 }
 
 std::string node_group_ui_description(const bNode &node)
@@ -150,9 +150,9 @@ std::string node_group_ui_description(const bNode &node)
   return group->description;
 }
 
-bool blender::bke::nodeGroupPoll(const bNodeTree *nodetree,
-                                 const bNodeTree *grouptree,
-                                 const char **r_disabled_hint)
+bool blender::bke::node_group_poll(const bNodeTree *nodetree,
+                                   const bNodeTree *grouptree,
+                                   const char **r_disabled_hint)
 {
   /* unspecified node group, generally allowed
    * (if anything, should be avoided on operator level)
@@ -239,191 +239,132 @@ get_init_socket_fn(const bNodeTreeInterface &interface, const bNodeTreeInterface
   };
 }
 
-/* in_out overrides the socket declaration in/out type (bNodeTreeInterfaceSocket::flag)
- * because a node group input is turned into an output socket for group input nodes. */
-static SocketDeclarationPtr declaration_for_interface_socket(
-    const bNodeTree &ntree,
+static BaseSocketDeclarationBuilder &build_interface_socket_declaration(
+    const bNodeTree &tree,
     const bNodeTreeInterfaceSocket &io_socket,
-    const eNodeSocketInOut in_out)
+    const eNodeSocketInOut in_out,
+    DeclarationListBuilder &b)
 {
-  SocketDeclarationPtr dst;
-
-  blender::bke::bNodeSocketType *base_typeinfo = blender::bke::nodeSocketTypeFind(
+  blender::bke::bNodeSocketType *base_typeinfo = blender::bke::node_socket_type_find(
       io_socket.socket_type);
-  if (base_typeinfo == nullptr) {
-    return dst;
-  }
+  eNodeSocketDatatype datatype = SOCK_CUSTOM;
 
-  eNodeSocketDatatype datatype = eNodeSocketDatatype(base_typeinfo->type);
+  const StringRef name = io_socket.name;
+  const StringRef identifier = io_socket.identifier;
 
-  switch (datatype) {
-    case SOCK_FLOAT: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueFloat>(io_socket);
-      std::unique_ptr<decl::Float> decl = std::make_unique<decl::Float>();
-      decl->subtype = PropertySubType(value.subtype);
-      decl->default_value = value.value;
-      decl->soft_min_value = value.min;
-      decl->soft_max_value = value.max;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_VECTOR: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueVector>(io_socket);
-      std::unique_ptr<decl::Vector> decl = std::make_unique<decl::Vector>();
-      decl->subtype = PropertySubType(value.subtype);
-      decl->default_value = value.value;
-      decl->soft_min_value = value.min;
-      decl->soft_max_value = value.max;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_RGBA: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueRGBA>(io_socket);
-      std::unique_ptr<decl::Color> decl = std::make_unique<decl::Color>();
-      decl->default_value = value.value;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_SHADER: {
-      std::unique_ptr<decl::Shader> decl = std::make_unique<decl::Shader>();
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_BOOLEAN: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueBoolean>(io_socket);
-      std::unique_ptr<decl::Bool> decl = std::make_unique<decl::Bool>();
-      decl->default_value = value.value;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_ROTATION: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueRotation>(io_socket);
-      std::unique_ptr<decl::Rotation> decl = std::make_unique<decl::Rotation>();
-      decl->default_value = math::EulerXYZ(float3(value.value_euler));
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_MATRIX: {
-      std::unique_ptr<decl::Matrix> decl = std::make_unique<decl::Matrix>();
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_INT: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueInt>(io_socket);
-      std::unique_ptr<decl::Int> decl = std::make_unique<decl::Int>();
-      decl->subtype = PropertySubType(value.subtype);
-      decl->default_value = value.value;
-      decl->soft_min_value = value.min;
-      decl->soft_max_value = value.max;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_STRING: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueString>(io_socket);
-      std::unique_ptr<decl::String> decl = std::make_unique<decl::String>();
-      decl->default_value = value.value;
-      decl->subtype = PropertySubType(value.subtype);
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_MENU: {
-      const auto &value = node_interface::get_socket_data_as<bNodeSocketValueMenu>(io_socket);
-      std::unique_ptr<decl::Menu> decl = std::make_unique<decl::Menu>();
-      decl->default_value = value.value;
-      dst = std::move(decl);
-      break;
-    }
-    case SOCK_OBJECT: {
-      auto value = std::make_unique<decl::Object>();
-      value->default_value_fn = get_default_id_getter(ntree.tree_interface, io_socket);
-      dst = std::move(value);
-      break;
-    }
-    case SOCK_IMAGE: {
-      auto value = std::make_unique<decl::Image>();
-      value->default_value_fn = get_default_id_getter(ntree.tree_interface, io_socket);
-      dst = std::move(value);
-      break;
-    }
-    case SOCK_GEOMETRY:
-      dst = std::make_unique<decl::Geometry>();
-      break;
-    case SOCK_COLLECTION: {
-      auto value = std::make_unique<decl::Collection>();
-      value->default_value_fn = get_default_id_getter(ntree.tree_interface, io_socket);
-      dst = std::move(value);
-      break;
-    }
-    case SOCK_TEXTURE: {
-      auto value = std::make_unique<decl::Texture>();
-      value->default_value_fn = get_default_id_getter(ntree.tree_interface, io_socket);
-      dst = std::move(value);
-      break;
-    }
-    case SOCK_MATERIAL: {
-      auto value = std::make_unique<decl::Material>();
-      value->default_value_fn = get_default_id_getter(ntree.tree_interface, io_socket);
-      dst = std::move(value);
-      break;
-    }
-    case SOCK_CUSTOM: {
-      auto value = std::make_unique<decl::Custom>();
-      value->init_socket_fn = get_init_socket_fn(ntree.tree_interface, io_socket);
-      value->idname_ = io_socket.socket_type;
-      dst = std::move(value);
-      break;
-    }
-  }
-  dst->name = io_socket.name ? io_socket.name : "";
-  dst->identifier = io_socket.identifier;
-  dst->in_out = in_out;
-  dst->socket_type = datatype;
-  dst->description = io_socket.description ? io_socket.description : "";
-  dst->hide_value = io_socket.flag & NODE_INTERFACE_SOCKET_HIDE_VALUE;
-  dst->compact = io_socket.flag & NODE_INTERFACE_SOCKET_COMPACT;
-  return dst;
-}
-
-/* Socket items can be both input and output, generating 2 declarations for 1 item. Count the
- * actual declarations generated by panel content to get the true size for UI drawing. */
-static int count_panel_declaration_children(const bNodeTreeInterfacePanel &io_panel)
-{
-  int num_child_decls = 0;
-  io_panel.foreach_item([&](const bNodeTreeInterfaceItem &item) {
-    switch (item.item_type) {
-      case NODE_INTERFACE_PANEL:
-        num_child_decls++;
+  BaseSocketDeclarationBuilder *decl = nullptr;
+  if (base_typeinfo) {
+    datatype = eNodeSocketDatatype(base_typeinfo->type);
+    switch (datatype) {
+      case SOCK_FLOAT: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueFloat>(io_socket);
+        decl = &b.add_socket<decl::Float>(name, identifier, in_out)
+                    .subtype(PropertySubType(value.subtype))
+                    .default_value(value.value)
+                    .min(value.min)
+                    .max(value.max);
         break;
-      case NODE_INTERFACE_SOCKET:
-        const bNodeTreeInterfaceSocket &socket =
-            reinterpret_cast<const bNodeTreeInterfaceSocket &>(item);
-        if (socket.flag & NODE_INTERFACE_SOCKET_INPUT) {
-          num_child_decls++;
-        }
-        if (socket.flag & NODE_INTERFACE_SOCKET_OUTPUT) {
-          num_child_decls++;
-        }
+      }
+      case SOCK_VECTOR: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueVector>(io_socket);
+        decl = &b.add_socket<decl::Vector>(name, identifier, in_out)
+                    .subtype(PropertySubType(value.subtype))
+                    .default_value(value.value)
+                    .min(value.min)
+                    .max(value.max);
         break;
+      }
+      case SOCK_RGBA: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueRGBA>(io_socket);
+        decl = &b.add_socket<decl::Color>(name, identifier, in_out).default_value(value.value);
+        break;
+      }
+      case SOCK_SHADER: {
+        decl = &b.add_socket<decl::Shader>(name, identifier, in_out);
+        break;
+      }
+      case SOCK_BOOLEAN: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueBoolean>(io_socket);
+        decl = &b.add_socket<decl::Bool>(name, identifier, in_out).default_value(value.value);
+        break;
+      }
+      case SOCK_ROTATION: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueRotation>(
+            io_socket);
+        decl = &b.add_socket<decl::Rotation>(name, identifier, in_out)
+                    .default_value(math::EulerXYZ(float3(value.value_euler)));
+        break;
+      }
+      case SOCK_MATRIX: {
+        decl = &b.add_socket<decl::Matrix>(name, identifier, in_out);
+        break;
+      }
+      case SOCK_INT: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueInt>(io_socket);
+        decl = &b.add_socket<decl::Int>(name, identifier, in_out)
+                    .subtype(PropertySubType(value.subtype))
+                    .default_value(value.value)
+                    .min(value.min)
+                    .max(value.max);
+        break;
+      }
+      case SOCK_STRING: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueString>(io_socket);
+        decl = &b.add_socket<decl::String>(name, identifier, in_out)
+                    .subtype(PropertySubType(value.subtype))
+                    .default_value(value.value);
+        break;
+      }
+      case SOCK_MENU: {
+        const auto &value = node_interface::get_socket_data_as<bNodeSocketValueMenu>(io_socket);
+        decl = &b.add_socket<decl::Menu>(name, identifier, in_out).default_value(value.value);
+        break;
+      }
+      case SOCK_OBJECT: {
+        decl = &b.add_socket<decl::Object>(name, identifier, in_out)
+                    .default_value_fn(get_default_id_getter(tree.tree_interface, io_socket));
+        break;
+      }
+      case SOCK_IMAGE: {
+        decl = &b.add_socket<decl::Image>(name, identifier, in_out)
+                    .default_value_fn(get_default_id_getter(tree.tree_interface, io_socket));
+        break;
+      }
+      case SOCK_GEOMETRY:
+        decl = &b.add_socket<decl::Geometry>(name, identifier, in_out);
+        break;
+      case SOCK_COLLECTION: {
+        decl = &b.add_socket<decl::Collection>(name, identifier, in_out)
+                    .default_value_fn(get_default_id_getter(tree.tree_interface, io_socket));
+        break;
+      }
+      case SOCK_TEXTURE: {
+        decl = &b.add_socket<decl::Texture>(name, identifier, in_out)
+                    .default_value_fn(get_default_id_getter(tree.tree_interface, io_socket));
+        break;
+      }
+      case SOCK_MATERIAL: {
+        decl = &b.add_socket<decl::Material>(name, identifier, in_out)
+                    .default_value_fn(get_default_id_getter(tree.tree_interface, io_socket));
+        break;
+      }
+      case SOCK_CUSTOM: {
+        decl = &b.add_socket<decl::Custom>(name, identifier, in_out)
+                    .idname(io_socket.socket_type)
+                    .init_socket_fn(get_init_socket_fn(tree.tree_interface, io_socket));
+        break;
+      }
     }
-    return true;
-  });
-  return num_child_decls;
-}
-
-static PanelDeclarationPtr declaration_for_interface_panel(const bNodeTree & /*ntree*/,
-                                                           const bNodeTreeInterfacePanel &io_panel)
-{
-  if (io_panel.items_num == 0) {
-    return nullptr;
   }
-
-  PanelDeclarationPtr dst = std::make_unique<PanelDeclaration>();
-  dst->identifier = io_panel.identifier;
-  dst->name = io_panel.name ? io_panel.name : "";
-  dst->description = io_panel.description ? io_panel.description : "";
-  dst->default_collapsed = (io_panel.flag & NODE_INTERFACE_PANEL_DEFAULT_CLOSED);
-  dst->num_child_decls = count_panel_declaration_children(io_panel);
-  return dst;
+  else {
+    decl = &b.add_socket<decl::Custom>(name, identifier, in_out)
+                .idname(io_socket.socket_type)
+                .init_socket_fn(get_init_socket_fn(tree.tree_interface, io_socket));
+  }
+  decl->description(io_socket.description ? io_socket.description : "");
+  decl->hide_value(io_socket.flag & NODE_INTERFACE_SOCKET_HIDE_VALUE);
+  decl->compact(io_socket.flag & NODE_INTERFACE_SOCKET_COMPACT);
+  return *decl;
 }
 
 static void set_default_input_field(const bNodeTreeInterfaceSocket &input, SocketDeclaration &decl)
@@ -459,6 +400,46 @@ static void set_default_input_field(const bNodeTreeInterfaceSocket &input, Socke
   }
 }
 
+static void node_group_declare_panel_recursive(DeclarationListBuilder &b,
+                                               const bNodeTree &group,
+                                               const bNodeTreeInterfacePanel &io_parent_panel,
+                                               const bool is_root)
+{
+  bool layout_added = false;
+  auto add_layout_if_needed = [&]() {
+    if (is_root && !layout_added) {
+      b.add_default_layout();
+      layout_added = true;
+    }
+  };
+
+  for (const bNodeTreeInterfaceItem *item : io_parent_panel.items()) {
+    switch (item->item_type) {
+      case NODE_INTERFACE_SOCKET: {
+        const auto &io_socket = node_interface::get_item_as<bNodeTreeInterfaceSocket>(*item);
+        const eNodeSocketInOut in_out = (io_socket.flag & NODE_INTERFACE_SOCKET_INPUT) ? SOCK_IN :
+                                                                                         SOCK_OUT;
+        if (in_out == SOCK_IN) {
+          add_layout_if_needed();
+        }
+        build_interface_socket_declaration(group, io_socket, in_out, b);
+        break;
+      }
+      case NODE_INTERFACE_PANEL: {
+        add_layout_if_needed();
+        const auto &io_panel = node_interface::get_item_as<bNodeTreeInterfacePanel>(*item);
+        auto &panel_b = b.add_panel(StringRef(io_panel.name), io_panel.identifier)
+                            .description(StringRef(io_panel.description))
+                            .default_closed(io_panel.flag & NODE_INTERFACE_PANEL_DEFAULT_CLOSED);
+        node_group_declare_panel_recursive(panel_b, group, io_panel, false);
+        break;
+      }
+    }
+  }
+
+  add_layout_if_needed();
+}
+
 void node_group_declare(NodeDeclarationBuilder &b)
 {
   const bNode *node = b.node_or_null();
@@ -479,41 +460,7 @@ void node_group_declare(NodeDeclarationBuilder &b)
   /* Allow the node group interface to define the socket order. */
   r_declaration.use_custom_socket_order = true;
 
-  group->tree_interface.foreach_item([&](const bNodeTreeInterfaceItem &item) {
-    switch (item.item_type) {
-      case NODE_INTERFACE_SOCKET: {
-        const bNodeTreeInterfaceSocket &socket =
-            node_interface::get_item_as<bNodeTreeInterfaceSocket>(item);
-
-        SocketDeclarationPtr input_decl = (socket.flag & NODE_INTERFACE_SOCKET_INPUT) ?
-                                              declaration_for_interface_socket(
-                                                  *group, socket, SOCK_IN) :
-                                              nullptr;
-        SocketDeclarationPtr output_decl = (socket.flag & NODE_INTERFACE_SOCKET_OUTPUT) ?
-                                               declaration_for_interface_socket(
-                                                   *group, socket, SOCK_OUT) :
-                                               nullptr;
-        if (output_decl) {
-          r_declaration.outputs.append(output_decl.get());
-          r_declaration.items.append(std::move(output_decl));
-        }
-        if (input_decl) {
-          r_declaration.inputs.append(input_decl.get());
-          r_declaration.items.append(std::move(input_decl));
-        }
-        break;
-      }
-      case NODE_INTERFACE_PANEL: {
-        const bNodeTreeInterfacePanel &panel =
-            node_interface::get_item_as<bNodeTreeInterfacePanel>(item);
-        if (PanelDeclarationPtr panel_decl = declaration_for_interface_panel(*group, panel)) {
-          r_declaration.items.append(std::move(panel_decl));
-        }
-        break;
-      }
-    }
-    return true;
-  });
+  node_group_declare_panel_recursive(b, *group, group->tree_interface.root_panel, true);
 
   if (group->type == NTREE_GEOMETRY) {
     group->ensure_interface_cache();
@@ -563,7 +510,7 @@ void register_node_type_frame()
   blender::bke::node_type_size(ntype, 150, 100, 0);
   ntype->flag |= NODE_BACKGROUND;
 
-  blender::bke::nodeRegisterType(ntype);
+  blender::bke::node_register_type(ntype);
 }
 
 /** \} */
@@ -572,14 +519,24 @@ void register_node_type_frame()
 /** \name Node Re-Route
  * \{ */
 
-static void node_reroute_init(bNodeTree *ntree, bNode *node)
+static void node_reroute_declare(blender::nodes::NodeDeclarationBuilder &b)
 {
-  /* NOTE: Cannot use socket templates for this, since it would reset the socket type
-   * on each file read via the template verification procedure.
-   */
-  blender::bke::nodeAddStaticSocket(ntree, node, SOCK_IN, SOCK_RGBA, PROP_NONE, "Input", "Input");
-  blender::bke::nodeAddStaticSocket(
-      ntree, node, SOCK_OUT, SOCK_RGBA, PROP_NONE, "Output", "Output");
+  const bNode *node = b.node_or_null();
+  if (node == nullptr) {
+    return;
+  }
+
+  const blender::StringRefNull socket_idname(
+      static_cast<const NodeReroute *>(node->storage)->type_idname);
+  b.add_input<blender::nodes::decl::Custom>("Input").idname(socket_idname.c_str());
+  b.add_output<blender::nodes::decl::Custom>("Output").idname(socket_idname.c_str());
+}
+
+static void node_reroute_init(bNodeTree * /*ntree*/, bNode *node)
+{
+  NodeReroute *data = MEM_cnew<NodeReroute>(__func__);
+  STRNCPY(data->type_idname, "NodeSocketColor");
+  node->storage = data;
 }
 
 void register_node_type_reroute()
@@ -589,9 +546,11 @@ void register_node_type_reroute()
   ntype->free_self = (void (*)(blender::bke::bNodeType *))MEM_freeN;
 
   blender::bke::node_type_base(ntype, NODE_REROUTE, "Reroute", NODE_CLASS_LAYOUT);
+  ntype->declare = node_reroute_declare;
   ntype->initfunc = node_reroute_init;
+  node_type_storage(ntype, "NodeReroute", node_free_standard_storage, node_copy_standard_storage);
 
-  blender::bke::nodeRegisterType(ntype);
+  blender::bke::node_register_type(ntype);
 }
 
 static void propagate_reroute_type_from_start_socket(
@@ -673,15 +632,9 @@ void ntree_update_reroute_nodes(bNodeTree *ntree)
   for (const auto item : reroute_types.items()) {
     bNode *reroute_node = item.key;
     const blender::bke::bNodeSocketType *socket_type = item.value;
-    bNodeSocket *input_socket = (bNodeSocket *)reroute_node->inputs.first;
-    bNodeSocket *output_socket = (bNodeSocket *)reroute_node->outputs.first;
-
-    if (input_socket->typeinfo != socket_type) {
-      blender::bke::nodeModifySocketType(ntree, reroute_node, input_socket, socket_type->idname);
-    }
-    if (output_socket->typeinfo != socket_type) {
-      blender::bke::nodeModifySocketType(ntree, reroute_node, output_socket, socket_type->idname);
-    }
+    NodeReroute *storage = static_cast<NodeReroute *>(reroute_node->storage);
+    STRNCPY(storage->type_idname, socket_type->idname);
+    blender::nodes::update_node_declaration_and_sockets(*ntree, *reroute_node);
   }
 }
 
@@ -735,26 +688,20 @@ static void group_input_declare(NodeDeclarationBuilder &b)
   if (node_tree == nullptr) {
     return;
   }
-  NodeDeclaration &r_declaration = b.declaration();
   node_tree->tree_interface.foreach_item([&](const bNodeTreeInterfaceItem &item) {
     switch (item.item_type) {
       case NODE_INTERFACE_SOCKET: {
         const bNodeTreeInterfaceSocket &socket =
             node_interface::get_item_as<bNodeTreeInterfaceSocket>(item);
         if (socket.flag & NODE_INTERFACE_SOCKET_INPUT) {
-          SocketDeclarationPtr socket_decl = declaration_for_interface_socket(
-              *node_tree, socket, SOCK_OUT);
-          r_declaration.outputs.append(socket_decl.get());
-          r_declaration.items.append(std::move(socket_decl));
+          build_interface_socket_declaration(*node_tree, socket, SOCK_OUT, b);
         }
         break;
       }
     }
     return true;
   });
-  SocketDeclarationPtr extend_decl = decl::create_extend_declaration(SOCK_OUT);
-  r_declaration.outputs.append(extend_decl.get());
-  r_declaration.items.append(std::move(extend_decl));
+  b.add_output<decl::Extend>("", "__extend__");
 }
 
 static void group_output_declare(NodeDeclarationBuilder &b)
@@ -763,36 +710,30 @@ static void group_output_declare(NodeDeclarationBuilder &b)
   if (node_tree == nullptr) {
     return;
   }
-  NodeDeclaration &r_declaration = b.declaration();
   node_tree->tree_interface.foreach_item([&](const bNodeTreeInterfaceItem &item) {
     switch (item.item_type) {
       case NODE_INTERFACE_SOCKET: {
         const bNodeTreeInterfaceSocket &socket =
             node_interface::get_item_as<bNodeTreeInterfaceSocket>(item);
         if (socket.flag & NODE_INTERFACE_SOCKET_OUTPUT) {
-          SocketDeclarationPtr socket_decl = declaration_for_interface_socket(
-              *node_tree, socket, SOCK_IN);
-          r_declaration.inputs.append(socket_decl.get());
-          r_declaration.items.append(std::move(socket_decl));
+          build_interface_socket_declaration(*node_tree, socket, SOCK_IN, b);
         }
         break;
       }
     }
     return true;
   });
-  SocketDeclarationPtr extend_decl = decl::create_extend_declaration(SOCK_IN);
-  r_declaration.inputs.append(extend_decl.get());
-  r_declaration.items.append(std::move(extend_decl));
+  b.add_input<decl::Extend>("", "__extend__");
 }
 
 static bool group_input_insert_link(bNodeTree *ntree, bNode *node, bNodeLink *link)
 {
   BLI_assert(link->tonode != node);
   BLI_assert(link->tosock->in_out == SOCK_IN);
-  if (link->fromsock->identifier != StringRef("__extend__")) {
+  if (!StringRef(link->fromsock->identifier).startswith("__extend__")) {
     return true;
   }
-  if (link->tosock->identifier == StringRef("__extend__")) {
+  if (StringRef(link->tosock->identifier).startswith("__extend__")) {
     /* Don't connect to other "extend" sockets. */
     return false;
   }
@@ -810,10 +751,10 @@ static bool group_output_insert_link(bNodeTree *ntree, bNode *node, bNodeLink *l
 {
   BLI_assert(link->fromnode != node);
   BLI_assert(link->fromsock->in_out == SOCK_OUT);
-  if (link->tosock->identifier != StringRef("__extend__")) {
+  if (!StringRef(link->tosock->identifier).startswith("__extend__")) {
     return true;
   }
-  if (link->fromsock->identifier == StringRef("__extend__")) {
+  if (StringRef(link->fromsock->identifier).startswith("__extend__")) {
     /* Don't connect to other "extend" sockets. */
     return false;
   }
@@ -840,7 +781,7 @@ void register_node_type_group_input()
   ntype->declare = blender::nodes::group_input_declare;
   ntype->insert_link = blender::nodes::group_input_insert_link;
 
-  blender::bke::nodeRegisterType(ntype);
+  blender::bke::node_register_type(ntype);
 }
 
 bNodeSocket *node_group_output_find_socket(bNode *node, const char *identifier)
@@ -866,7 +807,7 @@ void register_node_type_group_output()
 
   ntype->no_muting = true;
 
-  blender::bke::nodeRegisterType(ntype);
+  blender::bke::node_register_type(ntype);
 }
 
 /** \} */

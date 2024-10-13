@@ -41,7 +41,7 @@
 #include "wm_gizmo_wmapi.hh"
 
 #ifdef WITH_PYTHON
-#  include "BPY_extern.h"
+#  include "BPY_extern.hh"
 #endif
 
 /* -------------------------------------------------------------------- */
@@ -467,8 +467,10 @@ static void gizmo_tweak_finish(bContext *C, wmOperator *op, const bool cancel, b
       wm_gizmomap_modal_set(mtweak->gzmap, C, mtweak->gz_modal, nullptr, false);
     }
   }
-  if (mtweak->gz_modal->flag & WM_GIZMO_NEEDS_UNDO) {
-    ED_undo_push(C, "Gizmo");
+  if (cancel == false) {
+    if (mtweak->gz_modal->flag & WM_GIZMO_NEEDS_UNDO) {
+      ED_undo_push(C, mtweak->gz_modal->parent_gzgroup->type->name);
+    }
   }
   MEM_freeN(mtweak);
 }

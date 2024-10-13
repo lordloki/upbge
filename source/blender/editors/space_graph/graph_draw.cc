@@ -23,7 +23,7 @@
 #include "BKE_anim_data.hh"
 #include "BKE_curve.hh"
 #include "BKE_fcurve.hh"
-#include "BKE_nla.h"
+#include "BKE_nla.hh"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
@@ -1049,7 +1049,7 @@ static void draw_fcurve_curve_keys(
 
   BezTriple *first_key = &fcu->bezt[index_range.first()];
   rctf key_bounds = {
-      first_key->vec[1][0], first_key->vec[1][1], first_key->vec[1][0], first_key->vec[1][1]};
+      first_key->vec[1][0], first_key->vec[1][0], first_key->vec[1][1], first_key->vec[1][1]};
   /* Used when skipping keys. */
   bool has_skipped_keys = false;
   const float min_pixel_distance = 3.0f;
@@ -1069,7 +1069,7 @@ static void draw_fcurve_curve_keys(
       curve_vertices.append({BLI_rctf_cent_x(&key_bounds), BLI_rctf_cent_y(&key_bounds)});
       has_skipped_keys = false;
       key_bounds = {
-          prevbezt->vec[1][0], prevbezt->vec[1][1], prevbezt->vec[1][0], prevbezt->vec[1][1]};
+          prevbezt->vec[1][0], prevbezt->vec[1][0], prevbezt->vec[1][1], prevbezt->vec[1][1]};
       expand_key_bounds(prevbezt, bezt, key_bounds);
       /* Calculate again based on the new prevbezt. */
       pixel_distance = calculate_pixel_distance(key_bounds, pixels_per_unit);
@@ -1521,7 +1521,7 @@ void graph_draw_curves(bAnimContext *ac, SpaceGraph *sipo, ARegion *region, shor
 void graph_draw_channel_names(bContext *C,
                               bAnimContext *ac,
                               ARegion *region,
-                              const ListBase /* bAnimListElem */ &anim_data)
+                              const ListBase /*bAnimListElem*/ &anim_data)
 {
   bAnimListElem *ale;
 

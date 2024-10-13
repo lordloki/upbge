@@ -120,12 +120,6 @@ class VKRenderGraph : public NonCopyable {
 
  public:
   VKSubmissionID submission_id;
-  /**
-   * Thread this render graph belongs to.
-   *
-   * Contexts of the same thread will share the same render graph. See `VKDevice::render_graph()`.
-   */
-  pthread_t thread_id;
 
   /**
    * Construct a new render graph instance.
@@ -183,7 +177,9 @@ class VKRenderGraph : public NonCopyable {
   { \
     add_node<NODE_CLASS>(create_info); \
   }
+  ADD_NODE(VKBeginQueryNode)
   ADD_NODE(VKBeginRenderingNode)
+  ADD_NODE(VKEndQueryNode)
   ADD_NODE(VKEndRenderingNode)
   ADD_NODE(VKClearAttachmentsNode)
   ADD_NODE(VKClearColorImageNode)
@@ -200,6 +196,8 @@ class VKRenderGraph : public NonCopyable {
   ADD_NODE(VKDrawIndexedNode)
   ADD_NODE(VKDrawIndexedIndirectNode)
   ADD_NODE(VKDrawIndirectNode)
+  ADD_NODE(VKResetQueryPoolNode)
+  ADD_NODE(VKUpdateBufferNode)
   ADD_NODE(VKUpdateMipmapsNode)
 #undef ADD_NODE
 

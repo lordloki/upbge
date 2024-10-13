@@ -1738,7 +1738,7 @@ static void switch_endian_structs(const SDNA *filesdna, BHead *bhead)
  * Generate the final allocation string reference for read blocks of data. If \a blockname is
  * given, use it as 'owner block' info, otherwise use the id type index to get that info.
  *
- * \note: These strings are stored until Blender exits
+ * \note These strings are stored until Blender exits
  */
 static const char *get_alloc_name(FileData *fd,
                                   BHead *bh,
@@ -1942,7 +1942,7 @@ static void after_liblink_id_embedded_id_process(BlendLibReader *reader, ID *id)
 {
 
   /* Handle 'private IDs'. */
-  bNodeTree *nodetree = blender::bke::ntreeFromID(id);
+  bNodeTree *nodetree = blender::bke::node_tree_from_id(id);
   if (nodetree != nullptr) {
     after_liblink_id_process(reader, &nodetree->id);
 
@@ -2021,15 +2021,16 @@ static void direct_link_id_embedded_id(BlendDataReader *reader,
                                        ID *id_old)
 {
   /* Handle 'private IDs'. */
-  bNodeTree **nodetree = blender::bke::BKE_ntree_ptr_from_id(id);
+  bNodeTree **nodetree = blender::bke::node_tree_ptr_from_id(id);
   if (nodetree != nullptr && *nodetree != nullptr) {
     BLO_read_struct(reader, bNodeTree, nodetree);
     direct_link_id_common(reader,
                           current_library,
                           (ID *)*nodetree,
-                          id_old != nullptr ? (ID *)blender::bke::ntreeFromID(id_old) : nullptr,
+                          id_old != nullptr ? (ID *)blender::bke::node_tree_from_id(id_old) :
+                                              nullptr,
                           0);
-    blender::bke::ntreeBlendReadData(reader, id, *nodetree);
+    blender::bke::node_tree_blend_read_data(reader, id, *nodetree);
   }
 
   if (GS(id->name) == ID_SCE) {
@@ -2297,8 +2298,6 @@ static void lib_link_scenes_check_set(Main *bmain)
 
 static void direct_link_library(FileData *fd, Library *lib, Main *main)
 {
-  Main *newmain;
-
   /* Make sure we have full path in lib->runtime.filepath_abs */
   /* NOTE: Since existing libraries are searched by their absolute path, this has to be generated
    * before the lookup below. Otherwise, in case the stored absolute filepath is not 'correct' (may
@@ -2343,10 +2342,10 @@ static void direct_link_library(FileData *fd, Library *lib, Main *main)
   //  printf("direct_link_library: filepath_abs %s\n", lib->runtime.filepath_abs);
 
   BlendDataReader reader = {fd};
-  BKE_packedfile_blend_read(&reader, &lib->packedfile);
+  BKE_packedfile_blend_read(&reader, &lib->packedfile, lib->filepath);
 
   /* new main */
-  newmain = BKE_main_new();
+  Main *newmain = BKE_main_new();
   BLI_addtail(fd->mainlist, newmain);
   newmain->curlib = lib;
 
@@ -2549,7 +2548,7 @@ static void read_undo_reuse_noundo_local_ids(FileData *fd)
   ListBase *lbarray[INDEX_ID_MAX];
 
   BLI_assert(old_bmain->curlib == nullptr);
-  BLI_assert(BLI_listbase_count_at_most(fd->mainlist, 2) == 1);
+  BLI_assert(BLI_listbase_is_single(fd->mainlist));
 
   int i = set_listbasepointers(old_bmain, lbarray);
   while (i--) {
@@ -3769,7 +3768,7 @@ BlendFileData *blo_read_file_internal(FileData *fd, const char *filepath)
     /* After all data has been read and versioned, uses ID_TAG_NEW. Theoretically this should
      * not be calculated in the undo case, but it is currently needed even on undo to recalculate
      * a cache. */
-    blender::bke::ntreeUpdateAllNew(bfd->main);
+    blender::bke::node_tree_update_all_new(bfd->main);
 
     placeholders_ensure_valid(bfd->main);
 
@@ -4429,7 +4428,7 @@ static void library_link_end(Main *mainl, FileData **fd, const int flag)
   BKE_main_id_refcount_recompute(mainvar, false);
 
   /* After all data has been read and versioned, uses ID_TAG_NEW. */
-  blender::bke::ntreeUpdateAllNew(mainvar);
+  blender::bke::node_tree_update_all_new(mainvar);
 
   placeholders_ensure_valid(mainvar);
 

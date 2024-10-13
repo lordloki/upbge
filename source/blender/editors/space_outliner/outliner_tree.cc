@@ -344,6 +344,9 @@ TreeElement *AbstractTreeDisplay::add_element(ListBase *lb,
   else if (ELEM(type, TSE_MODIFIER, TSE_MODIFIER_BASE)) {
     /* pass */
   }
+  else if (type == TSE_LINKED_NODE_TREE) {
+    /* pass */
+  }
   else if (type == TSE_LINKED_OB) {
     /* pass */
   }
@@ -982,7 +985,12 @@ static bool outliner_element_visible_get(const Scene *scene,
 
 static bool outliner_filter_has_name(TreeElement *te, const char *name, int flags)
 {
-  int fn_flag = 0;
+  /* Use `fnmatch` for shell-style globing.
+   * - Case-insensitive (optionally).
+   * - Don't handle escape characters as "special" characters are not expected in names.
+   *   Unlike shell input - `\` should be treated like any other character.
+   */
+  int fn_flag = FNM_NOESCAPE;
 
   if ((flags & SO_FIND_CASE_SENSITIVE) == 0) {
     fn_flag |= FNM_CASEFOLD;

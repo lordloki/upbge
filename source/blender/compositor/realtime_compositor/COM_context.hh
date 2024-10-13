@@ -81,14 +81,15 @@ class Context {
    * since the region can be zero sized. */
   virtual rcti get_compositing_region() const = 0;
 
-  /* Get the texture where the result of the compositor should be written. This should be called by
-   * the composite output node to get its target texture. */
-  virtual GPUTexture *get_output_texture() = 0;
+  /* Get the result where the result of the compositor should be written. */
+  virtual Result get_output_result() = 0;
 
-  /* Get the texture where the result of the compositor viewer should be written, given the domain
-   * of the result to be viewed. This should be called by viewer output nodes to get their target
-   * texture. */
-  virtual GPUTexture *get_viewer_output_texture(Domain domain, bool is_data) = 0;
+  /* Get the result where the result of the compositor viewer should be written, given the domain
+   * of the result to be viewed, its precision, and whether the output is a non-color data image
+   * that should be displayed without view transform. */
+  virtual Result get_viewer_output_result(Domain domain,
+                                          bool is_data,
+                                          ResultPrecision precision) = 0;
 
   /* Get the texture where the given render pass is stored. This should be called by the Render
    * Layer node to populate its outputs. */

@@ -53,7 +53,7 @@
 
 #include "BLT_translation.hh"
 
-#include "BKE_action.h"
+#include "BKE_action.hh"
 #include "BKE_anim_data.hh"
 #include "BKE_animsys.h"
 #include "BKE_bpath.hh"
@@ -226,7 +226,7 @@ static void scene_init_data(ID *id)
 
   BKE_color_managed_display_settings_init(&scene->display_settings);
   BKE_color_managed_view_settings_init_render(
-      &scene->view_settings, &scene->display_settings, "Filmic");
+      &scene->view_settings, &scene->display_settings, "AgX");
   STRNCPY(scene->sequencer_colorspace_settings.name, colorspace_name);
 
   BKE_image_format_init(&scene->r.im_format, true);
@@ -268,10 +268,10 @@ static void scene_copy_data(Main *bmain,
 {
   Scene *scene_dst = (Scene *)id_dst;
   const Scene *scene_src = (const Scene *)id_src;
-  /* We never handle user-count here for own data. */
+  /* Never handle user-count here for own sub-data. */
   const int flag_subdata = flag | LIB_ID_CREATE_NO_USER_REFCOUNT;
-  /* We always need allocation of our private ID data. */
-  const int flag_private_id_data = flag & ~LIB_ID_CREATE_NO_ALLOCATE;
+  /* Always need allocation of the embedded ID data. */
+  const int flag_embedded_id_data = flag_subdata & ~LIB_ID_CREATE_NO_ALLOCATE;
 
   scene_dst->ed = nullptr;
   scene_dst->depsgraph_hash = nullptr;
@@ -284,7 +284,7 @@ static void scene_copy_data(Main *bmain,
                        &scene_src->master_collection->id,
                        &scene_dst->id,
                        reinterpret_cast<ID **>(&scene_dst->master_collection),
-                       flag_private_id_data);
+                       flag_embedded_id_data);
   }
 
   /* View Layers */
@@ -312,7 +312,7 @@ static void scene_copy_data(Main *bmain,
                        &scene_src->nodetree->id,
                        &scene_dst->id,
                        reinterpret_cast<ID **>(&scene_dst->nodetree),
-                       flag_private_id_data);
+                       flag_embedded_id_data);
     /* TODO this should not be needed anymore? Should be handled by generic remapping code in
      * #BKE_id_copy_in_lib. */
     BKE_libblock_relink_ex(bmain,
@@ -352,6 +352,10 @@ static void scene_copy_data(Main *bmain,
   if (scene_src->ed) {
     scene_dst->ed = MEM_cnew<Editing>(__func__);
     scene_dst->ed->seqbasep = &scene_dst->ed->seqbase;
+    scene_dst->ed->cache_flag = scene_src->ed->cache_flag;
+    scene_dst->ed->show_missing_media_flag = scene_src->ed->show_missing_media_flag;
+    scene_dst->ed->proxy_storage = scene_src->ed->proxy_storage;
+    STRNCPY(scene_dst->ed->proxy_dir, scene_src->ed->proxy_dir);
     SEQ_sequence_base_dupli_recursive(scene_src,
                                       scene_dst,
                                       &scene_dst->ed->seqbase,
@@ -398,7 +402,7 @@ static void scene_free_data(ID *id)
 
   /* is no lib link block, but scene extension */
   if (scene->nodetree) {
-    blender::bke::ntreeFreeEmbeddedTree(scene->nodetree);
+    blender::bke::node_tree_free_embedded_tree(scene->nodetree);
     MEM_freeN(scene->nodetree);
     scene->nodetree = nullptr;
   }
@@ -984,6 +988,20 @@ static void scene_foreach_path(ID *id, BPathForeachPathData *bpath_data)
   }
 }
 
+static void scene_foreach_cache(ID *id,
+                                IDTypeForeachCacheFunctionCallback function_callback,
+                                void *user_data)
+{
+  Scene *scene = (Scene *)id;
+  if (scene->ed != nullptr) {
+    IDCacheKey key;
+    key.id_session_uid = id->session_uid;
+    /* Preserve VSE thumbnail cache across global undo steps. */
+    key.identifier = offsetof(Editing, runtime.thumbnail_cache);
+    function_callback(id, &key, (void **)&scene->ed->runtime.thumbnail_cache, 0, user_data);
+  }
+}
+
 static void scene_blend_write(BlendWriter *writer, ID *id, const void *id_address)
 {
   Scene *sce = (Scene *)id;
@@ -1110,7 +1128,7 @@ static void scene_blend_write(BlendWriter *writer, ID *id, const void *id_addres
     /* Set deprecated chunksize for forward compatibility. */
     temp_nodetree->chunksize = 256;
     BLO_write_struct_at_address(writer, bNodeTree, sce->nodetree, temp_nodetree);
-    blender::bke::ntreeBlendWrite(writer, temp_nodetree);
+    blender::bke::node_tree_blend_write(writer, temp_nodetree);
   }
 
   BKE_color_managed_view_settings_blend_write(writer, &sce->view_settings);
@@ -1175,7 +1193,7 @@ static void link_recurs_seq(BlendDataReader *reader, ListBase *lb)
 
   LISTBASE_FOREACH_MUTABLE (Sequence *, seq, lb) {
     /* Sanity check. */
-    if (!SEQ_valid_strip_channel(seq)) {
+    if (!SEQ_is_valid_strip_channel(seq)) {
       BLI_freelinkN(lb, seq);
       BLO_read_data_reports(reader)->count.sequence_strips_skipped++;
     }
@@ -1297,6 +1315,7 @@ static void scene_blend_read_data(BlendDataReader *reader, ID *id)
     ed->prefetch_job = nullptr;
     ed->runtime.sequence_lookup = nullptr;
     ed->runtime.media_presence = nullptr;
+    ed->runtime.thumbnail_cache = nullptr;
 
     /* recursive link sequences, lb will be correctly initialized */
     link_recurs_seq(reader, &ed->seqbase);
@@ -1564,7 +1583,7 @@ constexpr IDTypeInfo get_type_info()
    * support all possible corner cases. */
   info.make_local = nullptr;
   info.foreach_id = scene_foreach_id;
-  info.foreach_cache = nullptr;
+  info.foreach_cache = scene_foreach_cache;
   info.foreach_path = scene_foreach_path;
   info.owner_pointer_get = nullptr;
 
@@ -1846,6 +1865,7 @@ Scene *BKE_scene_duplicate(Main *bmain, Scene *sce, eSceneCopyMethod type)
      * duplicate along the object itself). */
     BKE_collection_duplicate(bmain,
                              nullptr,
+                             nullptr,
                              sce_copy->master_collection,
                              duplicate_flags,
                              LIB_ID_DUPLICATE_IS_SUBPROCESS);
@@ -1856,12 +1876,14 @@ Scene *BKE_scene_duplicate(Main *bmain, Scene *sce, eSceneCopyMethod type)
       if (sce_copy->rigidbody_world->group != nullptr) {
         BKE_collection_duplicate(bmain,
                                  nullptr,
+                                 nullptr,
                                  sce_copy->rigidbody_world->group,
                                  duplicate_flags,
                                  LIB_ID_DUPLICATE_IS_SUBPROCESS);
       }
       if (sce_copy->rigidbody_world->constraints != nullptr) {
         BKE_collection_duplicate(bmain,
+                                 nullptr,
                                  nullptr,
                                  sce_copy->rigidbody_world->constraints,
                                  duplicate_flags,
@@ -2850,8 +2872,12 @@ void BKE_render_resolution(const RenderData *r, const bool use_crop, int *r_widt
   *r_height = (r->ysch * r->size) / 100;
 
   if (use_crop && (r->mode & R_BORDER) && (r->mode & R_CROP)) {
-    *r_width *= BLI_rctf_size_x(&r->border);
-    *r_height *= BLI_rctf_size_y(&r->border);
+    /* Compute the difference between the integer bounds instead of multiplying by the float
+     * border size directly to be consistent with how the render pipeline computes render size, see
+     * for instance render_init_from_main. That's because difference in rounding and imprecisions
+     * can cause off by one errors. */
+    *r_width = int(r->border.xmax * *r_width) - int(r->border.xmin * *r_width);
+    *r_height = int(r->border.ymax * *r_height) - int(r->border.ymin * *r_height);
   }
 }
 

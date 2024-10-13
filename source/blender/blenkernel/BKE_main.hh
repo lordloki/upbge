@@ -293,16 +293,16 @@ void BKE_main_init(Main &bmain);
  * This is similar to a call to #BKE_main_destroy followed by #BKE_main_init, however the internal
  * #Main::lock is kept unchanged, and the #Main::is_global_main flag is not reset to `true` either.
  *
- * \note: Unlike #BKE_main_free, only process the given \a bmain, without handling any potential
+ * \note Unlike #BKE_main_free, only process the given \a bmain, without handling any potential
  * other linked Main.
  */
 void BKE_main_clear(Main &bmain);
 /**
  * Clear and free all data in given \a bmain, but does not free \a bmain itself.
  *
- * \note: In most cases, #BKE_main_free should be used instead of this function.
+ * \note In most cases, #BKE_main_free should be used instead of this function.
  *
- * \note: Unlike #BKE_main_free, only process the given \a bmain, without handling any potential
+ * \note Unlike #BKE_main_free, only process the given \a bmain, without handling any potential
  * other linked Main.
  */
 void BKE_main_destroy(Main &bmain);
@@ -504,6 +504,18 @@ void BKE_main_library_weak_reference_remove_item(
   FOREACH_MAIN_LISTBASE_END; \
   } \
   ((void)0)
+
+/**
+ * Generates a raw .blend file thumbnail data from a raw image buffer.
+ *
+ * \param bmain: If not NULL, also store generated data in this Main.
+ * \param rect: RGBA image buffer.
+ * \param size: The size of `rect`.
+ * \return The generated .blend file raw thumbnail data.
+ */
+BlendThumbnail *BKE_main_thumbnail_from_buffer(Main *bmain,
+                                               const uint8_t *rect,
+                                               const int size[2]);
 
 /**
  * Generates a raw .blend file thumbnail data from given image.

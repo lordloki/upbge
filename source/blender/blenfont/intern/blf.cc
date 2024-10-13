@@ -24,7 +24,7 @@
 
 #include "BLI_fileops.h"
 #include "BLI_math_rotation.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_threads.h"
 
@@ -613,9 +613,10 @@ void BLF_draw_svg_icon(uint icon_id,
                        float x,
                        float y,
                        float size,
-                       float color[4],
+                       const float color[4],
                        float outline_alpha,
-                       bool multicolor)
+                       bool multicolor,
+                       blender::FunctionRef<void(std::string &)> edit_source_cb)
 {
 #ifndef WITH_HEADLESS
   FontBLF *font = global_font[0];
@@ -623,23 +624,28 @@ void BLF_draw_svg_icon(uint icon_id,
     /* Avoid bgl usage to corrupt BLF drawing. */
     GPU_bgl_end();
     blf_draw_gpu__start(font);
-    blf_draw_svg_icon(font, icon_id, x, y, size, color, outline_alpha, multicolor);
+    blf_draw_svg_icon(font, icon_id, x, y, size, color, outline_alpha, multicolor, edit_source_cb);
     blf_draw_gpu__end(font);
   }
 #else
-  UNUSED_VARS(icon_id, x, y, size, color, outline_alpha, multicolor);
+  UNUSED_VARS(icon_id, x, y, size, color, outline_alpha, multicolor, edit_source_cb);
 #endif /* WITH_HEADLESS */
 }
 
-blender::Array<uchar> BLF_svg_icon_bitmap(uint icon_id, float size, int *r_width, int *r_height)
+blender::Array<uchar> BLF_svg_icon_bitmap(uint icon_id,
+                                          float size,
+                                          int *r_width,
+                                          int *r_height,
+                                          bool multicolor,
+                                          blender::FunctionRef<void(std::string &)> edit_source_cb)
 {
 #ifndef WITH_HEADLESS
   FontBLF *font = global_font[0];
   if (font) {
-    return blf_svg_icon_bitmap(font, icon_id, size, r_width, r_height);
+    return blf_svg_icon_bitmap(font, icon_id, size, r_width, r_height, multicolor, edit_source_cb);
   }
 #else
-  UNUSED_VARS(icon_id, size, r_width, r_height);
+  UNUSED_VARS(icon_id, size, r_width, r_height, multicolor, edit_source_cb);
 #endif /* WITH_HEADLESS */
   return {};
 }
@@ -675,18 +681,21 @@ size_t BLF_str_offset_from_cursor_position(int fontid,
 bool BLF_str_offset_to_glyph_bounds(int fontid,
                                     const char *str,
                                     size_t str_offset,
-                                    rcti *glyph_bounds)
+                                    rcti *r_glyph_bounds)
 {
   FontBLF *font = blf_get(fontid);
   if (font) {
-    blf_str_offset_to_glyph_bounds(font, str, str_offset, glyph_bounds);
+    blf_str_offset_to_glyph_bounds(font, str, str_offset, r_glyph_bounds);
     return true;
   }
   return false;
 }
 
-int BLF_str_offset_to_cursor(
-    int fontid, const char *str, size_t str_len, size_t str_offset, float cursor_width)
+int BLF_str_offset_to_cursor(int fontid,
+                             const char *str,
+                             const size_t str_len,
+                             const size_t str_offset,
+                             const int cursor_width)
 {
   FontBLF *font = blf_get(fontid);
   if (font) {
@@ -798,6 +807,17 @@ float BLF_fixed_width(int fontid)
 
   if (font) {
     return blf_font_fixed_width(font);
+  }
+
+  return 0.0f;
+}
+
+int BLF_glyph_advance(int fontid, const char *str)
+{
+  FontBLF *font = blf_get(fontid);
+
+  if (font) {
+    return blf_font_glyph_advance(font, str);
   }
 
   return 0.0f;

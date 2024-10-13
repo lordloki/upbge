@@ -117,13 +117,12 @@ void ShadingView::render()
   float4 clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
   GPU_framebuffer_bind(combined_fb_);
   GPU_framebuffer_clear_color_depth(combined_fb_, clear_color, 1.0f);
+  if (DRW_state_draw_background()) { //UPBGE: for overlay pass
+    inst_.pipelines.background.clear(render_view_);
+  }
 
   /* TODO(fclem): Move it after the first prepass (and hiz update) once pipeline is stabilized. */
   inst_.lights.set_view(render_view_, extent_);
-
-  if (DRW_state_draw_background()) { //UPBGE (don't render background in overlay pass)
-    inst_.pipelines.background.render(render_view_);
-  }
 
   inst_.hiz_buffer.set_source(&inst_.render_buffers.depth_tx);
 
@@ -138,6 +137,10 @@ void ShadingView::render()
                                   extent_,
                                   rt_buffer_opaque_,
                                   rt_buffer_refract_);
+
+  if (DRW_state_draw_background()) { //UPBGE: for overlay pass
+    inst_.pipelines.background.render(render_view_);
+  }
 
   inst_.gbuffer.release();
 
@@ -229,7 +232,7 @@ void ShadingView::update_view()
     if (overscan > 0.0f) {
       /* Size of overscan on the screen. */
       const float max_size_with_overscan = math::reduce_max(render_size);
-      const float max_size_original = max_size_with_overscan / (1.0f - 2.0f * overscan);
+      const float max_size_original = max_size_with_overscan / (1.0f + 2.0f * overscan);
       const float overscan_size = (max_size_with_overscan - max_size_original) / 2.0f;
       /* Undo overscan to get the initial dimension of the screen. */
       bottom_left = bottom_left_with_overscan + overscan_size;

@@ -16,7 +16,7 @@
 #include "BLI_fileops.h"
 #include "BLI_ghash.h"
 #include "BLI_listbase.h"
-#include "BLI_path_util.h"
+#include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
 
@@ -398,7 +398,7 @@ void fsmenu_read_system(FSMenu *fsmenu, int read_bookmarks)
                         ICON_FILE_FOLDER,
                         FS_INSERT_LAST);
 
-    const char *home = BLI_getenv("HOME");
+    const char *home = BLI_dir_home();
     if (home) {
 #  define FS_MACOS_PATH(path, name, icon) \
 \
@@ -538,7 +538,7 @@ void fsmenu_read_system(FSMenu *fsmenu, int read_bookmarks)
 #else
   /* unix */
   {
-    const char *home = BLI_getenv("HOME");
+    const char *home = BLI_dir_home();
 
     if (read_bookmarks && home) {
 

@@ -35,7 +35,11 @@
 
 #include "mesh_brush_common.hh"
 #include "paint_intern.hh"
+#include "paint_mask.hh"
+#include "sculpt_automask.hh"
+#include "sculpt_filter.hh"
 #include "sculpt_intern.hh"
+#include "sculpt_undo.hh"
 
 #include "RNA_access.hh"
 #include "RNA_define.hh"
@@ -49,9 +53,10 @@ namespace blender::ed::sculpt_paint {
 
 void init_transform(bContext *C, Object &ob, const float mval_fl[2], const char *undo_name)
 {
+  const Scene &scene = *CTX_data_scene(C);
   const Sculpt &sd = *CTX_data_tool_settings(C)->sculpt;
   SculptSession &ss = *ob.sculpt;
-  Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
+  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
 
   ss.init_pivot_pos = ss.pivot_pos;
   ss.init_pivot_rot = ss.pivot_rot;
@@ -61,27 +66,26 @@ void init_transform(bContext *C, Object &ob, const float mval_fl[2], const char 
   ss.prev_pivot_rot = ss.pivot_rot;
   ss.prev_pivot_scale = ss.pivot_scale;
 
-  undo::push_begin_ex(ob, undo_name);
   BKE_sculpt_update_object_for_edit(depsgraph, &ob, false);
+  undo::push_begin_ex(scene, ob, undo_name);
 
   ss.pivot_rot[3] = 1.0f;
 
-  SCULPT_vertex_random_access_ensure(ss);
+  SCULPT_vertex_random_access_ensure(ob);
 
   filter::cache_init(C, ob, sd, undo::Type::Position, mval_fl, 5.0, 1.0f);
 
   if (sd.transform_mode == SCULPT_TRANSFORM_MODE_RADIUS_ELASTIC) {
-    ss.filter_cache->transform_displacement_mode = SCULPT_TRANSFORM_DISPLACEMENT_INCREMENTAL;
+    ss.filter_cache->transform_displacement_mode = TransformDisplacementMode::Incremental;
   }
   else {
-    ss.filter_cache->transform_displacement_mode = SCULPT_TRANSFORM_DISPLACEMENT_ORIGINAL;
+    ss.filter_cache->transform_displacement_mode = TransformDisplacementMode::Original;
   }
 }
 
-static std::array<float4x4, 8> transform_matrices_init(
-    const SculptSession &ss,
-    const ePaintSymmetryFlags symm,
-    const SculptTransformDisplacementMode t_mode)
+static std::array<float4x4, 8> transform_matrices_init(const SculptSession &ss,
+                                                       const ePaintSymmetryFlags symm,
+                                                       const TransformDisplacementMode t_mode)
 {
   std::array<float4x4, 8> mats;
 
@@ -92,12 +96,12 @@ static std::array<float4x4, 8> transform_matrices_init(
 
   float start_pivot_pos[3], start_pivot_rot[4], start_pivot_scale[3];
   switch (t_mode) {
-    case SCULPT_TRANSFORM_DISPLACEMENT_ORIGINAL:
+    case TransformDisplacementMode::Original:
       copy_v3_v3(start_pivot_pos, ss.init_pivot_pos);
       copy_v4_v4(start_pivot_rot, ss.init_pivot_rot);
       copy_v3_v3(start_pivot_scale, ss.init_pivot_scale);
       break;
-    case SCULPT_TRANSFORM_DISPLACEMENT_INCREMENTAL:
+    case TransformDisplacementMode::Incremental:
       copy_v3_v3(start_pivot_pos, ss.prev_pivot_pos);
       copy_v4_v4(start_pivot_rot, ss.prev_pivot_rot);
       copy_v3_v3(start_pivot_scale, ss.prev_pivot_scale);
@@ -188,20 +192,20 @@ BLI_NOINLINE static void filter_translations_with_symmetry(const Span<float3> po
 
 static void transform_node_mesh(const Sculpt &sd,
                                 const std::array<float4x4, 8> &transform_mats,
-                                const Span<float3> positions_eval,
-                                const bke::pbvh::Node &node,
+                                const MeshAttributeData &attribute_data,
+                                const bke::pbvh::MeshNode &node,
                                 Object &object,
                                 TransformLocalData &tls,
-                                const MutableSpan<float3> positions_orig)
+                                const PositionDeformData &position_data)
 {
-  const Mesh &mesh = *static_cast<const Mesh *>(object.data);
+  SculptSession &ss = *object.sculpt;
 
-  const Span<int> verts = bke::pbvh::node_unique_verts(node);
+  const Span<int> verts = node.verts();
   const OrigPositionData orig_data = orig_position_data_get_mesh(object, node);
 
   tls.factors.resize(verts.size());
   const MutableSpan<float> factors = tls.factors;
-  fill_factor_from_hide_and_mask(mesh, verts, factors);
+  fill_factor_from_hide_and_mask(attribute_data.hide_vert, attribute_data.mask, verts, factors);
 
   tls.translations.resize(verts.size());
   const MutableSpan<float3> translations = tls.translations;
@@ -211,12 +215,13 @@ static void transform_node_mesh(const Sculpt &sd,
   const ePaintSymmetryFlags symm = SCULPT_mesh_symmetry_xyz_get(object);
   filter_translations_with_symmetry(orig_data.positions, symm, translations);
 
-  write_translations(sd, object, positions_eval, verts, translations, positions_orig);
+  clip_and_lock_translations(sd, ss, position_data.eval, verts, translations);
+  position_data.deform(translations, verts);
 }
 
 static void transform_node_grids(const Sculpt &sd,
                                  const std::array<float4x4, 8> &transform_mats,
-                                 const bke::pbvh::Node &node,
+                                 const bke::pbvh::GridsNode &node,
                                  Object &object,
                                  TransformLocalData &tls)
 {
@@ -224,7 +229,7 @@ static void transform_node_grids(const Sculpt &sd,
   SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
   const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
 
-  const Span<int> grids = bke::pbvh::node_grid_indices(node);
+  const Span<int> grids = node.grids();
   const int grid_verts_num = grids.size() * key.grid_area;
 
   const OrigPositionData orig_data = orig_position_data_get_grids(object, node);
@@ -248,7 +253,7 @@ static void transform_node_grids(const Sculpt &sd,
 
 static void transform_node_bmesh(const Sculpt &sd,
                                  const std::array<float4x4, 8> &transform_mats,
-                                 bke::pbvh::Node &node,
+                                 bke::pbvh::BMeshNode &node,
                                  Object &object,
                                  TransformLocalData &tls)
 {
@@ -277,9 +282,9 @@ static void transform_node_bmesh(const Sculpt &sd,
   apply_translations(translations, verts);
 }
 
-static void sculpt_transform_all_vertices(const Sculpt &sd, Object &ob)
+static void sculpt_transform_all_vertices(const Depsgraph &depsgraph, const Sculpt &sd, Object &ob)
 {
-  undo::restore_position_from_undo_step(ob);
+  undo::restore_position_from_undo_step(depsgraph, ob);
 
   SculptSession &ss = *ob.sculpt;
   const ePaintSymmetryFlags symm = SCULPT_mesh_symmetry_xyz_get(ob);
@@ -289,46 +294,46 @@ static void sculpt_transform_all_vertices(const Sculpt &sd, Object &ob)
 
   /* Regular transform applies all symmetry passes at once as it is split by symmetry areas
    * (each vertex can only be transformed once by the transform matrix of its area). */
-  bke::pbvh::Tree &pbvh = *ss.pbvh;
-  const Span<bke::pbvh::Node *> nodes = ss.filter_cache->nodes;
+  bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(ob);
+  const IndexMask &node_mask = ss.filter_cache->node_mask;
 
   threading::EnumerableThreadSpecific<TransformLocalData> all_tls;
   switch (pbvh.type()) {
     case bke::pbvh::Type::Mesh: {
       Mesh &mesh = *static_cast<Mesh *>(ob.data);
-      const Span<float3> positions_eval = BKE_pbvh_get_vert_positions(pbvh);
-      MutableSpan<float3> positions_orig = mesh.vert_positions_for_write();
-      threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+      const MeshAttributeData attribute_data(mesh.attributes());
+      MutableSpan<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
+      const PositionDeformData position_data(depsgraph, ob);
+      node_mask.foreach_index(GrainSize(1), [&](const int i) {
         TransformLocalData &tls = all_tls.local();
-        for (const int i : range) {
-          transform_node_mesh(
-              sd, transform_mats, positions_eval, *nodes[i], ob, tls, positions_orig);
-          BKE_pbvh_node_mark_positions_update(nodes[i]);
-        }
+        transform_node_mesh(sd, transform_mats, attribute_data, nodes[i], ob, tls, position_data);
+        bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
       });
       break;
     }
     case bke::pbvh::Type::Grids: {
-      threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+      SubdivCCG &subdiv_ccg = *ob.sculpt->subdiv_ccg;
+      MutableSpan<float3> positions = subdiv_ccg.positions;
+      MutableSpan<bke::pbvh::GridsNode> nodes = pbvh.nodes<bke::pbvh::GridsNode>();
+      node_mask.foreach_index(GrainSize(1), [&](const int i) {
         TransformLocalData &tls = all_tls.local();
-        for (const int i : range) {
-          transform_node_grids(sd, transform_mats, *nodes[i], ob, tls);
-          BKE_pbvh_node_mark_positions_update(nodes[i]);
-        }
+        transform_node_grids(sd, transform_mats, nodes[i], ob, tls);
+        bke::pbvh::update_node_bounds_grids(subdiv_ccg.grid_area, positions, nodes[i]);
       });
       break;
     }
     case bke::pbvh::Type::BMesh: {
-      threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+      MutableSpan<bke::pbvh::BMeshNode> nodes = pbvh.nodes<bke::pbvh::BMeshNode>();
+      node_mask.foreach_index(GrainSize(1), [&](const int i) {
         TransformLocalData &tls = all_tls.local();
-        for (const int i : range) {
-          transform_node_bmesh(sd, transform_mats, *nodes[i], ob, tls);
-          BKE_pbvh_node_mark_positions_update(nodes[i]);
-        }
+        transform_node_bmesh(sd, transform_mats, nodes[i], ob, tls);
+        bke::pbvh::update_node_bounds_bmesh(nodes[i]);
       });
       break;
     }
   }
+  pbvh.tag_positions_changed(node_mask);
+  bke::pbvh::flush_bounds_to_parents(pbvh);
 }
 
 BLI_NOINLINE static void calc_transform_translations(const float4x4 &elastic_transform_mat,
@@ -356,21 +361,21 @@ static void elastic_transform_node_mesh(const Sculpt &sd,
                                         const KelvinletParams &params,
                                         const float4x4 &elastic_transform_mat,
                                         const float3 &elastic_transform_pivot,
-                                        const Span<float3> positions_eval,
-                                        const bke::pbvh::Node &node,
+                                        const MeshAttributeData &attribute_data,
+                                        const bke::pbvh::MeshNode &node,
                                         Object &object,
                                         TransformLocalData &tls,
-                                        const MutableSpan<float3> positions_orig)
+                                        const PositionDeformData &position_data)
 {
-  const Mesh &mesh = *static_cast<const Mesh *>(object.data);
+  const SculptSession &ss = *object.sculpt;
 
-  const Span<int> verts = bke::pbvh::node_unique_verts(node);
-  const MutableSpan positions = gather_data_mesh(positions_eval, verts, tls.positions);
+  const Span<int> verts = node.verts();
+  const MutableSpan positions = gather_data_mesh(position_data.eval, verts, tls.positions);
 
   /* TODO: Using the factors array is unnecessary when there are no hidden vertices and no mask. */
   tls.factors.resize(verts.size());
   const MutableSpan<float> factors = tls.factors;
-  fill_factor_from_hide_and_mask(mesh, verts, factors);
+  fill_factor_from_hide_and_mask(attribute_data.hide_vert, attribute_data.mask, verts, factors);
   scale_factors(factors, 20.0f);
 
   tls.translations.resize(verts.size());
@@ -380,21 +385,22 @@ static void elastic_transform_node_mesh(const Sculpt &sd,
 
   scale_translations(translations, factors);
 
-  write_translations(sd, object, positions_eval, verts, translations, positions_orig);
+  clip_and_lock_translations(sd, ss, position_data.eval, verts, translations);
+  position_data.deform(translations, verts);
 }
 
 static void elastic_transform_node_grids(const Sculpt &sd,
                                          const KelvinletParams &params,
                                          const float4x4 &elastic_transform_mat,
                                          const float3 &elastic_transform_pivot,
-                                         const bke::pbvh::Node &node,
+                                         const bke::pbvh::GridsNode &node,
                                          Object &object,
                                          TransformLocalData &tls)
 {
   SculptSession &ss = *object.sculpt;
   SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
 
-  const Span<int> grids = bke::pbvh::node_grid_indices(node);
+  const Span<int> grids = node.grids();
   const MutableSpan positions = gather_grids_positions(subdiv_ccg, grids, tls.positions);
 
   /* TODO: Using the factors array is unnecessary when there are no hidden vertices and no mask. */
@@ -418,7 +424,7 @@ static void elastic_transform_node_bmesh(const Sculpt &sd,
                                          const KelvinletParams &params,
                                          const float4x4 &elastic_transform_mat,
                                          const float3 &elastic_transform_pivot,
-                                         bke::pbvh::Node &node,
+                                         bke::pbvh::BMeshNode &node,
                                          Object &object,
                                          TransformLocalData &tls)
 {
@@ -443,19 +449,22 @@ static void elastic_transform_node_bmesh(const Sculpt &sd,
   apply_translations(translations, verts);
 }
 
-static void transform_radius_elastic(const Sculpt &sd, Object &ob, const float transform_radius)
+static void transform_radius_elastic(const Depsgraph &depsgraph,
+                                     const Sculpt &sd,
+                                     Object &ob,
+                                     const float transform_radius)
 {
   SculptSession &ss = *ob.sculpt;
   BLI_assert(ss.filter_cache->transform_displacement_mode ==
-             SCULPT_TRANSFORM_DISPLACEMENT_INCREMENTAL);
+             TransformDisplacementMode::Incremental);
 
   const ePaintSymmetryFlags symm = SCULPT_mesh_symmetry_xyz_get(ob);
 
   std::array<float4x4, 8> transform_mats = transform_matrices_init(
       ss, symm, ss.filter_cache->transform_displacement_mode);
 
-  bke::pbvh::Tree &pbvh = *ss.pbvh;
-  const Span<bke::pbvh::Node *> nodes = ss.filter_cache->nodes;
+  bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(ob);
+  const IndexMask &node_mask = ss.filter_cache->node_mask;
 
   KelvinletParams params;
   /* TODO(pablodp606): These parameters can be exposed if needed as transform strength and volume
@@ -479,49 +488,50 @@ static void transform_radius_elastic(const Sculpt &sd, Object &ob, const float t
     switch (pbvh.type()) {
       case bke::pbvh::Type::Mesh: {
         Mesh &mesh = *static_cast<Mesh *>(ob.data);
-        const Span<float3> positions_eval = BKE_pbvh_get_vert_positions(pbvh);
-        MutableSpan<float3> positions_orig = mesh.vert_positions_for_write();
-        threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+        MutableSpan<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
+        const PositionDeformData position_data(depsgraph, ob);
+        const MeshAttributeData attribute_data(mesh.attributes());
+        node_mask.foreach_index(GrainSize(1), [&](const int i) {
           TransformLocalData &tls = all_tls.local();
-          for (const int i : range) {
-            elastic_transform_node_mesh(sd,
-                                        params,
-                                        elastic_transform_mat,
-                                        elastic_transform_pivot,
-                                        positions_eval,
-                                        *nodes[i],
-                                        ob,
-                                        tls,
-                                        positions_orig);
-            BKE_pbvh_node_mark_positions_update(nodes[i]);
-          }
+          elastic_transform_node_mesh(sd,
+                                      params,
+                                      elastic_transform_mat,
+                                      elastic_transform_pivot,
+                                      attribute_data,
+                                      nodes[i],
+                                      ob,
+                                      tls,
+                                      position_data);
+          bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
         });
         break;
       }
       case bke::pbvh::Type::Grids: {
-        threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+        SubdivCCG &subdiv_ccg = *ob.sculpt->subdiv_ccg;
+        MutableSpan<float3> positions = subdiv_ccg.positions;
+        MutableSpan<bke::pbvh::GridsNode> nodes = pbvh.nodes<bke::pbvh::GridsNode>();
+        node_mask.foreach_index(GrainSize(1), [&](const int i) {
           TransformLocalData &tls = all_tls.local();
-          for (const int i : range) {
-            elastic_transform_node_grids(
-                sd, params, elastic_transform_mat, elastic_transform_pivot, *nodes[i], ob, tls);
-            BKE_pbvh_node_mark_positions_update(nodes[i]);
-          }
+          elastic_transform_node_grids(
+              sd, params, elastic_transform_mat, elastic_transform_pivot, nodes[i], ob, tls);
+          bke::pbvh::update_node_bounds_grids(subdiv_ccg.grid_area, positions, nodes[i]);
         });
         break;
       }
       case bke::pbvh::Type::BMesh: {
-        threading::parallel_for(nodes.index_range(), 1, [&](const IndexRange range) {
+        MutableSpan<bke::pbvh::BMeshNode> nodes = pbvh.nodes<bke::pbvh::BMeshNode>();
+        node_mask.foreach_index(GrainSize(1), [&](const int i) {
           TransformLocalData &tls = all_tls.local();
-          for (const int i : range) {
-            elastic_transform_node_bmesh(
-                sd, params, elastic_transform_mat, elastic_transform_pivot, *nodes[i], ob, tls);
-            BKE_pbvh_node_mark_positions_update(nodes[i]);
-          }
+          elastic_transform_node_bmesh(
+              sd, params, elastic_transform_mat, elastic_transform_pivot, nodes[i], ob, tls);
+          bke::pbvh::update_node_bounds_bmesh(nodes[i]);
         });
         break;
       }
     }
   }
+  pbvh.tag_positions_changed(node_mask);
+  bke::pbvh::flush_bounds_to_parents(pbvh);
 }
 
 void update_modal_transform(bContext *C, Object &ob)
@@ -530,12 +540,12 @@ void update_modal_transform(bContext *C, Object &ob)
   SculptSession &ss = *ob.sculpt;
   Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
 
-  SCULPT_vertex_random_access_ensure(ss);
+  SCULPT_vertex_random_access_ensure(ob);
   BKE_sculpt_update_object_for_edit(depsgraph, &ob, false);
 
   switch (sd.transform_mode) {
     case SCULPT_TRANSFORM_MODE_ALL_VERTICES: {
-      sculpt_transform_all_vertices(sd, ob);
+      sculpt_transform_all_vertices(*depsgraph, sd, ob);
       break;
     }
     case SCULPT_TRANSFORM_MODE_RADIUS_ELASTIC: {
@@ -553,7 +563,7 @@ void update_modal_transform(bContext *C, Object &ob)
             vc, ss.init_pivot_pos, BKE_brush_size_get(scene, &brush));
       }
 
-      transform_radius_elastic(sd, ob, transform_radius);
+      transform_radius_elastic(*depsgraph, sd, ob, transform_radius);
       break;
     }
   }
@@ -643,15 +653,19 @@ BLI_NOINLINE static void accumulate_weighted_average_position(const Span<float3>
   }
 }
 
-static float3 average_unmasked_position(const Object &object,
+static float3 average_unmasked_position(const Depsgraph &depsgraph,
+                                        const Object &object,
                                         const float3 &pivot,
                                         const ePaintSymmetryFlags symm)
 {
   const SculptSession &ss = *object.sculpt;
-  bke::pbvh::Tree &pbvh = *ss.pbvh;
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
 
-  Vector<bke::pbvh::Node *> nodes = bke::pbvh::search_gather(
-      pbvh, [&](bke::pbvh::Node &node) { return !node_fully_masked_or_hidden(node); });
+  IndexMaskMemory memory;
+  const IndexMask node_mask = bke::pbvh::search_nodes(
+      pbvh, memory, [&](const bke::pbvh::Node &node) {
+        return !node_fully_masked_or_hidden(node);
+      });
 
   struct LocalData {
     Vector<float> factors;
@@ -661,17 +675,19 @@ static float3 average_unmasked_position(const Object &object,
   threading::EnumerableThreadSpecific<LocalData> all_tls;
   switch (pbvh.type()) {
     case bke::pbvh::Type::Mesh: {
+      const Span<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
       const Mesh &mesh = *static_cast<const Mesh *>(object.data);
-      const Span<float3> vert_positions = BKE_pbvh_get_vert_positions(pbvh);
+      const MeshAttributeData attribute_data(mesh.attributes());
+      const Span<float3> vert_positions = bke::pbvh::vert_positions_eval(depsgraph, object);
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
             threading::isolate_task([&]() {
-              for (const bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-                const Span<int> verts = bke::pbvh::node_unique_verts(*node);
+              node_mask.slice(range).foreach_index([&](const int i) {
+                const Span<int> verts = nodes[i].verts();
 
                 tls.positions.resize(verts.size());
                 const MutableSpan<float3> positions = tls.positions;
@@ -679,11 +695,12 @@ static float3 average_unmasked_position(const Object &object,
 
                 tls.factors.resize(verts.size());
                 const MutableSpan<float> factors = tls.factors;
-                fill_factor_from_hide_and_mask(mesh, verts, factors);
+                fill_factor_from_hide_and_mask(
+                    attribute_data.hide_vert, attribute_data.mask, verts, factors);
                 filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
                 accumulate_weighted_average_position(positions, factors, sum);
-              }
+              });
             });
             return sum;
           },
@@ -691,15 +708,16 @@ static float3 average_unmasked_position(const Object &object,
       return float3(math::safe_divide(total.position, total.weight_total));
     }
     case bke::pbvh::Type::Grids: {
+      const Span<bke::pbvh::GridsNode> nodes = pbvh.nodes<bke::pbvh::GridsNode>();
       const SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
-            for (const bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-              const Span<int> grids = bke::pbvh::node_grid_indices(*node);
+            node_mask.slice(range).foreach_index([&](const int i) {
+              const Span<int> grids = nodes[i].grids();
               const MutableSpan positions = gather_grids_positions(
                   subdiv_ccg, grids, tls.positions);
 
@@ -709,21 +727,23 @@ static float3 average_unmasked_position(const Object &object,
               filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
               accumulate_weighted_average_position(positions, factors, sum);
-            }
+            });
             return sum;
           },
           combine_average_position_accumulation);
       return float3(math::safe_divide(total.position, total.weight_total));
     }
     case bke::pbvh::Type::BMesh: {
+      const Span<bke::pbvh::BMeshNode> nodes = pbvh.nodes<bke::pbvh::BMeshNode>();
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
-            for (bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-              const Set<BMVert *, 0> &verts = BKE_pbvh_bmesh_node_unique_verts(node);
+            node_mask.slice(range).foreach_index([&](const int i) {
+              const Set<BMVert *, 0> &verts = BKE_pbvh_bmesh_node_unique_verts(
+                  &const_cast<bke::pbvh::BMeshNode &>(nodes[i]));
               const MutableSpan positions = gather_bmesh_positions(verts, tls.positions);
 
               tls.factors.resize(verts.size());
@@ -732,7 +752,7 @@ static float3 average_unmasked_position(const Object &object,
               filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
               accumulate_weighted_average_position(positions, factors, sum);
-            }
+            });
             return sum;
           },
           combine_average_position_accumulation);
@@ -755,15 +775,19 @@ BLI_NOINLINE static void mask_border_weight_calc(const Span<float> masks,
   }
 };
 
-static float3 average_mask_border_position(const Object &object,
+static float3 average_mask_border_position(const Depsgraph &depsgraph,
+                                           const Object &object,
                                            const float3 &pivot,
                                            const ePaintSymmetryFlags symm)
 {
   const SculptSession &ss = *object.sculpt;
-  bke::pbvh::Tree &pbvh = *ss.pbvh;
+  const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
 
-  Vector<bke::pbvh::Node *> nodes = bke::pbvh::search_gather(
-      pbvh, [&](bke::pbvh::Node &node) { return !node_fully_masked_or_hidden(node); });
+  IndexMaskMemory memory;
+  const IndexMask node_mask = bke::pbvh::search_nodes(
+      pbvh, memory, [&](const bke::pbvh::Node &node) {
+        return !node_fully_masked_or_hidden(node);
+      });
 
   struct LocalData {
     Vector<float> factors;
@@ -774,46 +798,49 @@ static float3 average_mask_border_position(const Object &object,
   threading::EnumerableThreadSpecific<LocalData> all_tls;
   switch (pbvh.type()) {
     case bke::pbvh::Type::Mesh: {
+      const Span<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
       const Mesh &mesh = *static_cast<const Mesh *>(object.data);
-      const Span<float3> vert_positions = BKE_pbvh_get_vert_positions(pbvh);
+      const Span<float3> vert_positions = bke::pbvh::vert_positions_eval(depsgraph, object);
       const bke::AttributeAccessor attributes = mesh.attributes();
       const VArraySpan mask_attr = *attributes.lookup_or_default<float>(
           ".sculpt_mask", bke::AttrDomain::Point, 0.0f);
+      const VArraySpan hide_vert = *attributes.lookup<bool>(".hide_vert", bke::AttrDomain::Point);
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
-            for (const bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-              const Span<int> verts = bke::pbvh::node_unique_verts(*node);
+            node_mask.slice(range).foreach_index([&](const int i) {
+              const Span<int> verts = nodes[i].verts();
               MutableSpan positions = gather_data_mesh(vert_positions, verts, tls.positions);
               MutableSpan masks = gather_data_mesh(mask_attr, verts, tls.masks);
 
               tls.factors.resize(verts.size());
               const MutableSpan<float> factors = tls.factors;
-              fill_factor_from_hide(mesh, verts, factors);
+              fill_factor_from_hide(hide_vert, verts, factors);
 
               mask_border_weight_calc(masks, factors);
               filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
               accumulate_weighted_average_position(positions, factors, sum);
-            }
+            });
             return sum;
           },
           combine_average_position_accumulation);
       return float3(math::safe_divide(total.position, total.weight_total));
     }
     case bke::pbvh::Type::Grids: {
+      const Span<bke::pbvh::GridsNode> nodes = pbvh.nodes<bke::pbvh::GridsNode>();
       const SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
-            for (const bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-              const Span<int> grids = bke::pbvh::node_grid_indices(*node);
+            node_mask.slice(range).foreach_index([&](const int i) {
+              const Span<int> grids = nodes[i].grids();
               const MutableSpan positions = gather_grids_positions(
                   subdiv_ccg, grids, tls.positions);
 
@@ -828,21 +855,23 @@ static float3 average_mask_border_position(const Object &object,
               filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
               accumulate_weighted_average_position(positions, factors, sum);
-            }
+            });
             return sum;
           },
           combine_average_position_accumulation);
       return float3(math::safe_divide(total.position, total.weight_total));
     }
     case bke::pbvh::Type::BMesh: {
+      const Span<bke::pbvh::BMeshNode> nodes = pbvh.nodes<bke::pbvh::BMeshNode>();
       const AveragePositionAccumulation total = threading::parallel_reduce(
-          nodes.index_range(),
+          node_mask.index_range(),
           1,
           AveragePositionAccumulation{},
           [&](const IndexRange range, AveragePositionAccumulation sum) {
             LocalData &tls = all_tls.local();
-            for (bke::pbvh::Node *node : nodes.as_span().slice(range)) {
-              const Set<BMVert *, 0> &verts = BKE_pbvh_bmesh_node_unique_verts(node);
+            node_mask.slice(range).foreach_index([&](const int i) {
+              const Set<BMVert *, 0> &verts = BKE_pbvh_bmesh_node_unique_verts(
+                  &const_cast<bke::pbvh::BMeshNode &>(nodes[i]));
               const MutableSpan positions = gather_bmesh_positions(verts, tls.positions);
 
               tls.masks.resize(verts.size());
@@ -856,7 +885,7 @@ static float3 average_mask_border_position(const Object &object,
               filter_verts_outside_symmetry_area(positions, pivot, symm, factors);
 
               accumulate_weighted_average_position(positions, factors, sum);
-            }
+            });
             return sum;
           },
           combine_average_position_accumulation);
@@ -891,7 +920,7 @@ static int set_pivot_position_exec(bContext *C, wmOperator *op)
   }
   /* Pivot to active vertex. */
   else if (mode == PivotPositionMode::ActiveVert) {
-    copy_v3_v3(ss.pivot_pos, SCULPT_vertex_co_get(ss, ss.active_vert_ref()));
+    copy_v3_v3(ss.pivot_pos, ss.active_vert_position(*depsgraph, ob));
   }
   /* Pivot to ray-cast surface. */
   else if (mode == PivotPositionMode::CursorSurface) {
@@ -905,10 +934,10 @@ static int set_pivot_position_exec(bContext *C, wmOperator *op)
     }
   }
   else if (mode == PivotPositionMode::Unmasked) {
-    ss.pivot_pos = average_unmasked_position(ob, ss.pivot_pos, symm);
+    ss.pivot_pos = average_unmasked_position(*depsgraph, ob, ss.pivot_pos, symm);
   }
   else {
-    ss.pivot_pos = average_mask_border_position(ob, ss.pivot_pos, symm);
+    ss.pivot_pos = average_mask_border_position(*depsgraph, ob, ss.pivot_pos, symm);
   }
 
   /* Update the viewport navigation rotation origin. */

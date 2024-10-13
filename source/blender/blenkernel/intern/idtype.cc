@@ -110,7 +110,7 @@ static void id_type_init()
   UNUSED_VARS_NDEBUG(init_types_num);
 
   { /* Inspect which ID types can be animated, so that IDType_ID_AC.dependencies_id_types can be
-     * set to include those. The runtime ID* cache of animrig::Slot will point to any
+     * set to include those. The runtime ID* cache of #animrig::Slot will point to any
      * ID that is animated by it, and thus can point to any animatable ID type. */
     IDType_ID_AC.dependencies_id_types = 0;
     for (const IDTypeInfo *id_type : id_types) {
@@ -392,7 +392,7 @@ void BKE_idtype_id_foreach_cache(ID *id,
   }
 
   /* Handle 'private IDs'. */
-  bNodeTree *nodetree = blender::bke::ntreeFromID(id);
+  bNodeTree *nodetree = blender::bke::node_tree_from_id(id);
   if (nodetree != nullptr) {
     type_info = BKE_idtype_get_info_from_id(&nodetree->id);
     if (type_info == nullptr) {

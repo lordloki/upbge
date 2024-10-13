@@ -9,7 +9,7 @@
 /* Based on https://github.com/jarikomppa/ipc (Unlicense) */
 
 #  include "BLI_assert.h"
-#  include "BLI_path_util.h"
+#  include "BLI_path_utils.hh"
 #  include "BLI_string_utf8.h"
 #  include <iostream>
 
@@ -269,8 +269,8 @@ bool BlenderSubprocess::create(Span<StringRefNull> args)
   }
 
   char path[PATH_MAX + 1];
-  size_t len = readlink("/proc/self/exe", path, PATH_MAX);
-  if (len == -1) {
+  const size_t len = readlink("/proc/self/exe", path, PATH_MAX);
+  if (len == size_t(-1)) {
     ERROR("readlink");
     return false;
   }
@@ -296,9 +296,16 @@ bool BlenderSubprocess::create(Span<StringRefNull> args)
   /* Child process initialization. */
   execv(path, char_args.data());
 
+  /* This should only be reached if `execvp` fails and stack isn't replaced. */
   ERROR("execv");
-  exit(errno);
 
+  /* Ensure outputs are flushed as `_exit` doesn't flush. */
+  fflush(stdout);
+  fflush(stderr);
+
+  /* Use `_exit` instead of `exit` so Blender's `atexit` cleanup functions don't run. */
+  _exit(errno);
+  BLI_assert_unreachable();
   return false;
 }
 

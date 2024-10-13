@@ -25,7 +25,6 @@ struct Base;
 struct BoundBox;
 struct Curve;
 struct Depsgraph;
-struct GpencilModifierData;
 struct HookGpencilModifierData;
 struct HookModifierData;
 struct ID;
@@ -496,9 +495,9 @@ bool BKE_object_obdata_texspace_get(Object *ob,
                                     float **r_texspace_location,
                                     float **r_texspace_size);
 
-Mesh *BKE_object_get_evaluated_mesh_no_subsurf(const Object *object);
+Mesh *BKE_object_get_evaluated_mesh_no_subsurf(const Object *object_eval);
 /** Get evaluated mesh for given object. */
-Mesh *BKE_object_get_evaluated_mesh(const Object *object);
+Mesh *BKE_object_get_evaluated_mesh(const Object *object_eval);
 /**
  * Same as #BKE_object_get_evaluated_mesh, but does not check
  * if the object's geometry is fully evaluated already.

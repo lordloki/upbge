@@ -550,7 +550,7 @@ static bool init_structDNA(SDNA *sdna, bool do_endian_swap, const char **r_error
     const int mat4x4f_struct_index = DNA_struct_find_index_without_alias_ex(
         sdna, "mat4x4f", &dummy_index);
     if (mat4x4f_struct_index > 0) {
-      SDNA_Struct *struct_info = sdna->structs[mat4x4f_struct_index];
+      const SDNA_Struct *struct_info = sdna->structs[mat4x4f_struct_index];
       const int mat4x4f_type_index = struct_info->type_index;
       sdna->types_alignment[mat4x4f_type_index] = alignof(blender::float4x4);
     }
@@ -1222,8 +1222,8 @@ struct DNA_ReconstructInfo {
 
 static void reconstruct_structs(const DNA_ReconstructInfo *reconstruct_info,
                                 const int blocks,
-                                const int old_struct_nr,
-                                const int new_struct_nr,
+                                const int old_struct_index,
+                                const int new_struct_index,
                                 const char *old_blocks,
                                 char *new_blocks);
 

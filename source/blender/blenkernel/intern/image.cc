@@ -410,13 +410,17 @@ static void image_blend_read_data(BlendDataReader *reader, ID *id)
   BLO_read_struct_list(reader, ImagePackedFile, &(ima->packedfiles));
 
   if (ima->packedfiles.first) {
-    LISTBASE_FOREACH (ImagePackedFile *, imapf, &ima->packedfiles) {
-      BKE_packedfile_blend_read(reader, &imapf->packedfile);
+    LISTBASE_FOREACH_MUTABLE (ImagePackedFile *, imapf, &ima->packedfiles) {
+      BKE_packedfile_blend_read(reader, &imapf->packedfile, imapf->filepath);
+      if (!imapf->packedfile) {
+        BLI_remlink(&ima->packedfiles, imapf);
+        MEM_freeN(imapf);
+      }
     }
     ima->packedfile = nullptr;
   }
   else {
-    BKE_packedfile_blend_read(reader, &ima->packedfile);
+    BKE_packedfile_blend_read(reader, &ima->packedfile, ima->filepath);
   }
 
   BLI_listbase_clear(&ima->anims);
@@ -795,7 +799,7 @@ bool BKE_image_scale(Image *image, int width, int height, ImageUser *iuser)
   ibuf = BKE_image_acquire_ibuf(image, iuser, &lock);
 
   if (ibuf) {
-    IMB_scaleImBuf(ibuf, width, height);
+    IMB_scale(ibuf, width, height, IMBScaleFilter::Box, false);
     BKE_image_mark_dirty(image, ibuf);
   }
 
@@ -2609,7 +2613,7 @@ bool BKE_imbuf_alpha_test(ImBuf *ibuf)
   return false;
 }
 
-int BKE_imbuf_write(ImBuf *ibuf, const char *filepath, const ImageFormatData *imf)
+bool BKE_imbuf_write(ImBuf *ibuf, const char *filepath, const ImageFormatData *imf)
 {
   BKE_image_format_to_imbuf(ibuf, imf);
 
@@ -2623,13 +2627,13 @@ int BKE_imbuf_write(ImBuf *ibuf, const char *filepath, const ImageFormatData *im
   return ok;
 }
 
-int BKE_imbuf_write_as(ImBuf *ibuf,
-                       const char *filepath,
-                       const ImageFormatData *imf,
-                       const bool save_copy)
+bool BKE_imbuf_write_as(ImBuf *ibuf,
+                        const char *filepath,
+                        const ImageFormatData *imf,
+                        const bool save_copy)
 {
   ImBuf ibuf_back = *ibuf;
-  int ok;
+  bool ok;
 
   /* All data is RGBA anyway, this just controls how to save for some formats. */
   ibuf->planes = imf->planes;
@@ -2646,11 +2650,11 @@ int BKE_imbuf_write_as(ImBuf *ibuf,
   return ok;
 }
 
-int BKE_imbuf_write_stamp(const Scene *scene,
-                          const RenderResult *rr,
-                          ImBuf *ibuf,
-                          const char *filepath,
-                          const ImageFormatData *imf)
+bool BKE_imbuf_write_stamp(const Scene *scene,
+                           const RenderResult *rr,
+                           ImBuf *ibuf,
+                           const char *filepath,
+                           const ImageFormatData *imf)
 {
   if (scene && scene->r.stamp & R_STAMP_ALL) {
     BKE_imbuf_stamp_info(rr, ibuf);
@@ -2685,12 +2689,15 @@ ImBufAnim *openanim(const char *filepath,
 
   ibuf = IMB_anim_absolute(anim, 0, IMB_TC_NONE, IMB_PROXY_NONE);
   if (ibuf == nullptr) {
-    if (BLI_exists(filepath)) {
-      printf("not an anim: %s\n", filepath);
+    const char *reason;
+    if (!BLI_exists(filepath)) {
+      reason = "file doesn't exist";
     }
     else {
-      printf("anim file doesn't exist: %s\n", filepath);
+      reason = "not an anim";
     }
+    CLOG_INFO(&LOG, 1, "unable to load anim, %s: %s", reason, filepath);
+
     IMB_free_anim(anim);
     return nullptr;
   }
@@ -3210,7 +3217,7 @@ void BKE_image_signal(Main *bmain, Image *ima, ImageUser *iuser, int signal)
         const int tot_viewfiles = image_num_viewfiles(ima);
         const int tot_files = tot_viewfiles * BLI_listbase_count(&ima->tiles);
 
-        if (tot_files != BLI_listbase_count_at_most(&ima->packedfiles, tot_files + 1)) {
+        if (!BLI_listbase_count_is_equal_to(&ima->packedfiles, tot_files)) {
           /* in case there are new available files to be loaded */
           image_free_packedfiles(ima);
           BKE_image_packfiles(nullptr, ima, ID_BLEND_PATH(bmain, &ima->id));
@@ -4134,7 +4141,7 @@ static ImBuf *image_load_movie_file(Image *ima, ImageUser *iuser, int frame)
   const bool is_multiview = BKE_image_is_multiview(ima);
   const int tot_viewfiles = image_num_viewfiles(ima);
 
-  if (tot_viewfiles != BLI_listbase_count_at_most(&ima->anims, tot_viewfiles + 1)) {
+  if (!BLI_listbase_count_is_equal_to(&ima->anims, tot_viewfiles)) {
     image_free_anims(ima);
 
     for (int i = 0; i < tot_viewfiles; i++) {
@@ -4188,15 +4195,13 @@ static ImBuf *load_image_single(Image *ima,
 {
   char filepath[FILE_MAX];
   ImBuf *ibuf = nullptr;
-  int flag = IB_rect | IB_multilayer;
+  int flag = IB_rect | IB_multilayer | IB_metadata | imbuf_alpha_flags_for_image(ima);
 
   *r_cache_ibuf = true;
   const int tile_number = image_get_tile_number_from_iuser(ima, iuser);
 
   /* is there a PackedFile with this image ? */
   if (has_packed && !is_sequence) {
-    flag |= imbuf_alpha_flags_for_image(ima);
-
     LISTBASE_FOREACH (ImagePackedFile *, imapf, &ima->packedfiles) {
       if (imapf->view == view_id && imapf->tile_number == tile_number) {
         if (imapf->packedfile) {
@@ -4234,8 +4239,6 @@ static ImBuf *load_image_single(Image *ima,
     BKE_image_user_file_path(&iuser_t, ima, filepath);
 
     /* read ibuf */
-    flag |= IB_metadata;
-    flag |= imbuf_alpha_flags_for_image(ima);
     ibuf = IMB_loadiffname(filepath, flag, ima->colorspace_settings.name);
   }
 
@@ -4297,7 +4300,7 @@ static ImBuf *image_load_image_file(
   /* this should never happen, but just playing safe */
   if (!is_sequence && has_packed) {
     const int totfiles = tot_viewfiles * BLI_listbase_count(&ima->tiles);
-    if (totfiles != BLI_listbase_count_at_most(&ima->packedfiles, totfiles + 1)) {
+    if (!BLI_listbase_count_is_equal_to(&ima->packedfiles, totfiles)) {
       image_free_packedfiles(ima);
       has_packed = false;
     }
@@ -4919,7 +4922,7 @@ ImBuf *BKE_image_preview(Image *ima, const short max_size, short *r_width, short
   BKE_image_release_ibuf(ima, image_ibuf, lock);
 
   /* Resize. */
-  IMB_scaleImBuf(preview, scale * image_ibuf->x, scale * image_ibuf->y);
+  IMB_scale(preview, scale * image_ibuf->x, scale * image_ibuf->y, IMBScaleFilter::Box, false);
   IMB_rect_from_float(preview);
 
   return preview;

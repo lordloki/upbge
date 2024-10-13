@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2004 Blender Authors
+/* SPDX-FileCopyrightText: 2004-2024 Blender Authors
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
@@ -11,15 +11,17 @@
 #include "DNA_scene_types.h"
 
 struct BlendDataReader;
-struct BlendLibReader;
 struct BlendWriter;
 struct Depsgraph;
 struct Editing;
 struct Main;
 struct MetaStack;
 struct Scene;
+struct SeqTimelineChannel;
 struct Sequence;
 struct SequencerToolSettings;
+
+constexpr int SEQ_MAX_CHANNELS = 128;
 
 /* RNA enums, just to be more readable */
 enum {
@@ -34,7 +36,6 @@ enum {
 /* seq_dupli' flags */
 #define SEQ_DUPE_UNIQUE_NAME (1 << 0)
 #define SEQ_DUPE_ALL (1 << 3) /* otherwise only selected are copied */
-#define SEQ_DUPE_IS_RECURSIVE_CALL (1 << 4)
 
 SequencerToolSettings *SEQ_tool_settings_init();
 SequencerToolSettings *SEQ_tool_settings_ensure(Scene *scene);
@@ -96,7 +97,7 @@ void SEQ_sequence_base_dupli_recursive(const Scene *scene_src,
                                        const ListBase *seqbase,
                                        int dupe_flag,
                                        int flag);
-bool SEQ_valid_strip_channel(Sequence *seq);
+bool SEQ_is_valid_strip_channel(const Sequence *seq);
 
 /**
  * Read and Write functions for `.blend` file data.
@@ -115,13 +116,6 @@ void SEQ_doversion_250_sound_proxy_update(Main *bmain, Editing *ed);
  */
 void SEQ_eval_sequences(Depsgraph *depsgraph, Scene *scene, ListBase *seqbase);
 
-/* Defined in `sequence_lookup.cc`. */
-
-enum eSequenceLookupTag {
-  SEQ_LOOKUP_TAG_INVALID = (1 << 0),
-};
-ENUM_OPERATORS(eSequenceLookupTag, SEQ_LOOKUP_TAG_INVALID)
-
 /**
  * Find a sequence with a given name.
  * If lookup hash doesn't exist, it will be created. If hash is tagged as invalid, it will be
@@ -135,15 +129,20 @@ ENUM_OPERATORS(eSequenceLookupTag, SEQ_LOOKUP_TAG_INVALID)
 Sequence *SEQ_sequence_lookup_seq_by_name(const Scene *scene, const char *key);
 
 /**
+ * Find which meta strip the given timeline channel belongs to. Returns nullptr if it is a global
+ * channel.
+ */
+Sequence *SEQ_sequence_lookup_owner_by_channel(const Scene *scene,
+                                               const SeqTimelineChannel *channel);
+
+/**
  * Free lookup hash data.
  *
  * \param scene: scene that owns lookup hash
  */
 void SEQ_sequence_lookup_free(const Scene *scene);
+
 /**
- * Find a sequence with a given name.
- *
- * \param scene: scene that owns lookup hash
- * \param tag: tag to set
+ * Mark sequence lookup as invalid (i.e. will need rebuilding).
  */
-void SEQ_sequence_lookup_tag(const Scene *scene, eSequenceLookupTag tag);
+void SEQ_sequence_lookup_invalidate(const Scene *scene);

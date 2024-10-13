@@ -14,12 +14,12 @@
 
 #include "BKE_context.hh"
 
-#include "../generic/python_utildefines.h"
+#include "../generic/python_utildefines.hh"
 
-#include "BPY_extern.h"
-#include "bpy_capi_utils.h"
+#include "BPY_extern.hh"
+#include "bpy_capi_utils.hh"
 
-#include "bpy_rna_operator.h" /* Own include, #BPY_rna_operator_poll_message_set_method_def. */
+#include "bpy_rna_operator.hh" /* Own include, #BPY_rna_operator_poll_message_set_method_def. */
 
 /* -------------------------------------------------------------------- */
 /** \name Operator `poll_message_set` Method
@@ -128,7 +128,7 @@ static PyObject *BPY_rna_operator_poll_message_set(PyObject * /*self*/, PyObject
   bContextPollMsgDyn_Params params{};
   params.get_fn = pyop_poll_message_get_fn;
   params.free_fn = pyop_poll_message_free_fn;
-  params.user_data = Py_INCREF_RET(args);
+  params.user_data = Py_NewRef(args);
 
   CTX_wm_operator_poll_msg_set_dynamic(C, &params);
 

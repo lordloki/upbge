@@ -1006,7 +1006,7 @@ void UI_block_direction_set(uiBlock *block, char direction);
  */
 void UI_block_flag_enable(uiBlock *block, int flag);
 void UI_block_flag_disable(uiBlock *block, int flag);
-void UI_block_translate(uiBlock *block, int x, int y);
+void UI_block_translate(uiBlock *block, float x, float y);
 
 int UI_but_return_value_get(uiBut *but);
 
@@ -1032,6 +1032,12 @@ void UI_but_dragflag_disable(uiBut *but, int flag);
 void UI_but_disable(uiBut *but, const char *disabled_hint);
 
 void UI_but_type_set_menu_from_pulldown(uiBut *but);
+
+/**
+ * Sets the button's color, normally only used to recolor the icon. In the
+ * special case of UI_BTYPE_LABEL without icon this is used as text color.
+ */
+void UI_but_color_set(uiBut *but, const uchar color[4]);
 
 /**
  * Set at hint that describes the expected value when empty.
@@ -1793,6 +1799,10 @@ void UI_but_label_alpha_factor_set(uiBut *but, float alpha_factor);
 
 void UI_but_search_preview_grid_size_set(uiBut *but, int rows, int cols);
 
+void UI_but_view_item_draw_size_set(uiBut *but,
+                                    const std::optional<int> draw_width = std::nullopt,
+                                    const std::optional<int> draw_height = std::nullopt);
+
 void UI_block_func_handle_set(uiBlock *block, uiBlockHandleFunc func, void *arg);
 void UI_block_func_set(uiBlock *block, uiButHandleFunc func, void *arg1, void *arg2);
 void UI_block_funcN_set(uiBlock *block,
@@ -1803,6 +1813,8 @@ void UI_block_funcN_set(uiBlock *block,
                         uiButArgNCopy func_argN_copy_fn = MEM_dupallocN);
 
 void UI_but_func_rename_set(uiBut *but, uiButHandleRenameFunc func, void *arg1);
+void UI_but_func_rename_full_set(uiBut *but,
+                                 std::function<void(std::string &new_name)> rename_full_func);
 void UI_but_func_set(uiBut *but, uiButHandleFunc func, void *arg1, void *arg2);
 void UI_but_funcN_set(uiBut *but,
                       uiButHandleNFunc funcN,
@@ -2468,9 +2480,9 @@ void uiTemplateID(uiLayout *layout,
                   const char *newop,
                   const char *openop,
                   const char *unlinkop,
-                  int filter,
-                  bool live_icon,
-                  const char *text);
+                  int filter = UI_TEMPLATE_ID_FILTER_ALL,
+                  bool live_icon = false,
+                  const char *text = nullptr);
 void uiTemplateIDBrowse(uiLayout *layout,
                         bContext *C,
                         PointerRNA *ptr,
@@ -2478,8 +2490,8 @@ void uiTemplateIDBrowse(uiLayout *layout,
                         const char *newop,
                         const char *openop,
                         const char *unlinkop,
-                        int filter,
-                        const char *text);
+                        int filter = UI_TEMPLATE_ID_FILTER_ALL,
+                        const char *text = nullptr);
 void uiTemplateIDPreview(uiLayout *layout,
                          bContext *C,
                          PointerRNA *ptr,
@@ -2489,8 +2501,8 @@ void uiTemplateIDPreview(uiLayout *layout,
                          const char *unlinkop,
                          int rows,
                          int cols,
-                         int filter,
-                         bool hide_buttons);
+                         int filter = UI_TEMPLATE_ID_FILTER_ALL,
+                         bool hide_buttons = false);
 /**
  * Version of #uiTemplateID using tabs.
  */
@@ -2500,7 +2512,7 @@ void uiTemplateIDTabs(uiLayout *layout,
                       const char *propname,
                       const char *newop,
                       const char *menu,
-                      int filter);
+                      int filter = UI_TEMPLATE_ID_FILTER_ALL);
 /**
  * This is for selecting the type of ID-block to use,
  * and then from the relevant type choosing the block to use.
@@ -2514,18 +2526,36 @@ void uiTemplateAnyID(uiLayout *layout,
                      const char *propname,
                      const char *proptypename,
                      const char *text);
+
+/**
+ * Action selector.
+ *
+ * This is a specialization of #uiTemplateID, hard-coded to assign Actions to the given ID.
+ * Such a specialization is necessary, as the RNA property (`id.animation_data.action`) does not
+ * exist when the ID's `adt` pointer is `nullptr`. In that case uiTemplateID will not be able
+ * to find the RNA type of that property, which in turn it needs to determine the type of IDs to
+ * show.
+ */
+void uiTemplateAction(uiLayout *layout,
+                      const bContext *C,
+                      ID *id,
+                      const char *newop,
+                      const char *unlinkop,
+                      const char *text);
+
 /**
  * Search menu to pick an item from a collection.
  * A version of uiTemplateID that works for non-ID types.
  */
 void uiTemplateSearch(uiLayout *layout,
-                      bContext *C,
+                      const bContext *C,
                       PointerRNA *ptr,
                       const char *propname,
                       PointerRNA *searchptr,
                       const char *searchpropname,
                       const char *newop,
-                      const char *unlinkop);
+                      const char *unlinkop,
+                      const char *text = nullptr);
 void uiTemplateSearchPreview(uiLayout *layout,
                              bContext *C,
                              PointerRNA *ptr,
@@ -2535,7 +2565,8 @@ void uiTemplateSearchPreview(uiLayout *layout,
                              const char *newop,
                              const char *unlinkop,
                              int rows,
-                             int cols);
+                             int cols,
+                             const char *text = nullptr);
 /**
  * This is creating/editing RNA-Paths
  *
@@ -3059,6 +3090,9 @@ void uiItemsFullEnumO_items(uiLayout *layout,
 struct uiPropertySplitWrapper {
   uiLayout *label_column;
   uiLayout *property_row;
+  /**
+   * Column for decorators. Note that this may be null, see #uiItemPropertySplitWrapperCreate().
+   */
   uiLayout *decorate_column;
 };
 
@@ -3066,13 +3100,20 @@ struct uiPropertySplitWrapper {
  * Normally, we handle the split layout in #uiItemFullR(), but there are other cases where the
  * logic is needed. Ideally, #uiItemFullR() could just call this, but it currently has too many
  * special needs.
+ *
+ * The returned #uiPropertySplitWrapper.decorator_column may be null when decorators are disabled
+ * (#uiLayoutGetPropDecorate() returns false).
  */
 uiPropertySplitWrapper uiItemPropertySplitWrapperCreate(uiLayout *parent_layout);
 
 void uiItemL(uiLayout *layout, const char *name, int icon); /* label */
 uiBut *uiItemL_ex(uiLayout *layout, const char *name, int icon, bool highlight, bool redalert);
 /**
- * Helper to add a label and creates a property split layout if needed.
+ * Helper to add a label using a property split layout if needed. After calling this the
+ * active layout will be the one to place the labeled items in. An additional layout may be
+ * returned to place decorator buttons in.
+ *
+ * \return the layout to place decorators in, if #UI_ITEM_PROP_SEP is enabled. Otherwise null.
  */
 uiLayout *uiItemL_respect_property_split(uiLayout *layout, const char *text, int icon);
 /**
@@ -3261,7 +3302,7 @@ void UI_context_active_but_prop_get_filebrowser(const bContext *C,
  *
  * This is for browsing and editing the ID-blocks used.
  */
-void UI_context_active_but_prop_get_templateID(bContext *C,
+void UI_context_active_but_prop_get_templateID(const bContext *C,
                                                PointerRNA *r_ptr,
                                                PropertyRNA **r_prop);
 ID *UI_context_active_but_get_tab_ID(bContext *C);
@@ -3384,7 +3425,6 @@ void UI_but_ensure_in_view(const bContext *C, ARegion *region, const uiBut *but)
 
 /* UI_butstore_ helpers */
 struct uiButStore;
-struct uiButStoreElem;
 
 /**
  * Create a new button store, the caller must manage and run #UI_butstore_free
@@ -3455,6 +3495,7 @@ ARegion *UI_tooltip_create_from_search_item_generic(bContext *C,
 
 /* Typical UI text */
 #define UI_FSTYLE_WIDGET (const uiFontStyle *)&(UI_style_get()->widget)
+#define UI_FSTYLE_TOOLTIP (const uiFontStyle *)&(UI_style_get()->tooltip)
 
 /**
  * Returns the best "UI" precision for given floating value,

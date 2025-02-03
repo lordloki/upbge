@@ -163,6 +163,7 @@ RAS_OpenGLRasterizer::~RAS_OpenGLRasterizer()
 
 unsigned short RAS_OpenGLRasterizer::GetNumLights() const
 {
+#ifndef __APPLE__
   int numlights = 0;
   glGetIntegerv(GL_MAX_LIGHTS, (GLint *)&numlights);
 
@@ -170,6 +171,9 @@ unsigned short RAS_OpenGLRasterizer::GetNumLights() const
     return 8;
   }
   return numlights;
+#else
+  return 8;
+#endif
 }
 
 void RAS_OpenGLRasterizer::Enable(RAS_Rasterizer::EnableBit bit)

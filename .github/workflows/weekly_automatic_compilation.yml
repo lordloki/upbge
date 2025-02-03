@@ -15,13 +15,16 @@ jobs:
   build:
     name: Build UPBGE (${{ matrix.os }} - ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    if: matrix.os == 'rockylinux'
+    container:
+      image: rockylinux/rockylinux:8
 
     strategy:
       matrix:
         include:
           - os: rockylinux
             arch: x86_64
-            runner: rocky-8-latest
+            runner: ubuntu-latest
 
           - os: windows
             arch: x86_64

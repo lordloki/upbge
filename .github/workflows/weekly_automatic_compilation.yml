@@ -88,7 +88,7 @@ jobs:
 
       - name: Download Precompiled Libs (Linux)
         if: matrix.os == 'linux'
-        run: cd upbge && ./build_files/utils/make_update.py --use-linux-libs
+        run: cd upbge && ./build_files/utils/make_update.py --use-linux-libraries
 
       - name: Download Precompiled Libs (macOS)
         if: matrix.os == 'macos'

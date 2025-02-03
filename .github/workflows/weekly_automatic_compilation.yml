@@ -97,20 +97,7 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake -S upbge -B build \
-               -C upbge/build_files/cmake/config/blender_release.cmake \
-               -DWITH_GAMEENGINE=ON \
-               -DWITH_PLAYER=ON \
-               -DCMAKE_BUILD_TYPE=Release \
-               -DWITH_INSTALL_PORTABLE=ON \
-               -DWITH_MOD_OCEANSIM=ON \
-               -DWITH_CYCLES=ON \
-               -DWITH_LIBMV=ON \
-               -DWITH_LIBMV_SCHUR_SPECIALIZATIONS=ON \
-               -DWITH_HYDRA=ON \
-               -DWITH_VULKAN_BACKEND=ON \
-               -DWITH_GHOST_WAYLAND=ON \
-               -DPYTHON_VERSION=${{env.PYTHON_VERSION}}
+          cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DWITH_WINDOWS_RELEASE_PDB=OFF -DCMAKE_BUILD_TYPE=Release -DWITH_VULKAN_BACKEND=ON -DWITH_GHOST_WAYLAND=ON -DPYTHON_VERSION=${{env.PYTHON_VERSION}}
 
       - name: Build UPBGE (Linux/macOS)
         if: matrix.os != 'windows'

@@ -128,18 +128,44 @@ jobs:
       - name: Archive Build (Linux/macOS)
         if: matrix.os != 'windows'
         run: |
-          DATE=$(date +"%Y-%m-%d")
-          tar zcvf upbge-${{ matrix.os }}-${{ matrix.arch }}-$DATE.tar.gz build/bin
+          tar zcvf upbge-${{ matrix.os }}-${{ matrix.arch }}.tar.gz build/bin
 
       - name: Archive Build (Windows)
         if: matrix.os == 'windows'
         run: |
-          $DATE = Get-Date -Format "yyyy-MM-dd"
-          Compress-Archive -Path build\bin -DestinationPath upbge-${{ matrix.os }}-${{ matrix.arch }}-$DATE.zip
+          Compress-Archive -Path build\bin -DestinationPath upbge-${{ matrix.os }}-${{ matrix.arch }}.zip
 
       - name: Upload Build as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: upbge-${{ matrix.os }}-${{ matrix.arch }}
-          path: upbge-${{ matrix.os }}-${{ matrix.arch }}-*.*
+          name: upbge-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_date }}
+          path: upbge-${{ matrix.os }}-${{ matrix.arch }}.*
           retention-days: 7
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: weekly-build-${{ github.run_number }}
+          name: Weekly UPBGE Build # Nombre en la página de Releases
+          body: |
+            **Automated Weekly Build of UPBGE**
+            - Linux (x86_64)
+            - Windows (x86_64, ARM64)
+            - macOS (Intel, ARM64)
+
+            Download the corresponding file for your OS below.
+          draft: false
+          prerelease: false
+          files: artifacts/**/*

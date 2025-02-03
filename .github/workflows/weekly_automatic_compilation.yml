@@ -114,11 +114,15 @@ jobs:
         if: matrix.os == 'rockylinux'
         run: make -C build -j `nproc`
 
-      - name: Build UPBGE (macOS / Windows)
-        if: matrix.os != 'rockylinux'
+      - name: Build UPBGE (macOS)
+        if: matrix.os == 'macOS'
         run: make -C build
+        
+      - name: Build UPBGE (Windows)
+        if: matrix.os == 'windows'
+        run: cmake --build build --target install --config Release
 
-      - name: Copy Release Scripts
+      - name: Copy Release Scripts (Linux - Rocky / macOS)
         run: make -C build install
 
       - name: Archive Build (Linux/macOS)

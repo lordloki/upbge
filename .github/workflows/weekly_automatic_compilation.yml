@@ -22,27 +22,22 @@ jobs:
           - os: ubuntu
             arch: x86_64
             runner: ubuntu-24.04
-            update_libs: "--use-linux-libraries"
 
           - os: windows
             arch: x86_64
             runner: windows-latest
-            update_libs: ""
 
           - os: windows
             arch: arm64
             runner: windows-latest
-            update_libs: ""
 
           - os: macos
             arch: x86_64
             runner: macos-13
-            update_libs: ""
 
           - os: macos
             arch: arm64
             runner: macos-14
-            update_libs: ""
 
     steps:
       - name: Checkout sources
@@ -91,9 +86,17 @@ jobs:
         run: |
           brew install ninja cmake
 
-      - name: Download Precompiled Libs
-        run: |
-          cd upbge && ./build_files/utils/make_update.py ${{ matrix.update_libs }}
+      - name: Download Precompiled Libs (Linux)
+        if: matrix.os == 'ubuntu'
+        run: cd upbge && ./build_files/utils/make_update.py --use-linux-libraries
+
+      - name: Download Precompiled Libs (macOS)
+        if: matrix.os == 'macos'
+        run: cd upbge && make update
+
+      - name: Download Precompiled Libs (Windows)
+        if: matrix.os == 'windows'
+        run: cd upbge && make.bat update
 
       - name: Configure CMake
         run: |

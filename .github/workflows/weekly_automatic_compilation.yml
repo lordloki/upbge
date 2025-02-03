@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu
+          - os: linux
             arch: x86_64
             runner: ubuntu-24.04
 
@@ -67,7 +67,7 @@ jobs:
           python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
 
       - name: Install Dependencies (Linux)
-        if: matrix.os == 'ubuntu'
+        if: matrix.os == 'linux'
         run: |
           sudo apt update && \
           sudo apt dist-upgrade && \
@@ -87,7 +87,7 @@ jobs:
           brew install ninja cmake
 
       - name: Download Precompiled Libs (Linux)
-        if: matrix.os == 'ubuntu'
+        if: matrix.os == 'linux'
         run: cd upbge && ./build_files/utils/make_update.py --use-linux-libs
 
       - name: Download Precompiled Libs (macOS)
@@ -99,7 +99,7 @@ jobs:
         run: cd upbge && echo y | ./make.bat update
 
       - name: Configure CMake (Linux)
-        if: matrix.os == 'ubuntu'
+        if: matrix.os == 'linux'
         run: cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_INSTALL_PORTABLE=ON -DWITH_VULKAN_BACKEND=ON -DWITH_GHOST_WAYLAND=ON -DPYTHON_VERSION="3.11"
 
       - name: Configure CMake (Windows)
@@ -111,7 +111,7 @@ jobs:
         run: cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DCMAKE_BUILD_TYPE=Release -DPYTHON_VERSION="3.11"
 
       - name: Build UPBGE (Linux)
-        if: matrix.os == 'ubuntu'
+        if: matrix.os == 'linux'
         run: make -C build -j `nproc`
 
       - name: Build UPBGE (macOS)

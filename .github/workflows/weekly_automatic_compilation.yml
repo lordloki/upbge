@@ -2,11 +2,11 @@ name: weekly-automatic-compilations
 
 on:
   schedule:
-    - cron: "0 1 * * 0" # Ejecutar los domingos a la 1 AM UTC
+    - cron: "0 1 * * 0" # Execute Sundays at 1 AM UTC
   workflow_dispatch:
 
 permissions:
-  contents: write  # Necesario para publicar en GitHub Releases
+  contents: write  # Necessary to publish on GitHub Releases
 
 env:
   PYTHON_VERSION: "3.11"
@@ -19,9 +19,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu
+          - os: rockylinux
             arch: x86_64
-            runner: ubuntu-24.04
+            runner: rocky-8-latest
 
           - os: windows
             arch: x86_64
@@ -66,15 +66,15 @@ jobs:
           python get-pip.py
           python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
 
-      - name: Install Dependencies (Linux)
-        if: matrix.os == 'ubuntu'
+      - name: Install Dependencies (Linux - Rocky)
+        if: matrix.os == 'rockylinux'
         run: |
-          sudo apt update && \
-          sudo apt dist-upgrade && \
-          sudo apt install -y build-essential git-lfs git subversion cmake ninja-build \
-            cmake-curses-gui cmake-gui patch libx11-dev \
-            libxxf86vm-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libegl-dev \
-            libwayland-dev wayland-protocols libxkbcommon-dev libdbus-1-dev linux-libc-dev
+          sudo dnf update -y && \
+          sudo dnf install -y epel-release && \
+          sudo dnf groupinstall -y "Development Tools" && \
+          sudo dnf install -y git-lfs git subversion cmake ninja-build \
+            patch libX11-devel libXxf86vm-devel libXcursor-devel libXi-devel libXrandr-devel libXinerama-devel \
+            mesa-libEGL-devel wayland-devel wayland-protocols libxkbcommon-devel dbus-devel kernel-headers
 
       - name: Install Dependencies (Windows)
         if: matrix.os == 'windows'
@@ -86,9 +86,9 @@ jobs:
         run: |
           brew install ninja cmake
 
-      - name: Download Precompiled Libs (Linux)
-        if: matrix.os == 'ubuntu'
-        run: cd upbge && ./build_files/utils/make_update.py --use-linux-libraries
+      - name: Download Precompiled Libs (Linux - Rocky)
+        if: matrix.os == 'rockylinux'
+        run: cd upbge && ./build_files/utils/make_update.py --use-linux-libs
 
       - name: Download Precompiled Libs (macOS)
         if: matrix.os == 'macos'
@@ -98,8 +98,8 @@ jobs:
         if: matrix.os == 'windows'
         run: cd upbge && echo y | ./make.bat update
 
-      - name: Configure CMake (Linux)
-        if: matrix.os == 'ubuntu'
+      - name: Configure CMake (Linux - Rocky)
+        if: matrix.os == 'rockylinux'
         run: cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_INSTALL_PORTABLE=ON -DWITH_VULKAN_BACKEND=ON -DWITH_GHOST_WAYLAND=ON -DPYTHON_VERSION="3.11"
 
       - name: Configure CMake (Windows)
@@ -110,61 +110,32 @@ jobs:
         if: matrix.os == 'macos'
         run: cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DCMAKE_BUILD_TYPE=Release -DPYTHON_VERSION="3.11"
 
-      - name: Build UPBGE (Linux)
-        if: matrix.os == 'ubuntu'
+      - name: Build UPBGE (Linux - Rocky)
+        if: matrix.os == 'rockylinux'
         run: make -C build -j `nproc`
 
-      - name: Build UPBGE (macOS)
-        if: matrix.os == 'macos'
-        run: make -C build
-
-      - name: Build UPBGE (Windows)
-        if: matrix.os == 'windows'
+      - name: Build UPBGE (macOS / Windows)
+        if: matrix.os != 'rockylinux'
         run: make -C build
 
       - name: Copy Release Scripts
-        if: matrix.os == 'ubuntu'
         run: make -C build install
 
       - name: Archive Build (Linux/macOS)
         if: matrix.os != 'windows'
-        run: tar zcvf upbge-${{ matrix.os }}-${{ matrix.arch }}.tar.gz build
+        run: |
+          DATE=$(date +"%Y-%m-%d")
+          tar zcvf upbge-${{ matrix.os }}-${{ matrix.arch }}-$DATE.tar.gz build/bin
 
       - name: Archive Build (Windows)
         if: matrix.os == 'windows'
-        run: Compress-Archive -Path build -DestinationPath upbge-${{ matrix.os }}-${{ matrix.arch }}.zip
+        run: |
+          $DATE = Get-Date -Format "yyyy-MM-dd"
+          Compress-Archive -Path build\bin -DestinationPath upbge-${{ matrix.os }}-${{ matrix.arch }}-$DATE.zip
 
       - name: Upload Build as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: blender-${{ matrix.os }}-${{ matrix.arch }}
-          path: upbge-${{ matrix.os }}-${{ matrix.arch }}.*
+          name: upbge-${{ matrix.os }}-${{ matrix.arch }}
+          path: upbge-${{ matrix.os }}-${{ matrix.arch }}-*.zip
           retention-days: 7
-
-  release:
-    name: Publish Release
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: weekly-build-${{ github.run_number }}
-          name: Weekly UPBGE Build # Nombre en la página de Releases
-          body: |
-            **Automated Weekly Build of UPBGE**
-            - Linux (x86_64)
-            - Windows (x86_64, ARM64)
-            - macOS (Intel, ARM64)
-
-            Download the corresponding file for your OS below.
-          draft: false
-          prerelease: false
-          files: artifacts/**/*

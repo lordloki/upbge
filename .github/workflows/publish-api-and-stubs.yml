@@ -2,248 +2,158 @@ name: publish-api-and-stubs
 
 on:
   schedule:
-    - cron: "0 1 * * *" # Run at 1 AM UTC
-  
-  # Allows you to run this workflow manually from the Actions tab
+    - cron: "0 1 * * 0" # Ejecutar los domingos a la 1 AM UTC
   workflow_dispatch:
-  
+
 permissions:
-  contents: read
+  contents: write  # Necesario para publicar en GitHub Releases
 
 env:
   PYTHON_VERSION: "3.11"
 
 jobs:
   build:
-    name: Build UPBGE
-    runs-on: ubuntu-24.04
+    name: Build UPBGE (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu
+            arch: x86_64
+            runner: ubuntu-24.04
+            update_libs: "--use-linux-libraries"
+
+          - os: windows
+            arch: x86_64
+            runner: windows-latest
+            update_libs: "--use-windows-libraries"
+
+          - os: windows
+            arch: arm64
+            runner: windows-latest
+            update_libs: "--use-windows-libraries"
+
+          - os: macos
+            arch: x86_64
+            runner: macos-13
+            update_libs: "--use-macos-libraries"
+
+          - os: macos
+            arch: arm64
+            runner: macos-14
+            update_libs: "--use-macos-libraries"
 
     steps:
-    - name: Setup APT
-      run: |
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/03oracular.list \
-          -o /etc/apt/sources.list.d/03oracular.list && \
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/03ubuntu \
-          -o /etc/apt/apt.conf.d/03ubuntu
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          repository: "UPBGE/upbge"
+          ref: "master"
+          path: "upbge"
+          submodules: recursive
 
-    - name: Install Tools
-      run: | 
-        sudo apt update && \
-        sudo apt dist-upgrade && \
-        sudo apt install -y build-essential git-lfs git subversion cmake ninja-build \
-          cmake-curses-gui cmake-gui patch libx11-dev \
-          libxxf86vm-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libegl-dev \
-          libwayland-dev wayland-protocols libxkbcommon-dev libdbus-1-dev linux-libc-dev
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: 
+          python-version: '${{env.PYTHON_VERSION}}'
 
-    - name: Install Python
-      uses: actions/setup-python@v5
-      with: 
-        python-version: '${{env.PYTHON_VERSION}}'
+      - name: Install Python Dependencies
+        run: | 
+          curl https://bootstrap.pypa.io/get-pip.py | python && \
+          python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
 
-    - name: Install Python Dependencies
-      run: | 
-        curl https://bootstrap.pypa.io/get-pip.py | python && \
-        python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
+      - name: Install Dependencies (Linux)
+        if: matrix.os == 'ubuntu'
+        run: |
+          sudo apt update && \
+          sudo apt dist-upgrade && \
+          sudo apt install -y build-essential git-lfs git subversion cmake ninja-build \
+            cmake-curses-gui cmake-gui patch libx11-dev \
+            libxxf86vm-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libegl-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev libdbus-1-dev linux-libc-dev
 
-    - name: Setup Python Path
-      run: |
-        sudo sh -c "echo '$pythonLocation/lib' >> /etc/ld.so.conf.d/python.conf" && \
-        sudo ldconfig
+      - name: Install Dependencies (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          choco install ninja cmake git
 
-    - name: Checkout sources
-      uses: actions/checkout@v3
-      with:
-        repository: "UPBGE/upbge"
-        ref: "master"
-        path: "upbge"
+      - name: Install Dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          brew install ninja cmake
 
-    - name: Checkout Submodules
-      run: |
-        cd upbge/scripts && \
-        git submodule sync && \
-        git submodule update --init --recursive --remote && \
-        git submodule foreach 'branch=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed "s|origin/||"); git checkout $branch && git pull --rebase origin $branch'
-        
-    - name: Download Precompiled Libs
-      run: |
-        cd upbge && \
-        ./build_files/utils/make_update.py --use-linux-libraries
-        
-    - name: Configure CMake
-      run: |
-        cmake -S upbge -B build \
-                 -C upbge/build_files/cmake/config/blender_release.cmake \
-                 -DWITH_GAMEENGINE=ON \
-                 -DWITH_PLAYER=OFF \
-                 -DCMAKE_BUILD_TYPE=Release \
-                 -DWITH_INSTALL_PORTABLE=ON \
-                 -DWITH_MOD_OCEANSIM=OFF \
-                 -DWITH_CYCLES=OFF \
-                 -DWITH_LIBMV=OFF \
-                 -DWITH_LIBMV_SCHUR_SPECIALIZATIONS=OFF \
-                 -DWITH_HYDRA=OFF \
-                 -DWITH_VULKAN_BACKEND=OFF \
-                 -DWITH_GHOST_WAYLAND=OFF \
-                 -DPYTHON_VERSION=${{env.PYTHON_VERSION}}
+      - name: Download Precompiled Libs
+        run: |
+          cd upbge && ./build_files/utils/make_update.py ${{ matrix.update_libs }}
 
-    - name: Build UPBGE
-      run:  make -C build -j `nproc`
+      - name: Configure CMake
+        run: |
+          cmake -S upbge -B build \
+               -C upbge/build_files/cmake/config/blender_release.cmake \
+               -DWITH_GAMEENGINE=ON \
+               -DWITH_PLAYER=ON \
+               -DCMAKE_BUILD_TYPE=Release \
+               -DWITH_INSTALL_PORTABLE=ON \
+               -DWITH_MOD_OCEANSIM=ON \
+               -DWITH_CYCLES=ON \
+               -DWITH_LIBMV=ON \
+               -DWITH_LIBMV_SCHUR_SPECIALIZATIONS=ON \
+               -DWITH_HYDRA=ON \
+               -DWITH_VULKAN_BACKEND=ON \
+               -DWITH_GHOST_WAYLAND=ON \
+               -DPYTHON_VERSION=${{env.PYTHON_VERSION}}
 
-    - name: Copy Release Scripts
-      run: make -C build install
-      
-    - name: Archive Build
-      if: ${{ !env.ACT }}
-      run: tar zcvf build.tar.gz build
+      - name: Build UPBGE (Linux/macOS)
+        if: matrix.os != 'windows'
+        run: make -C build -j `nproc`
 
-    - name: Upload Build
-      if: ${{ !env.ACT }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: blender
-        path: build.tar.gz
-        retention-days: 3
+      - name: Build UPBGE (Windows)
+        if: matrix.os == 'windows'
+        run: cmake --build build --config Release --parallel
 
-  publish_api:
-    name: Publish API Documentation
-    runs-on: ubuntu-24.04
-    needs: [build]
+      - name: Copy Release Scripts
+        run: make -C build install || cmake --install build --prefix install
 
-    steps:
-    - name: Download Build
-      if: ${{ !env.ACT }}
-      uses: actions/download-artifact@v4
-      with:
-        name: blender
+      - name: Archive Build (Linux/macOS)
+        if: matrix.os != 'windows'
+        run: tar zcvf upbge-${{ matrix.os }}-${{ matrix.arch }}.tar.gz build
 
-    - name: Extract Build
-      if: ${{ !env.ACT }}
-      run: tar zxvf build.tar.gz
+      - name: Archive Build (Windows)
+        if: matrix.os == 'windows'
+        run: Compress-Archive -Path build -DestinationPath upbge-${{ matrix.os }}-${{ matrix.arch }}.zip
 
-    - name: Setup APT
-      run: |
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/03oracular.list \
-          -o /etc/apt/sources.list.d/03oracular.list && \
-        sudo curl https://raw.githubusercontent.com/UPBGE/upbge/master/.github/workflows/03ubuntu \
-          -o /etc/apt/apt.conf.d/03ubuntu
+      - name: Upload Build as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-${{ matrix.os }}-${{ matrix.arch }}
+          path: upbge-${{ matrix.os }}-${{ matrix.arch }}.*
+          retention-days: 7
 
-    - name: Install Tools
-      run: | 
-        sudo apt update && \
-        sudo apt dist-upgrade && \
-        sudo apt install -y libxi6 libxxf86vm1 libxfixes3 libgl1 libx11-dev wayland-protocols
-
-    - name: Install Python
-      uses: actions/setup-python@v5
-      with: 
-        python-version: '${{env.PYTHON_VERSION}}'
-
-    - name: Install Python Dependencies
-      run: | 
-        curl https://bootstrap.pypa.io/get-pip.py | python && \
-        python -m pip install sphinx furo yapf tqdm numpy
-
-    - name: Setup Python Path
-      run: |
-        sudo sh -c "echo '$pythonLocation/lib' >> /etc/ld.so.conf.d/python.conf" && \
-        sudo ldconfig
-
-    - name: Checkout sources
-      uses: actions/checkout@v3
-      with:
-        repository: "UPBGE/upbge"
-        ref: "master"
-        path: "upbge"
-
-    - name: Prepare API Documentation
-      working-directory: build
-      run: | 
-        rm -Rf bin/4.4/python && \
-        bin/blender --python-use-system-env --background -noaudio --factory-startup \
-                    --python ../upbge/doc/python_api/sphinx_doc_gen.py -- \
-                    --output "${{ github.workspace }}/python_api"
-
-    - name: Build API Documentation
-      working-directory: python_api
-      run: |
-        sphinx-build -b html -j auto sphinx-in upbge-api-reference && \
-        rm -Rf upbge-api-reference/.doctrees && \
-        zip -r upbge-api-reference/upbge-api-reference.zip upbge-api-reference
-
-    - name: Publish to UPBGE
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        external_repository: UPBGE/UPBGE-API
-        publish_branch: master
-        publish_dir: python_api/upbge-api-reference
-        deploy_key: ${{ secrets.APIDOCS_DEPLOY_KEY }}
-
-    - name: Archive Documents
-      if: ${{ !env.ACT }}
-      run: tar zcvf apidocs.tar.gz python_api
-
-    - name: Upload Documents
-      if: ${{ !env.ACT }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: apidocs
-        path: apidocs.tar.gz
-        retention-days: 3
-
-  publish_stubs:
-    name: Publish API Stubs
-    runs-on: ubuntu-24.04
-    needs: [publish_api]
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
 
     steps:
-    - name: Download Build
-      if: ${{ !env.ACT }}
-      uses: actions/download-artifact@v4
-      with:
-        name: blender
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Extract Build
-      if: ${{ !env.ACT }}
-      run: tar zxvf build.tar.gz
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: weekly-build-${{ github.run_number }}
+          name: Weekly UPBGE Build # Nombre en la página de Releases
+          body: |
+            **Automated Weekly Build of UPBGE**
+            - Linux (x86_64)
+            - Windows (x86_64, ARM64)
+            - macOS (Intel, ARM64)
 
-    - name: Download Documents
-      if: ${{ !env.ACT }}
-      uses: actions/download-artifact@v4
-      with:
-        name: apidocs
-
-    - name: Extract Documents
-      if: ${{ !env.ACT }}
-      run: tar zxvf apidocs.tar.gz
-
-    - name: Install Python
-      uses: actions/setup-python@v5
-      with: 
-        python-version: '${{env.PYTHON_VERSION}}'
-
-    - name: Install Python Dependencies
-      run: | 
-        curl https://bootstrap.pypa.io/get-pip.py | python && \
-        python -m pip install bpystubgen
-
-    - name: Build API Stubs
-      working-directory: python_api
-      run: |
-        python -m bpystubgen --quiet sphinx-in upbge-stub && \
-        curl https://raw.githubusercontent.com/mysticfall/bpystubgen/main/package/setup.py -o upbge-stub/setup.py && \
-        curl https://raw.githubusercontent.com/mysticfall/bpystubgen/main/package/README.md -o upbge-stub/README.md
-
-    - name: Build Python Package
-      working-directory: python_api/upbge-stub
-      run: |
-        sed -i "s/#APP_NAME#/upbge/g" setup.py && \
-        sed -i "s/#APP_VERSION#/0.3.1/g" setup.py && \
-        sed -i "s/#BUILD_NUMBER#/${{ github.run_id }}/g" setup.py && \
-        python setup.py sdist
-
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_TOKEN }}
-        packages-dir: python_api/upbge-stub/dist
-        skip-existing: true
+            Download the corresponding file for your OS below.
+          draft: false
+          prerelease: false
+          files: artifacts/**/*

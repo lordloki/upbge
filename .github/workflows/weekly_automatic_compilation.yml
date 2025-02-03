@@ -15,9 +15,6 @@ jobs:
   build:
     name: Build UPBGE (${{ matrix.os }} - ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    if: matrix.os == 'rockylinux'
-    container:
-      image: rockylinux/rockylinux:8
 
     strategy:
       matrix:
@@ -42,6 +39,10 @@ jobs:
           #  arch: arm64
           #  runner: macos-14
 
+    container:
+      image: rockylinux/rockylinux:8
+      options: --privileged
+      
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3

@@ -110,16 +110,21 @@ jobs:
         if: matrix.os == 'macos'
         run: cmake -S upbge -B build -C upbge/build_files/cmake/config/blender_release.cmake -DCMAKE_BUILD_TYPE=Release -DPYTHON_VERSION="3.11"
 
-      - name: Build UPBGE (Linux/macOS)
-        if: matrix.os != 'windows'
+      - name: Build UPBGE (Linux)
+        if: matrix.os == 'ubuntu'
         run: make -C build -j `nproc`
+
+      - name: Build UPBGE (macOS)
+        if: matrix.os == 'macos'
+        run: make -C build
 
       - name: Build UPBGE (Windows)
         if: matrix.os == 'windows'
-        run: cmake --build build --config Release --parallel
+        run: make -C build
 
       - name: Copy Release Scripts
-        run: make -C build install || cmake --install build --prefix install
+        if: matrix.os == 'ubuntu'
+        run: make -C build install
 
       - name: Archive Build (Linux/macOS)
         if: matrix.os != 'windows'

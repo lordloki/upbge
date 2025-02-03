@@ -58,9 +58,17 @@ jobs:
         with: 
           python-version: '${{env.PYTHON_VERSION}}'
 
-      - name: Install Python Dependencies
-        run: | 
-          curl https://bootstrap.pypa.io/get-pip.py | python && \
+      - name: Install Python Dependencies (Linux/macOS)
+        if: matrix.os != 'windows'
+        run: |
+          curl https://bootstrap.pypa.io/get-pip.py | python
+          python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
+
+      - name: Install Python Dependencies (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "get-pip.py"
+          python get-pip.py
           python -m pip install numpy requests cython idna charset-normalizer urllib3 certifi zstandard pybind11
 
       - name: Install Dependencies (Linux)
@@ -81,7 +89,7 @@ jobs:
       - name: Install Dependencies (macOS)
         if: matrix.os == 'macos'
         run: |
-          brew install ninja cmake git git-lfs
+          brew install ninja cmake
 
       - name: Download Precompiled Libs
         run: |

@@ -96,7 +96,7 @@ jobs:
 
       - name: Download Precompiled Libs (Windows)
         if: matrix.os == 'windows'
-        run: cd upbge && ./make.bat update
+        run: cd upbge && echo y | ./make.bat update
 
       - name: Configure CMake
         run: |

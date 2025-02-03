@@ -1,4 +1,4 @@
-name: publish-api-and-stubs
+name: weekly-automatic-compilations
 
 on:
   schedule:

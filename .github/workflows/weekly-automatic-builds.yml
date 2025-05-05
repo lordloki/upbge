@@ -1,8 +1,7 @@
 name: weekly-automatic-compilations
 
 on:
-  schedule:
-    - cron: "0 1 * * 0" # Execute Sundays at 1 AM UTC
+
   workflow_dispatch:
 
 permissions:

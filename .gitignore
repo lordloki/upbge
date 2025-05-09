@@ -1,5 +1,6 @@
 # generic files to ignore
 .*
+.gitattributes
 
 # python temp paths
 __pycache__/
@@ -66,6 +67,8 @@ waveletNoiseTile.bin
 /scripts/addons/
 /scripts/addons_contrib/
 /tests/benchmarks/
+/tests/files/
+/assets/
 
 # Ignore old submodules directories.
 # Eventually need to get rid of those, but for the first time of transition

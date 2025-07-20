@@ -26,7 +26,7 @@
 
 #include "EXP_PythonCallBack.h"
 
-#include "MEM_guardedalloc.h"
+#include <iostream>
 #include "BLI_alloca.h"
 
 /** Check if a python value is a function and have the correct number of arguments.

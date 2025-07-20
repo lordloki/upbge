@@ -152,13 +152,17 @@ jobs:
         rm -Rf bin/5.0/python && \
         bin/blender --python-use-system-env --background -noaudio --factory-startup \
                     --python ../upbge/doc/python_api/sphinx_doc_gen.py \
-                    --output "${{ github.workspace }}/python_api"
+                    --output "${{ github.workspace }}/python_api" && \
+        ls -la
 
     - name: Build API Documentation
       working-directory: python_api
       run: |
+        ls -la && \
         sphinx-build -b html -j auto sphinx-in upbge-api-reference && \
+        ls -la && \
         rm -Rf upbge-api-reference/.doctrees && \
+        ls -la && \
         zip -r upbge-api-reference/upbge-api-reference.zip upbge-api-reference
 
     - name: Publish to UPBGE

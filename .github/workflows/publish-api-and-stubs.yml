@@ -76,6 +76,7 @@ jobs:
                  -DWITH_HYDRA=OFF \
                  -DWITH_VULKAN_BACKEND=OFF \
                  -DWITH_GHOST_WAYLAND=OFF \
+                 -DWITH_AUDASPACE=OFF \
                  -DPYTHON_VERSION=${{env.PYTHON_VERSION}}
 
     - name: Build UPBGE

@@ -26,6 +26,10 @@
 
 #include "EXP_PythonCallBack.h"
 
+#ifdef _MSC_VER
+#  include <malloc.h>
+#endif
+
 #include <iostream>
 #include "BLI_alloca.h"
 

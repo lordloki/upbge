@@ -19,9 +19,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: linux
-            arch: x86_64
-            runner: ubuntu-24.04
+          #- os: linux
+          #  arch: x86_64
+          #  runner: ubuntu-24.04
 
           - os: windows
             arch: x86_64
@@ -42,7 +42,7 @@ jobs:
     steps:
       - name: Checkout sources
         run: |
-          git clone https://github.com/UPBGE/upbge.git
+          git clone https://github.com/lordloki/upbge.git
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         

@@ -81,6 +81,10 @@ set(LIB
 )
 
 if(WITH_PYTHON)
+  list(APPEND INC_SYS
+    ${PYTHON_INCLUDE_DIRS}
+  )
+  
   list(APPEND SRC
     intern/PythonCallBack.cpp
 

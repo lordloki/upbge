@@ -27,8 +27,11 @@
 #include "EXP_PythonCallBack.h"
 
 #ifdef _MSC_VER
-#  define _CRT_ALLOC_H // fuerza que <malloc.h> defina _alloca
+#  ifndef _CRT_ALLOC_H
+#    define _CRT_ALLOC_H
+#  endif
 #  include <malloc.h>
+#  include <stdlib.h>
 #endif
 
 #include <iostream>

@@ -27,9 +27,9 @@ jobs:
           #  arch: x86_64
           #  runner: windows-latest
 
-          - os: windows
-            arch: arm64
-            runner: windows-latest
+          #- os: windows
+          #  arch: arm64
+          #  runner: windows-latest
 
           #- os: macos
           #  arch: x86_64

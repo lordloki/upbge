@@ -96,7 +96,7 @@ jobs:
         if: matrix.os == 'windows'
         run: |
           cd upbge
-          "y`n" * 2 | ./make.bat arm64 update
+          "y`n" * 3 | ./make.bat arm64 clang update
         shell: powershell
 
       - name: Configure CMake (Linux)

@@ -52,7 +52,7 @@ jobs:
 
     - name: Checkout sources
       run: |
-        git clone https://github.com/UPBGE/upbge.git
+        git clone https://github.com/lordloki/upbge.git
       env:
         GIT_LFS_SKIP_SMUDGE: 1
         
@@ -142,7 +142,7 @@ jobs:
 
     - name: Checkout sources
       run: |
-        git clone https://github.com/UPBGE/upbge.git
+        git clone https://github.com/lordloki/upbge.git
       env:
         GIT_LFS_SKIP_SMUDGE: 1
 

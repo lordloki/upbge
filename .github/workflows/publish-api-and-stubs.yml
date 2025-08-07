@@ -59,6 +59,7 @@ jobs:
     - name: Download Precompiled Libs
       run: |
         cd upbge && \
+        git lfs fetch origin "doc/python_api/static/upbge_favicon.png" "doc/python_api/static/upbge_logo.png" && \
         ./build_files/utils/make_update.py --use-linux-libraries
         
     - name: Configure CMake

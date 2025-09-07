@@ -111,29 +111,33 @@ void BL_ArmatureObject::RestoreArmatureModifierList(Object *ob)
   m_modifiersListbackup.clear();
 }
 
-static void capture_rest_positions_and_normals(Object *deformed_obj,
-                                               blender::Array<blender::float4> &restPositions,
-                                               blender::Array<blender::float4> &restNormals)
+void BL_ArmatureObject::CaptureRestPositionsAndNormals(
+    Object *deformed_obj,
+    blender::Array<blender::float4> &restPositions,
+    blender::Array<blender::float4> &restNormals)
 {
   if (!deformed_obj) {
     return;
   }
 
-  // Get rest positions from original mesh directly
-  // (easier this way but can cause issues if it has modifiers)
-  Mesh *orig_mesh = static_cast<Mesh *>(deformed_obj->data);
+  bContext *C = KX_GetActiveEngine()->GetContext();
+  Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
+  Object *ob_eval = DEG_get_evaluated(depsgraph, deformed_obj);
+  Mesh *mesh_eval = static_cast<Mesh *>(ob_eval->data);
 
-  const int num_corners = orig_mesh->corners_num;
-  auto corner_verts = orig_mesh->corner_verts();
-  auto vert_positions = orig_mesh->vert_positions();
-  auto corner_normals = orig_mesh->corner_normals();
+  const int num_corners = mesh_eval->corners_num;
+
+  auto corner_verts = mesh_eval->corner_verts();
+  auto vert_positions = mesh_eval->vert_positions();
+  auto corner_normals = mesh_eval->corner_normals();
+
   restPositions = blender::Array<blender::float4>(num_corners);
   blender::threading::parallel_for(
       blender::IndexRange(num_corners), 4096, [&](const blender::IndexRange range) {
         for (int i : range) {
-          int vert_idx = corner_verts[i];
-          const blender::float3 &pos = vert_positions[vert_idx];
-          restPositions[i] = blender::float4(pos.x, pos.y, pos.z, 1.0f);
+          const int v = corner_verts[i];
+          const blender::float3 &p = vert_positions[v];
+          restPositions[i] = blender::float4(p.x, p.y, p.z, 1.0f);
         }
       });
 
@@ -141,10 +145,30 @@ static void capture_rest_positions_and_normals(Object *deformed_obj,
   blender::threading::parallel_for(
       blender::IndexRange(num_corners), 4096, [&](const blender::IndexRange range) {
         for (int i : range) {
-          restNormals[i] = blender::float4(
-              corner_normals[i].x, corner_normals[i].y, corner_normals[i].z, 0.0f);
+          const blender::float3 n = corner_normals[i];
+          restNormals[i] = blender::float4(n.x, n.y, n.z, 0.0f);
         }
       });
+
+  if (!m_skinStatic) {
+    m_skinStatic = new BGE_SkinStaticBuffers();
+  }
+  m_skinStatic->num_corners = num_corners;
+
+  // Stockage CPU partagé
+  m_skinStatic->refPositions = restPositions;
+  m_skinStatic->refNormals = restNormals;
+
+  // SSBOs rest_* dimensionnés à num_corners
+  if (!m_skinStatic->ssbo_rest_pose) {
+    m_skinStatic->ssbo_rest_pose = GPU_storagebuf_create(sizeof(float) * 4 * num_corners);
+  }
+  GPU_storagebuf_update(m_skinStatic->ssbo_rest_pose, m_skinStatic->refPositions.data());
+
+  if (!m_skinStatic->ssbo_rest_normals) {
+    m_skinStatic->ssbo_rest_normals = GPU_storagebuf_create(sizeof(float) * 4 * num_corners);
+  }
+  GPU_storagebuf_update(m_skinStatic->ssbo_rest_normals, m_skinStatic->refNormals.data());
 }
 
 // Only allowed for Poses with identical channels.
@@ -221,19 +245,11 @@ BL_ArmatureObject::BL_ArmatureObject()
   m_deformedObj = nullptr;
   m_useGPUDeform = false;
   m_deformedReplicaData = nullptr;
-  m_shader = nullptr;
-  ssbo_in_idx = nullptr;
-  ssbo_in_wgt = nullptr;
   ssbo_bone_pose_mat = nullptr;
   ssbo_premat = nullptr;
   ssbo_postmat = nullptr;
-  ssbo_rest_pose = nullptr;
-  ssbo_rest_normals = nullptr;
-  m_refPositions = {};
-  m_refNormals = {};
-  in_indices = {};
-  in_weights = {};
   m_modifiersListbackup = {};
+  m_skinStatic = nullptr;
 }
 
 BL_ArmatureObject::~BL_ArmatureObject()
@@ -260,27 +276,39 @@ BL_ArmatureObject::~BL_ArmatureObject()
   }
   m_deformedObj = nullptr;
 
-  if (m_shader) {
-    GPU_shader_free(m_shader);
-    m_shader = nullptr;
+  if (m_skinStatic) {
+    if (--m_skinStatic->ref_count == 0) {
+      if (m_skinStatic->ssbo_in_idx)
+        GPU_storagebuf_free(m_skinStatic->ssbo_in_idx);
+      if (m_skinStatic->ssbo_in_wgt)
+        GPU_storagebuf_free(m_skinStatic->ssbo_in_wgt);
+      if (m_skinStatic->ssbo_rest_pose)
+        GPU_storagebuf_free(m_skinStatic->ssbo_rest_pose);
+      if (m_skinStatic->ssbo_rest_normals)
+        GPU_storagebuf_free(m_skinStatic->ssbo_rest_normals);
+      if (m_skinStatic->shader)
+        GPU_shader_free(m_skinStatic->shader);
+
+      m_skinStatic->in_indices.clear();
+      m_skinStatic->in_indices.shrink_to_fit();
+      m_skinStatic->in_weights.clear();
+      m_skinStatic->in_weights.shrink_to_fit();
+      m_skinStatic->refPositions = {};
+      m_skinStatic->refNormals = {};
+
+      delete m_skinStatic;
+    }
+    m_skinStatic = nullptr;
   }
-  if (ssbo_in_idx) {
-    GPU_storagebuf_free(ssbo_in_idx);
-    GPU_storagebuf_free(ssbo_in_wgt);
+
+  // Free per-instance/per-frame SSBOs only
+  if (ssbo_bone_pose_mat) {  // guard remains but we no longer free static ssbos here
     GPU_storagebuf_free(ssbo_bone_pose_mat);
     GPU_storagebuf_free(ssbo_premat);
     GPU_storagebuf_free(ssbo_postmat);
-    GPU_storagebuf_free(ssbo_rest_pose);
-    GPU_storagebuf_free(ssbo_rest_normals);
-    ssbo_in_idx = nullptr;
-    ssbo_in_wgt = nullptr;
     ssbo_bone_pose_mat = nullptr;
     ssbo_premat = nullptr;
     ssbo_postmat = nullptr;
-    ssbo_rest_pose = nullptr;
-    ssbo_rest_normals = nullptr;
-    m_refPositions = {};
-    m_refNormals = {};
   }
   if (m_deformedReplicaData) {
     bContext *C = KX_GetActiveEngine()->GetContext(); 
@@ -450,6 +478,11 @@ void BL_ArmatureObject::ProcessReplica()
 
   m_objArma = m_pBlenderObject;
 
+  // Share the static skin buffers with the original if already created
+  if (m_skinStatic) {
+    m_skinStatic->ref_count++;
+  }
+
   LoadChannels();
 }
 
@@ -502,27 +535,29 @@ void BL_ArmatureObject::ApplyPose()
 
 void BL_ArmatureObject::InitSkinningBuffers()
 {
-  if (in_indices.empty()) {
+  // Si déjà construit (par l'original), ne rien refaire pour les répliques.
+  if (m_skinStatic && m_skinStatic->ssbo_in_idx && m_skinStatic->ssbo_in_wgt) {
+    return;
+  }
+
+  if (m_skinStatic->in_indices.empty()) {
     bContext *C = KX_GetActiveEngine()->GetContext();
     Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
     Object *deformed_eval = DEG_get_evaluated(depsgraph, m_deformedObj);
     Mesh *mesh = static_cast<Mesh *>(deformed_eval->data);
 
-    const ListBase *defbase = nullptr;
-    if (mesh) {
-      defbase = BKE_id_defgroup_list_get(&mesh->id);
-    }
-    const ID *id_target = static_cast<const ID *>(m_deformedObj->data);
-    if (BKE_id_supports_vertex_groups(id_target)) {
+    const ListBase *defbase = mesh ? BKE_id_defgroup_list_get(&mesh->id) : nullptr;
+    if (const ID *id_target = static_cast<const ID *>(m_deformedObj->data);
+        BKE_id_supports_vertex_groups(id_target))
+    {
       defbase = BKE_id_defgroup_list_get(id_target);
     }
 
     blender::Span<MDeformVert> dverts = mesh->deform_verts();
-    auto corner_verts = mesh->corner_verts();
-    int num_corners = mesh->corners_num;
+    auto corner_verts_span = mesh->corner_verts();
+    const int num_corners = mesh->corners_num;
 
-    // 1. Build the ordered list of deforming bones
-    std::vector<std::string> bone_names;
+    // bones -> index
     std::map<std::string, int> bone_name_to_index;
     if (m_objArma && m_objArma->pose) {
       int idx = 0;
@@ -530,14 +565,12 @@ void BL_ArmatureObject::InitSkinningBuffers()
            pchan = pchan->next)
       {
         if (!(pchan->bone->flag & BONE_NO_DEFORM)) {
-          std::string name(pchan->name);
-          bone_names.push_back(name);
-          bone_name_to_index[name] = idx++;
+          bone_name_to_index[pchan->name] = idx++;
         }
       }
     }
 
-    // 2. Get the vertex group names in mesh order
+    // groups dans l'ordre du mesh
     std::vector<std::string> group_names;
     if (defbase) {
       for (bDeformGroup *dg = (bDeformGroup *)defbase->first; dg; dg = dg->next) {
@@ -545,102 +578,101 @@ void BL_ArmatureObject::InitSkinningBuffers()
       }
     }
 
-    // 3. Fill index and weight buffers
-    in_indices.resize(num_corners * 4, 0);
-    in_weights.resize(num_corners * 4, 0.0f);
+    // Remplir PAR CORNER
+    m_skinStatic->in_indices.resize(num_corners * 4, 0);
+    m_skinStatic->in_weights.resize(num_corners * 4, 0.0f);
 
-    // Thresholds aligned with Blender CPU deform.
-    constexpr float kContribThreshold = 1e-4f;  // Skip corner if total contribution is too small.
-
+    constexpr float kContribThreshold = 1e-4f;
     blender::threading::parallel_for(
         blender::IndexRange(num_corners), 4096, [&](const blender::IndexRange range) {
-          for (int v : range) {
-            int vert_idx = corner_verts[v];
-            const MDeformVert &dvert = dverts[vert_idx];
-            struct Influence {
-              int bone_idx;
-              float weight;
-            };
+          for (int c : range) {
+            const int v = corner_verts_span[c];
+            if (dverts.is_empty()) {
+              for (int j = 0; j < 4; ++j) {
+                m_skinStatic->in_indices[c * 4 + j] = 0;
+                m_skinStatic->in_weights[c * 4 + j] = 0.0f;
+              }
+              continue;
+            }
+            const MDeformVert &dvert = dverts[v];
 
-            // Aggregate weights per bone index
-            std::map<int, float> bone_weight_map;
+            struct Inf {
+              int bone_idx;
+              float w;
+            };
+            std::vector<Inf> acc;
+            acc.reserve(dvert.totweight);
+
+            float total_raw = 0.0f;
             for (int j = 0; j < dvert.totweight; ++j) {
-              int def_nr = dvert.dw[j].def_nr;
-              if (def_nr >= 0 && def_nr < group_names.size()) {
-                const std::string &group_name = group_names[def_nr];
-                auto it = bone_name_to_index.find(group_name);
-                if (it != bone_name_to_index.end()) {
-                  bone_weight_map[it->second] += dvert.dw[j].weight;
+              const int def_nr = dvert.dw[j].def_nr;
+              if (def_nr < 0 || (size_t)def_nr >= group_names.size())
+                continue;
+              auto it = bone_name_to_index.find(group_names[def_nr]);
+              if (it == bone_name_to_index.end())
+                continue;
+              const float w = dvert.dw[j].weight;
+              if (w <= 0.0f)
+                continue;
+              total_raw += w;
+              const int bi = it->second;
+              bool merged = false;
+              for (auto &e : acc) {
+                if (e.bone_idx == bi) {
+                  e.w += w;
+                  merged = true;
+                  break;
                 }
               }
-            }
-            // Sort and normalize influences
-            std::vector<Influence> influences;
-            for (const auto &kv : bone_weight_map) {
-              influences.push_back({kv.first, kv.second});
+              if (!merged)
+                acc.push_back({bi, w});
             }
 
-            // Total raw contribution (before normalization).
-            float total_raw = 0.0f;
-            for (const auto &kv : bone_weight_map) {
-              total_raw += kv.second;
-            }
-
-            // Skip very small total contributions.
-            if (total_raw <= kContribThreshold) {
-              // No influences: fill with zeros
+            if (total_raw <= kContribThreshold || acc.empty()) {
               for (int j = 0; j < 4; ++j) {
-                in_indices[v * 4 + j] = 0;
-                in_weights[v * 4 + j] = 0.0f;
+                m_skinStatic->in_indices[c * 4 + j] = 0;
+                m_skinStatic->in_weights[c * 4 + j] = 0.0f;
               }
               continue;
             }
 
-            if (influences.empty()) {
-              // No influences: fill with zeros
-              for (int j = 0; j < 4; ++j) {
-                in_indices[v * 4 + j] = 0;
-                in_weights[v * 4 + j] = 0.0f;
-              }
-              continue;
-            }
+            std::sort(
+                acc.begin(), acc.end(), [](const Inf &a, const Inf &b) { return a.w > b.w; });
+            float sum = 0.0f;
+            for (auto &e : acc)
+              sum += e.w;
+            const float inv = sum > 0.0f ? 1.0f / sum : 0.0f;
 
-            std::sort(influences.begin(),
-                      influences.end(),
-                      [](const Influence &a, const Influence &b) { return a.weight > b.weight; });
-
-            // Normalize weights so their sum is 1.0
-            float total = 0.0f;
-            for (const auto &inf : influences)
-              total += inf.weight;
-            if (total > 0.0f) {
-              for (auto &inf : influences)
-                inf.weight /= total;
-            }
-
-            // Fill up to 4 influences per vertex
             for (int j = 0; j < 4; ++j) {
-              if (j < influences.size()) {
-                in_indices[v * 4 + j] = influences[j].bone_idx;
-                in_weights[v * 4 + j] = influences[j].weight;
+              if (j < (int)acc.size()) {
+                m_skinStatic->in_indices[c * 4 + j] = acc[j].bone_idx;
+                m_skinStatic->in_weights[c * 4 + j] = acc[j].w * inv;
               }
               else {
-                in_indices[v * 4 + j] = 0;
-                in_weights[v * 4 + j] = 0.0f;
+                m_skinStatic->in_indices[c * 4 + j] = 0;
+                m_skinStatic->in_weights[c * 4 + j] = 0.0f;
               }
             }
           }
         });
 
-    // 4. Update SSBOs
-    if (!ssbo_in_idx) {
-      ssbo_in_idx = GPU_storagebuf_create(sizeof(int) * num_corners * 4);
+    if (!m_skinStatic) {
+      m_skinStatic = new BGE_SkinStaticBuffers();
     }
-    if (!ssbo_in_wgt) {
-      ssbo_in_wgt = GPU_storagebuf_create(sizeof(float) * num_corners * 4);
+    // Vérification (les SSBO rest_* sont aussi au domaine corner).
+    if (m_skinStatic->num_corners != 0) {
+      BLI_assert(m_skinStatic->num_corners == num_corners);
     }
-    GPU_storagebuf_update(ssbo_in_idx, in_indices.data());
-    GPU_storagebuf_update(ssbo_in_wgt, in_weights.data());
+    m_skinStatic->num_corners = num_corners;
+
+    if (!m_skinStatic->ssbo_in_idx) {
+      m_skinStatic->ssbo_in_idx = GPU_storagebuf_create(sizeof(int) * num_corners * 4);
+    }
+    if (!m_skinStatic->ssbo_in_wgt) {
+      m_skinStatic->ssbo_in_wgt = GPU_storagebuf_create(sizeof(float) * num_corners * 4);
+    }
+    GPU_storagebuf_update(m_skinStatic->ssbo_in_idx, m_skinStatic->in_indices.data());
+    GPU_storagebuf_update(m_skinStatic->ssbo_in_wgt, m_skinStatic->in_weights.data());
   }
 }
 
@@ -704,8 +736,7 @@ void BL_ArmatureObject::ApplyAction(bAction *action, const AnimationEvalContext 
  * It is a bit tricky in case BL_ArmatureObject is a replica (needs to have right parent/child -> armature/deformed object,
  * a render cache for the deformed object....
  */
-void BL_ArmatureObject::DoGpuSkinning()
-{
+void BL_ArmatureObject::DoGpuSkinning() {
   if (!m_useGPUDeform) {
     return;
   }
@@ -719,8 +750,6 @@ void BL_ArmatureObject::DoGpuSkinning()
       m_deformedObj);
 
   if (kx_deformedObj->IsReplica()) {
-    /* We need to replicate Mesh for deformation on GPU in some files and not in others...
-     * It ensures data to be deformed will be unique */
     if (!m_deformedReplicaData) {
       Mesh *orig = (Mesh *)m_deformedObj->data;
       m_deformedReplicaData = (Mesh *)BKE_id_copy_ex(CTX_data_main(C), (ID *)orig, nullptr, 0);
@@ -729,35 +758,25 @@ void BL_ArmatureObject::DoGpuSkinning()
     }
   }
 
-  /* Capture rest positions and rest normals from orig object (to simplify) */
-  if (m_refPositions.is_empty()) {
-    capture_rest_positions_and_normals(m_deformedObj, m_refPositions, m_refNormals);
-  }
-
   Object *deformed_eval = DEG_get_evaluated(depsgraph, m_deformedObj);
   Mesh *mesh_eval = static_cast<Mesh *>(deformed_eval->data);
-
   Mesh *orig_mesh = (Mesh *)m_deformedObj->data;
 
-  /* Set this variable to extract vbo_pos with float4 */
   orig_mesh->is_using_skinning = 1;
-  /* Set this variable to indicate that the action is currently played.
-   * Will be reset just after render.
-   * Place this flag on runtime/evaluated mesh (the one used for rendering) */
   mesh_eval->is_running_skinning = 1;
 
   if (m_modifiersListbackup.empty()) {
     disable_armature_modifiers(m_deformedObj, m_modifiersListbackup);
-    /* 1. Wait the next frame that we have vbos_pos on float4 in render cache.
-     * (Disable_armature_modifiers tags m_deformedObj for geometry recalc, with
-     * the newly assigned mesh, with float4).
-     * 2. Also Restore visibility for the next render frame (previously disabled
-     * in ReplicateBlenderObject to avoid seeing the mesh with wrong pose) if m_deformedObj
-     * is a replica */
     if (kx_deformedObj->IsReplica()) {
       kx_deformedObj->SetVisible(true, false);
     }
     return;
+  }
+
+  // Capture “rest” une seule fois (dans le conteneur partagé)
+  if (!m_skinStatic || m_skinStatic->refPositions.is_empty()) {
+    blender::Array<blender::float4> tmpPos, tmpNor;
+    CaptureRestPositionsAndNormals(m_deformedObj, tmpPos, tmpNor);
   }
 
   MeshBatchCache *cache = nullptr;
@@ -847,40 +866,27 @@ void BL_ArmatureObject::DoGpuSkinning()
   }
   GPU_storagebuf_update(ssbo_postmat, &postmat[0][0]);
 
-  // 5. Prepare rest positions and normals
-  if (!ssbo_rest_pose) {
-    ssbo_rest_pose = GPU_storagebuf_create(sizeof(float) * 4 * num_corners);
-    GPU_storagebuf_update(ssbo_rest_pose, m_refPositions.data());
-  }
-  if (!ssbo_rest_normals) {
-    ssbo_rest_normals = GPU_storagebuf_create(sizeof(float) * 4 * num_corners);
-    GPU_storagebuf_update(ssbo_rest_normals, m_refNormals.data());
-  }
-
   // 6. Compile skinning shader
-  if (!m_shader) {
+  if (!m_skinStatic->shader) {
     ShaderCreateInfo info("BGE_Armature_Skinning_CPU_Logic");
     info.local_group_size(256, 1, 1);
     info.compute_source("draw_colormanagement_lib.glsl");
     info.compute_source("gpu_shader_math_vector_lib.glsl");
     info.storage_buf(0, Qualifier::write, "vec4", "positions[]");
     info.storage_buf(1, Qualifier::write, "uint", "normals[]");
-    info.storage_buf(2, Qualifier::read, "ivec4", "in_idx[]");
-    info.storage_buf(3, Qualifier::read, "vec4", "in_wgt[]");
+    info.storage_buf(2, Qualifier::read, "ivec4", "in_idx[]");  // per corner
+    info.storage_buf(3, Qualifier::read, "vec4", "in_wgt[]");   // per corner
     info.storage_buf(4, Qualifier::read, "mat4", "bone_pose_mat[]");
     info.storage_buf(5, Qualifier::read, "mat4", "premat[]");
-    info.storage_buf(6, Qualifier::read, "vec4", "rest_positions[]");
-    info.storage_buf(7, Qualifier::read, "vec4", "rest_normals[]");
+    info.storage_buf(6, Qualifier::read, "vec4", "rest_positions[]");  // per corner
+    info.storage_buf(7, Qualifier::read, "vec4", "rest_normals[]");    // per corner
     info.storage_buf(8, Qualifier::read, "mat4", "postmat[]");
 
     info.compute_source_generated = R"GLSL(
 #ifndef CONTRIB_THRESHOLD
-// Match BKE armature_deform contrib threshold (1e-4).
 #define CONTRIB_THRESHOLD 1e-4
 #endif
-
 #ifndef NORMAL_EPSILON
-// Minimum bone weight to contribute to normal skinning.
 #define NORMAL_EPSILON 1e-4
 #endif
 
@@ -897,9 +903,8 @@ void main() {
     return;
   }
 
-  // Positions: LBS with Blender-like complement (rest_pos * (1 - total_weight)).
+  // Positions: LBS + complément Blender
   vec4 rest_pos_object = premat[0] * rest_positions[corner_index];
-
   vec4 accumulated_pos = vec4(0.0);
   float total_weight = 0.0;
   for (int i = 0; i < 4; ++i) {
@@ -910,14 +915,12 @@ void main() {
       total_weight    += weight;
     }
   }
-
   vec4 skinned_pos_object = (total_weight <= CONTRIB_THRESHOLD)
                                 ? rest_pos_object
                                 : (accumulated_pos + rest_pos_object * (1.0 - total_weight));
   positions[corner_index] = postmat[0] * skinned_pos_object;
 
-  // Normals: per-bone inverse-transpose blend (simple IT, no TBN or adaptive mixing).
-  // Transform rest normal into armature/object space, apply bone IT, then back to target space.
+  // Normales: blend de l’inverse-transposée par os (comme master)
   mat3 pre_normal   = transpose(inverse(mat3(premat[0])));
   mat3 post_normal  = transpose(inverse(mat3(postmat[0])));
   vec3 rest_n_object = pre_normal * rest_normals[corner_index].xyz;
@@ -936,43 +939,40 @@ void main() {
   if (total_normal_weight < 1.0) {
     accumulated_n += rest_n_object * (1.0 - total_normal_weight);
   }
-
-  // Normalize in a numerically robust way using the shared math library.
   vec3 final_n = safe_normalize(post_normal * accumulated_n);
 
-  // Pack to 10_10_10_2 SNORM (W ignored).
   int nx = convert_normalized_f32_to_i10(final_n.x);
   int ny = convert_normalized_f32_to_i10(final_n.y);
   int nz = convert_normalized_f32_to_i10(final_n.z);
   normals[corner_index] = uint((nx & 0x3FF) | ((ny & 0x3FF) << 10) | ((nz & 0x3FF) << 20));
 }
 )GLSL";
-    m_shader = GPU_shader_create_from_info((GPUShaderCreateInfo *)&info);
+    m_skinStatic->shader = GPU_shader_create_from_info((GPUShaderCreateInfo *)&info);
   }
 
   // 7. Dispatch compute shader
-  GPU_shader_bind(m_shader);
+  GPU_shader_bind(m_skinStatic->shader);
   vbo_pos->bind_as_ssbo(0);
   vbo_nor->bind_as_ssbo(1);
-  GPU_storagebuf_bind(ssbo_in_idx, 2);
-  GPU_storagebuf_bind(ssbo_in_wgt, 3);
+  GPU_storagebuf_bind(m_skinStatic->ssbo_in_idx, 2);
+  GPU_storagebuf_bind(m_skinStatic->ssbo_in_wgt, 3);
   GPU_storagebuf_bind(ssbo_bone_pose_mat, 4);
   GPU_storagebuf_bind(ssbo_premat, 5);
-  GPU_storagebuf_bind(ssbo_rest_pose, 6);
-  GPU_storagebuf_bind(ssbo_rest_normals, 7);
+  GPU_storagebuf_bind(m_skinStatic->ssbo_rest_pose, 6);
+  GPU_storagebuf_bind(m_skinStatic->ssbo_rest_normals, 7);
   GPU_storagebuf_bind(ssbo_postmat, 8);
 
   const int group_size = 256;
   const int num_groups = (num_corners + group_size - 1) / group_size;
-  GPU_compute_dispatch(m_shader, num_groups, 1, 1);
+  GPU_compute_dispatch(m_skinStatic->shader, num_groups, 1, 1);
   GPU_memory_barrier(GPU_BARRIER_SHADER_STORAGE | GPU_BARRIER_VERTEX_ATTRIB_ARRAY);
 
-  GPU_storagebuf_unbind(ssbo_in_idx);
-  GPU_storagebuf_unbind(ssbo_in_wgt);
+  GPU_storagebuf_unbind(m_skinStatic->ssbo_in_idx);
+  GPU_storagebuf_unbind(m_skinStatic->ssbo_in_wgt);
   GPU_storagebuf_unbind(ssbo_bone_pose_mat);
   GPU_storagebuf_unbind(ssbo_premat);
-  GPU_storagebuf_unbind(ssbo_rest_pose);
-  GPU_storagebuf_unbind(ssbo_rest_normals);
+  GPU_storagebuf_unbind(m_skinStatic->ssbo_rest_pose);
+  GPU_storagebuf_unbind(m_skinStatic->ssbo_rest_normals);
   GPU_storagebuf_unbind(ssbo_postmat);
   GPU_shader_unbind();
 

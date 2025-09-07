@@ -56,6 +56,26 @@ struct ModifierStackBackup {
   int position;
 };
 
+struct BGE_SkinStaticBuffers {
+  // SSBO partagés (domaine corner)
+  blender::gpu::StorageBuf *ssbo_in_idx = nullptr;
+  blender::gpu::StorageBuf *ssbo_in_wgt = nullptr;
+  blender::gpu::StorageBuf *ssbo_rest_pose = nullptr;
+  blender::gpu::StorageBuf *ssbo_rest_normals = nullptr;
+
+  // Copies CPU partagées (domaine corner)
+  std::vector<int> in_indices;
+  std::vector<float> in_weights;
+  blender::Array<blender::float4> refPositions;
+  blender::Array<blender::float4> refNormals;
+
+  // Shader compute partagé
+  blender::gpu::Shader *shader = nullptr;
+
+  int num_corners = 0;
+  int ref_count = 1;
+};
+
 class BL_ArmatureObject : public KX_GameObject {
   Py_Header
 
@@ -71,24 +91,15 @@ class BL_ArmatureObject : public KX_GameObject {
 
   Object *m_deformedObj;
   bool m_useGPUDeform;
+  BGE_SkinStaticBuffers *m_skinStatic;
 
   /* If using gpu deform, mesh has to be replicated to ensure
    * unique data to be deformed by shader */
   Mesh *m_deformedReplicaData;
-  class blender::Array<blender::float4> m_refPositions;
-  class blender::Array<blender::float4> m_refNormals;
-  blender::gpu::Shader *m_shader;
   std::vector<ModifierStackBackup> m_modifiersListbackup;
-
-  std::vector<int> in_indices;
-  std::vector<float> in_weights;
-  blender::gpu::StorageBuf *ssbo_in_idx;
-  blender::gpu::StorageBuf *ssbo_in_wgt;
   blender::gpu::StorageBuf *ssbo_bone_pose_mat;
   blender::gpu::StorageBuf *ssbo_premat;
   blender::gpu::StorageBuf *ssbo_postmat;
-  blender::gpu::StorageBuf *ssbo_rest_pose;
-  blender::gpu::StorageBuf *ssbo_rest_normals;
 
   double m_lastframe;
   size_t m_constraintNumber;
@@ -122,6 +133,10 @@ class BL_ArmatureObject : public KX_GameObject {
   void GetGpuDeformedObj();
   void ApplyAction(bAction *action, const AnimationEvalContext &evalCtx);
   void InitSkinningBuffers();
+  void CaptureRestPositionsAndNormals(
+      Object *deformed_obj,
+      blender::Array<blender::float4> &restPositions,
+      blender::Array<blender::float4> &restNormals);
   void DoGpuSkinning();
   void BlendInPose(bPose *blend_pose, float weight, short mode);
 

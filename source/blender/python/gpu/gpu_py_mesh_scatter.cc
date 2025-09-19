@@ -482,6 +482,12 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     Py_RETURN_NONE;
   }
 
+  /* Used to say the the object is being deformed
+   * (BKE_object_is_deformed_modified) and to clear
+   * tilemap shadows to avoid artifacts (Object bounds are not updated,
+   * then we clear tilemaps to force shadow tilemap update) */
+  mesh_eval->is_running_skinning = 1;
+
   /* If we already requested and cache still not ready, return None (try again next frame). */
   if (!(mesh_eval && mesh_eval->runtime && mesh_eval->runtime->batch_cache)) {
     Py_RETURN_NONE;

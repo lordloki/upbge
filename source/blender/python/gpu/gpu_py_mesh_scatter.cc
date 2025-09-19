@@ -567,6 +567,8 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     // Next time this mesh will be rebuild in the cache, it will be on float3.
   }
 
+  DEG_id_tag_update(&ob_orig->id, ID_RECALC_TRANSFORM);
+
   Py_RETURN_NONE;
 }
 

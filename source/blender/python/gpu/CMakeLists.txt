@@ -5,6 +5,9 @@
 set(INC
   .
   ../../editors/include
+  ../../makesrna
+  # RNA_prototypes.hh
+  ${CMAKE_BINARY_DIR}/source/blender/makesrna
 )
 
 set(INC_SYS
@@ -21,12 +24,14 @@ set(SRC
   gpu_py_element.cc
   gpu_py_framebuffer.cc
   gpu_py_matrix.cc
+  gpu_py_mesh_scatter.cc
   gpu_py_offscreen.cc
   gpu_py_platform.cc
   gpu_py_select.cc
   gpu_py_shader.cc
   gpu_py_shader_create_info.cc
   gpu_py_state.cc
+  gpu_py_storagebuffer.cc
   gpu_py_texture.cc
   gpu_py_types.cc
   gpu_py_uniformbuffer.cc
@@ -42,11 +47,13 @@ set(SRC
   gpu_py_element.hh
   gpu_py_framebuffer.hh
   gpu_py_matrix.hh
+  gpu_py_mesh_scatter.hh
   gpu_py_offscreen.hh
   gpu_py_platform.hh
   gpu_py_select.hh
   gpu_py_shader.hh
   gpu_py_state.hh
+  gpu_py_storagebuffer.hh
   gpu_py_texture.hh
   gpu_py_types.hh
   gpu_py_uniformbuffer.hh

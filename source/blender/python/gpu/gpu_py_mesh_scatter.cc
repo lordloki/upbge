@@ -569,3 +569,47 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
 
   Py_RETURN_NONE;
 }
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wcast-function-type"
+#  else
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wcast-function-type"
+#  endif
+#endif
+
+static PyMethodDef pygpu_mesh__tp_methods[] = {
+    {"scatter_positions_to_corners",
+     (PyCFunction)pygpu_mesh_scatter,
+     METH_VARARGS | METH_KEYWORDS,
+     pygpu_mesh_scatter_doc},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+static PyModuleDef pygpu_mesh_module_def = {
+    PyModuleDef_HEAD_INIT,
+    "gpu.mesh",
+    "Mesh related GPU helpers.",
+    0,
+    pygpu_mesh__tp_methods,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+};
+
+#ifdef __GNUC__
+#  ifdef __clang__
+#    pragma clang diagnostic pop
+#  else
+#    pragma GCC diagnostic pop
+#  endif
+#endif
+
+PyObject *bpygpu_mesh_init(void)
+{
+  PyObject *submodule = PyModule_Create(&pygpu_mesh_module_def);
+  return submodule;
+}

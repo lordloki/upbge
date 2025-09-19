@@ -26,6 +26,8 @@
 
 #include "gpu_py_api.hh" /* Own include. */
 
+#include "gpu_py_mesh_scatter.hh"
+
 extern "C" void bpygpu_mesh_scatter_shaders_free_all(void);
 static void pygpu_module_free(void *m)
 {
@@ -86,6 +88,9 @@ PyObject *BPyInit_gpu()
   PyDict_SetItem(sys_modules, PyModule_GetNameObject(submodule), submodule);
 
   PyModule_AddObject(mod, "texture", (submodule = bpygpu_texture_init()));
+  PyDict_SetItem(sys_modules, PyModule_GetNameObject(submodule), submodule);
+
+  PyModule_AddObject(mod, "mesh", (submodule = bpygpu_mesh_init()));
   PyDict_SetItem(sys_modules, PyModule_GetNameObject(submodule), submodule);
 
   PyModule_AddObject(mod, "compute", (submodule = bpygpu_compute_init()));

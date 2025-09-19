@@ -14,6 +14,8 @@
 
 #include <Python.h>
 
+#include "GPU_context.hh"
+
 #include "gpu_py_capabilities.hh"
 #include "gpu_py_compute.hh"
 #include "gpu_py_matrix.hh"
@@ -23,6 +25,15 @@
 #include "gpu_py_types.hh"
 
 #include "gpu_py_api.hh" /* Own include. */
+
+extern "C" void bpygpu_mesh_scatter_shaders_free_all(void);
+static void pygpu_module_free(void *m)
+{
+  (void)m;
+  if (GPU_context_active_get()) {
+    bpygpu_mesh_scatter_shaders_free_all();
+  }
+}
 
 /* -------------------------------------------------------------------- */
 /** \name GPU Module
@@ -42,7 +53,7 @@ static PyModuleDef pygpu_module_def = {
     /*m_slots*/ nullptr,
     /*m_traverse*/ nullptr,
     /*m_clear*/ nullptr,
-    /*m_free*/ nullptr,
+    /*m_free*/ (freefunc)pygpu_module_free,
 };
 
 PyObject *BPyInit_gpu()

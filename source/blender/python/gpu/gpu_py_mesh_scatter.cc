@@ -5,9 +5,12 @@
  */
 
 #include <Python.h>
+#include <unordered_map>
+#include <mutex>
 
 #include "BKE_idtype.hh"
 #include "BKE_mesh.hh"
+#include "BKE_scene.hh"
 
 #include "BLI_string_utf8.h"
 
@@ -31,6 +34,147 @@
 #include "gpu_py.hh"
 #include "gpu_py_storagebuffer.hh"
 #include "gpu_py_vertex_buffer.hh"
+
+static std::unordered_map<const Mesh *, blender::gpu::Shader *> g_mesh_scatter_shaders;
+static std::mutex g_mesh_scatter_shaders_mutex;
+
+/* Create (or reuse) a scatter shader for a specific mesh.
+ * normals_domain_int can be used to compile shader specialization constants per-mesh.
+ * NOTE: For the prototype we set topology offsets to 0 here; for correct behavior,
+ * pass the real offsets (face_offsets_offset, ...) when available. */
+static blender::gpu::Shader *mesh_scatter_shader_get_or_create(Mesh *mesh, int normals_domain_int)
+{
+  std::lock_guard<std::mutex> lock(g_mesh_scatter_shaders_mutex);
+
+  auto it = g_mesh_scatter_shaders.find(mesh);
+  if (it != g_mesh_scatter_shaders.end()) {
+    return it->second;
+  }
+
+  using namespace blender::gpu::shader;
+
+  const int group_size = 256;
+
+  ShaderCreateInfo info("BGE_Armature_Scatter_Pass");
+  info.local_group_size(group_size, 1, 1);
+  info.compute_source("draw_colormanagement_lib.glsl");
+  info.storage_buf(0, Qualifier::write, "vec4", "positions[]");
+  info.storage_buf(1, Qualifier::write, "uint", "normals[]");
+  info.storage_buf(2, Qualifier::read, "vec4", "skinned_vert_positions[]");
+  info.storage_buf(3, Qualifier::read, "mat4", "obmat[]");
+  info.storage_buf(4, Qualifier::read, "int", "topo[]");
+
+  /* Default offsets set to 0 here; real values should be set via specialization constants
+   * when binding if needed. */
+  info.specialization_constant(Type::int_t, "face_offsets_offset", 0);
+  info.specialization_constant(Type::int_t, "corner_to_face_offset", 0);
+  info.specialization_constant(Type::int_t, "corner_verts_offset", 0);
+  info.specialization_constant(Type::int_t, "vert_to_face_offsets_offset", 0);
+  info.specialization_constant(Type::int_t, "vert_to_face_offset", 0);
+  info.specialization_constant(Type::int_t, "normals_domain", normals_domain_int);
+
+  info.compute_source_generated = R"GLSL(
+// Utility accessors
+int face_offsets(int i) { return topo[face_offsets_offset + i]; }
+int corner_to_face(int i) { return topo[corner_to_face_offset + i]; }
+int corner_verts(int i) { return topo[corner_verts_offset + i]; }
+int vert_to_face_offsets(int i) { return topo[vert_to_face_offsets_offset + i]; }
+int vert_to_face(int i) { return topo[vert_to_face_offset + i]; }
+
+// 10_10_10_2 packing utility
+int pack_i10_trunc(float x) {
+  const int signed_int_10_max = 511;
+  const int signed_int_10_min = -512;
+  float s = x * float(signed_int_10_max);
+  int q = int(s);
+  q = clamp(q, signed_int_10_min, signed_int_10_max);
+  return q & 0x3FF;
+}
+
+uint pack_norm(vec3 n) {
+  int nx = pack_i10_trunc(n.x);
+  int ny = pack_i10_trunc(n.y);
+  int nz = pack_i10_trunc(n.z);
+  return uint(nx) | (uint(ny) << 10) | (uint(nz) << 20);
+}
+
+vec3 newell_face_normal_object(int f) {
+  int beg = face_offsets(f);
+  int end = face_offsets(f + 1);
+  vec3 n = vec3(0.0);
+  int v_prev_idx = corner_verts(end - 1);
+  vec3 v_prev = skinned_vert_positions[v_prev_idx].xyz;
+  for (int i = beg; i < end; ++i) {
+    int v_curr_idx = corner_verts(i);
+    vec3 v_curr = skinned_vert_positions[v_curr_idx].xyz;
+    n += cross(v_prev, v_curr);
+    v_prev = v_curr;
+  }
+  return normalize(n);
+}
+
+vec3 transform_normal(vec3 n, mat4 m) {
+  return transpose(inverse(mat3(m))) * n;
+}
+
+void main() {
+  uint c = gl_GlobalInvocationID.x;
+  if (c >= positions.length()) {
+    return;
+  }
+
+  int v = corner_verts(int(c));
+
+  // 1) Scatter position
+  vec4 p_obj = skinned_vert_positions[v];
+  positions[c] = obmat[0] * p_obj;
+
+  // 2) Calculate and scatter normal
+  vec3 n_obj;
+  if (normals_domain == 1) { // Face
+    int f = corner_to_face(int(c));
+    n_obj = newell_face_normal_object(f);
+  }
+  else { // Point
+    int beg = vert_to_face_offsets(v);
+    int end = vert_to_face_offsets(v + 1);
+    vec3 n_accum = vec3(0.0);
+    for (int i = beg; i < end; ++i) {
+      int f = vert_to_face(i);
+      n_accum += newell_face_normal_object(f);
+    }
+    n_obj = n_accum;
+  }
+
+  vec3 n_world = transform_normal(n_obj, obmat[0]);
+  normals[c] = pack_norm(normalize(n_world));
+}
+)GLSL";
+
+  blender::gpu::Shader *shader = GPU_shader_create_from_info((GPUShaderCreateInfo *)&info);
+  if (shader) {
+    g_mesh_scatter_shaders.emplace(mesh, shader);
+  }
+  return shader;
+}
+
+/* Free all cached shaders (call at module shutdown). */
+static void mesh_scatter_shaders_free_all(void)
+{
+  std::lock_guard<std::mutex> lock(g_mesh_scatter_shaders_mutex);
+  for (auto &kv : g_mesh_scatter_shaders) {
+    if (kv.second) {
+      GPU_shader_free(kv.second);
+    }
+  }
+  g_mesh_scatter_shaders.clear();
+}
+
+/* Expose a C symbol so we can call the cleanup from other translation units. */
+extern "C" void bpygpu_mesh_scatter_shaders_free_all(void)
+{
+  mesh_scatter_shaders_free_all();
+}
 
 /* Helper: get MeshBatchCache and vbos (adapt to your project paths) */
 /* TODO: include the correct header(s) to access MeshBatchCache / VBOType / lookup_ptr. */
@@ -84,9 +228,14 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     return nullptr;
   }
 
-  Object *evaluated_object = reinterpret_cast<Object *>(id_obj);
-  if (!DEG_is_evaluated(evaluated_object)) {
+  Object *ob_eval = reinterpret_cast<Object *>(id_obj);
+  if (!DEG_is_evaluated(ob_eval)) {
     PyErr_SetString(PyExc_TypeError, "Expected an evaluated object");
+    return nullptr;
+  }
+
+  if (ob_eval->type != OB_MESH) {
+    PyErr_SetString(PyExc_TypeError, "Object does not own a mesh");
     return nullptr;
   }
 
@@ -97,16 +246,26 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
   }
 
   /* Get evaluated object and mesh */
-  Object *ob_eval = DEG_get_evaluated(depsgraph, evaluated_object);
   if (!ob_eval) {
     PyErr_SetString(PyExc_RuntimeError, "Failed to get evaluated object");
     return nullptr;
   }
 
+  Object *ob_orig = DEG_get_original(ob_eval);
+  Mesh *mesh_orig = static_cast<Mesh *>(ob_orig->data);
   Mesh *mesh_eval = static_cast<Mesh *>(ob_eval->data);
+
   if (!mesh_eval || !mesh_eval->runtime || !mesh_eval->runtime->batch_cache) {
     PyErr_SetString(PyExc_RuntimeError, "Mesh batch cache not available");
     return nullptr;
+  }
+
+  /* Ensure the original mesh has is_using_skinning set, to ensure the
+   * batch cache will be reconstructed using vec4 positions. */
+  if (!mesh_orig->is_using_skinning) {
+    mesh_orig->is_using_skinning = 1;
+    DEG_id_tag_update(&ob_orig->id, ID_RECALC_GEOMETRY);
+    BKE_scene_graph_update_tagged(depsgraph, DEG_get_bmain(depsgraph));
   }
 
   using namespace blender::draw;
@@ -138,21 +297,19 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
                                      1 :
                                      0;
 
+  /* Build / obtain the compute shader. */
+  blender::gpu::Shader *scatter_shader = mesh_scatter_shader_get_or_create(mesh_orig,
+                                                                           normals_domain_int);
+
   /* Prepare topology SSBOs + offsets exactly like InitStaticSkinningBuffers.
    * For reuse you can cache these per-mesh. Here we assume they exist or will be created.
    * TODO: implement creation / retrieval of:
    *   - ssbo_topology (packed ints)
-   *   - ssbo_postmat (mat4)
+   *   - ssbo_obmat (mat4)
    *   - specialization constants: face_offsets_offset, corner_to_face_offset, ...
    */
   blender::gpu::StorageBuf *ssbo_topo = nullptr;    /* TODO: create or fetch */
   blender::gpu::StorageBuf *ssbo_obmat = nullptr; /* TODO: create or fetch */
-
-  /* Build / obtain the compute shader.
-   * TODO: reuse a shared shader instance or create one here using the GLSL from BL_ArmatureObject.
-   * The shader must declare specialization constants for offsets and for normals_domain.
-   */
-  blender::gpu::Shader *scatter_shader = nullptr; /* TODO: create or fetch shader */
 
   if (!scatter_shader) {
     PyErr_SetString(PyExc_RuntimeError,
@@ -172,7 +329,7 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
   /* Bind user SSBO (positions per vertex) at the expected binding index used by the shader */
   GPU_storagebuf_bind(py_ssbo->ssbo, 2); /* ensure shader expects skinned_vert_positions at binding 2 */
 
-  /* Bind postmat/topo (must be provided/created by TODO above) */
+  /* Bind obmat/topo (must be provided/created by TODO above) */
   GPU_storagebuf_bind(ssbo_obmat, 3);
   GPU_storagebuf_bind(ssbo_topo, 4);
 

@@ -547,6 +547,71 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
   Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(pygpu_mesh_scatter_free_doc,
+             ".. function:: scatter_free_for_mesh(obj)\n"
+             "\n"
+             "   Free GPU resources (shader + SSBOs) associated with the mesh owned by `obj`.\n"
+             "   Also resets `mesh.is_using_skinning` and `mesh.is_running_skinning` to 0.\n"
+             "   `obj` may be an evaluated object or an original object (bpy.types.Object).\n");
+
+static PyObject *pygpu_mesh_scatter_free(PyObject * /*self*/, PyObject *args, PyObject *kwds)
+{
+  PyObject *py_obj = nullptr;
+  static const char *_keywords[] = {"obj", nullptr};
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwds, "O:scatter_free_for_mesh", (char **)_keywords, &py_obj))
+  {
+    return nullptr;
+  }
+
+  ID *id_obj = nullptr;
+  if (!pyrna_id_FromPyObject(py_obj, &id_obj)) {
+    PyErr_Format(PyExc_TypeError, "Expected an Object, not %.200s", Py_TYPE(py_obj)->tp_name);
+    return nullptr;
+  }
+
+  if (GS(id_obj->name) != ID_OB) {
+    PyErr_Format(PyExc_TypeError,
+                 "Expected an Object, not %.200s",
+                 BKE_idtype_idcode_to_name(GS(id_obj->name)));
+    return nullptr;
+  }
+
+  Object *ob = reinterpret_cast<Object *>(id_obj);
+
+  /* Accept evaluated or original object. If evaluated, find original. */
+  Object *ob_orig = ob;
+  if (DEG_is_evaluated(ob)) {
+    /* DEG_get_original returns the original object for an evaluated one. */
+    ob_orig = DEG_get_original(ob);
+    if (ob_orig == nullptr) {
+      PyErr_SetString(PyExc_RuntimeError, "Failed to find original object for evaluated object");
+      return nullptr;
+    }
+  }
+
+  if (ob_orig->type != OB_MESH) {
+    PyErr_SetString(PyExc_TypeError, "Object does not own a mesh");
+    return nullptr;
+  }
+
+  Mesh *mesh_orig = static_cast<Mesh *>(ob_orig->data);
+  if (!mesh_orig) {
+    PyErr_SetString(PyExc_RuntimeError, "Object mesh data not available");
+    return nullptr;
+  }
+
+  /* Reset flags (safe to do from Python thread since callers use this from UI thread). */
+  mesh_orig->is_using_skinning = 0;
+  /* mesh->is_running_skinning flag is only on evaluated mesh (ob_eval->runtime->data_eval)
+   * so we don't reset it here. It will be reset next time the object is evaluated. */
+
+  /* Free GPU resources associated with this mesh (thread-safe internally). */
+  bpygpu_mesh_scatter_free_for_mesh(mesh_orig);
+
+  Py_RETURN_NONE;
+}
+
 #ifdef __GNUC__
 #  ifdef __clang__
 #    pragma clang diagnostic push
@@ -562,6 +627,10 @@ static PyMethodDef pygpu_mesh__tp_methods[] = {
      (PyCFunction)pygpu_mesh_scatter,
      METH_VARARGS | METH_KEYWORDS,
      pygpu_mesh_scatter_doc},
+    {"scatter_free_for_mesh",
+     (PyCFunction)pygpu_mesh_scatter_free,
+     METH_VARARGS | METH_KEYWORDS,
+     pygpu_mesh_scatter_free_doc},
     {nullptr, nullptr, 0, nullptr},
 };
 

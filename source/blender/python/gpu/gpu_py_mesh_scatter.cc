@@ -224,7 +224,7 @@ static MeshScatterResources *mesh_scatter_resources_get_or_create(Mesh *mesh,
   info.storage_buf(0, Qualifier::write, "vec4", "positions[]");
   info.storage_buf(1, Qualifier::write, "uint", "normals[]");
   info.storage_buf(2, Qualifier::read, "vec4", "skinned_vert_positions[]");
-  info.storage_buf(3, Qualifier::read, "mat4", "obmat[]"); /* shader expects postmat[] */
+  info.storage_buf(3, Qualifier::read, "mat4", "obmat[]");
   info.storage_buf(4, Qualifier::read, "int", "topo[]");
 
   info.specialization_constant(Type::int_t, "face_offsets_offset", res.face_offsets_offset);
@@ -235,8 +235,6 @@ static MeshScatterResources *mesh_scatter_resources_get_or_create(Mesh *mesh,
   info.specialization_constant(Type::int_t, "vert_to_face_offset", res.vert_to_face_offset);
   info.specialization_constant(Type::int_t, "normals_domain", res.normals_domain);
 
-  /* Copy the same compute_source_generated body as used in DoGpuSkinning (pass 2).
-   * For brevity we reference the existing code string in this file; keep it consistent. */
   info.compute_source_generated = R"GLSL(
 // Utility accessors
 int face_offsets(int i) { return topo[face_offsets_offset + i]; }
@@ -456,7 +454,7 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     DEG_id_tag_update(&ob_orig->id, ID_RECALC_GEOMETRY);
     BKE_scene_graph_update_tagged(depsgraph, DEG_get_bmain(depsgraph));
 
-    /* Wake UI/draw loop so next frame will run population (if applicable). */
+    /* Redraw everything so next frame will run cache_populate (if applicable). */
     WM_main_add_notifier(NC_WINDOW, nullptr);
 
     /* Return None for this frame; caller (modal operator) will call again next frame. */
@@ -512,7 +510,8 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
 
   GPU_storagebuf_update(res->ssbo_obmat, ob_eval->object_to_world().ptr());
 
-  /* Prepare specialization constants state if shader expects them.
+  /* Specialization constants are used instead of push constants for performances. It is
+   * used to pass mesh topology offsets to the shader.
    * We only set normals_domain here; offsets must be set when topology SSBO is available.
    */
   const blender::gpu::shader::SpecializationConstants *constants_state =
@@ -523,8 +522,11 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
   vbo_pos->bind_as_ssbo(0);
   vbo_nor->bind_as_ssbo(1);
 
-  /* Bind user SSBO (positions per vertex) at the expected binding index used by the shader */
-  GPU_storagebuf_bind(py_ssbo->ssbo, 2); /* ensure shader expects skinned_vert_positions at binding 2 */
+  /* Bind user SSBO (positions per vertex) */
+  /* The user can use whatever bind slot he wants in his py compute shader
+   * Here, we use slot 2 but it is is not related to the slot used by user in his
+   * compute shader */
+  GPU_storagebuf_bind(py_ssbo->ssbo, 2);
 
   /* Bind obmat/topo */
   GPU_storagebuf_bind(res->ssbo_obmat, 3);

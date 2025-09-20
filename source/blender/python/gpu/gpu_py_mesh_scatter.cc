@@ -40,7 +40,7 @@
 struct MeshScatterResources {
   blender::gpu::Shader *shader = nullptr;
   blender::gpu::StorageBuf *ssbo_topology = nullptr;
-  blender::gpu::StorageBuf *ssbo_obmat = nullptr;
+  blender::gpu::StorageBuf *ssbo_transform_mat = nullptr;
   int face_offsets_offset = 0;
   int corner_to_face_offset = 0;
   int corner_verts_offset = 0;
@@ -87,8 +87,8 @@ extern "C" void bpygpu_mesh_scatter_free_for_mesh(const Mesh *mesh)
       if (res.ssbo_topology) {
         GPU_storagebuf_free(res.ssbo_topology);
       }
-      if (res.ssbo_obmat) {
-        GPU_storagebuf_free(res.ssbo_obmat);
+      if (res.ssbo_transform_mat) {
+        GPU_storagebuf_free(res.ssbo_transform_mat);
       }
     }
     else {
@@ -115,9 +115,9 @@ static void mesh_scatter_orphans_flush(void)
       GPU_storagebuf_free(r.ssbo_topology);
       r.ssbo_topology = nullptr;
     }
-    if (r.ssbo_obmat) {
-      GPU_storagebuf_free(r.ssbo_obmat);
-      r.ssbo_obmat = nullptr;
+    if (r.ssbo_transform_mat) {
+      GPU_storagebuf_free(r.ssbo_transform_mat);
+      r.ssbo_transform_mat = nullptr;
     }
   }
   g_mesh_scatter_orphans.clear();
@@ -204,12 +204,12 @@ static MeshScatterResources *mesh_scatter_resources_get_or_create(Mesh *mesh,
     GPU_storagebuf_update(res.ssbo_topology, topo.data());
   }
 
-  /* Create and upload object matrix SSBO (identity matrix). */
-  if (!res.ssbo_obmat) {
-    float obmat[4][4];
-    unit_m4(obmat);
-    res.ssbo_obmat = GPU_storagebuf_create(sizeof(float) * 16);
-    GPU_storagebuf_update(res.ssbo_obmat, obmat);
+  /* Create and upload transform matrix SSBO (identity matrix). */
+  if (!res.ssbo_transform_mat) {
+    float transform_mat[4][4];
+    unit_m4(transform_mat);
+    res.ssbo_transform_mat = GPU_storagebuf_create(sizeof(float) * 16);
+    GPU_storagebuf_update(res.ssbo_transform_mat, transform_mat);
   }
 
   res.normals_domain = normals_domain_int;
@@ -224,7 +224,7 @@ static MeshScatterResources *mesh_scatter_resources_get_or_create(Mesh *mesh,
   info.storage_buf(0, Qualifier::write, "vec4", "positions[]");
   info.storage_buf(1, Qualifier::write, "uint", "normals[]");
   info.storage_buf(2, Qualifier::read, "vec4", "skinned_vert_positions[]");
-  info.storage_buf(3, Qualifier::read, "mat4", "obmat[]");
+  info.storage_buf(3, Qualifier::read, "mat4", "transform_mat[]");
   info.storage_buf(4, Qualifier::read, "int", "topo[]");
 
   info.specialization_constant(Type::int_t, "face_offsets_offset", res.face_offsets_offset);
@@ -289,7 +289,7 @@ void main() {
 
   // 1) Scatter position
   vec4 p_obj = skinned_vert_positions[v];
-  positions[c] = obmat[0] * p_obj;
+  positions[c] = transform_mat[0] * p_obj;
 
   // 2) Calculate and scatter normal
   vec3 n_obj;
@@ -308,7 +308,7 @@ void main() {
     n_obj = n_accum;
   }
 
-  vec3 n_world = transform_normal(n_obj, obmat[0]);
+  vec3 n_world = transform_normal(n_obj, transform_mat[0]);
   normals[c] = pack_norm(normalize(n_world));
 }
 )GLSL";
@@ -320,9 +320,9 @@ void main() {
       GPU_storagebuf_free(res.ssbo_topology);
       res.ssbo_topology = nullptr;
     }
-    if (res.ssbo_obmat) {
-      GPU_storagebuf_free(res.ssbo_obmat);
-      res.ssbo_obmat = nullptr;
+    if (res.ssbo_transform_mat) {
+      GPU_storagebuf_free(res.ssbo_transform_mat);
+      res.ssbo_transform_mat = nullptr;
     }
     return nullptr;
   }
@@ -349,9 +349,9 @@ static void mesh_scatter_resources_free_all(void)
       GPU_storagebuf_free(r.ssbo_topology);
       r.ssbo_topology = nullptr;
     }
-    if (r.ssbo_obmat) {
-      GPU_storagebuf_free(r.ssbo_obmat);
-      r.ssbo_obmat = nullptr;
+    if (r.ssbo_transform_mat) {
+      GPU_storagebuf_free(r.ssbo_transform_mat);
+      r.ssbo_transform_mat = nullptr;
     }
   }
   g_mesh_scatter_resources.clear();
@@ -374,7 +374,8 @@ PyDoc_STRVAR(pygpu_mesh_scatter_doc,
              "   packed normals using the internal compute shader. The mesh VBOs (positions and\n"
              "   normals) will be updated and ready for rendering.\n\n"
              "   `obj` must be an evaluated bpy.types.Object owning a mesh. `ssbo_positions`\n"
-             "   must be a gpu.types.GPUStorageBuf containing vec4 per vertex.\n");
+             "   must be a gpu.types.GPUStorageBuf containing vec4 per vertex.\n"
+             "   The compute shader will read a 4x4 transform matrix from `transform_mat` (binding 3).\n");
 
 static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObject *kwds)
 {
@@ -508,8 +509,6 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     return nullptr;
   }
 
-  GPU_storagebuf_update(res->ssbo_obmat, ob_eval->object_to_world().ptr());
-
   /* Specialization constants are used instead of push constants for performances. It is
    * used to pass mesh topology offsets to the shader.
    * We only set normals_domain here; offsets must be set when topology SSBO is available.
@@ -528,13 +527,13 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
    * compute shader */
   GPU_storagebuf_bind(py_ssbo->ssbo, 2);
 
-  /* Bind obmat/topo */
-  GPU_storagebuf_bind(res->ssbo_obmat, 3);
+  /* Bind transform_mat/topo */
+  GPU_storagebuf_bind(res->ssbo_transform_mat, 3);
   GPU_storagebuf_bind(res->ssbo_topology, 4);
 
   /* Dispatch groups based on number of corners */
   const int num_corners = int(mesh_eval->corner_verts().size());
-  const int group_size = 256; /* match shader */
+  const int group_size = 256;
   const int num_groups_corners = (num_corners + group_size - 1) / group_size;
   GPU_compute_dispatch(res->shader, num_groups_corners, 1, 1);
 

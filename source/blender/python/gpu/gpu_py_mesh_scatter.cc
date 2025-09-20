@@ -369,31 +369,25 @@ extern "C" void bpygpu_mesh_scatter_shaders_free_all(void)
   mesh_scatter_resources_free_all();
 }
 
-/* Helper: get MeshBatchCache and vbos (adapt to your project paths) */
-/* TODO: include the correct header(s) to access MeshBatchCache / VBOType / lookup_ptr. */
-/* extern MeshBatchCache *DRW_mesh_batch_cache_get(Mesh *me); */ /* adapt if needed */
-
 PyDoc_STRVAR(pygpu_mesh_scatter_doc,
              ".. function:: scatter_positions_to_corners(obj, ssbo_positions)\n"
              "\n"
              "   Scatter per-vertex positions (from user SSBO) to per-corner VBOs and recompute\n"
              "   packed normals using the internal compute shader. The mesh VBOs (positions and\n"
              "   normals) will be updated and ready for rendering.\n\n"
-             "   `obj` must be an original bpy.types.Object owning a mesh. `ssbo_positions`\n"
+             "   `obj` must be an evaluated bpy.types.Object owning a mesh. `ssbo_positions`\n"
              "   must be a gpu.types.GPUStorageBuf containing vec4 per vertex.\n");
 
 static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObject *kwds)
 {
-  PyObject *py_depsgraph = nullptr;
   PyObject *py_obj = nullptr;
   BPyGPUStorageBuf *py_ssbo = nullptr;
 
-  static const char *_keywords[] = {"depsgraph", "obj", "ssbo", nullptr};
+  static const char *_keywords[] = {"obj", "ssbo", nullptr};
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kwds,
-                                   "OOO:scatter_positions_to_corners",
+                                   "OO:scatter_positions_to_corners",
                                    (char **)_keywords,
-                                   &py_depsgraph,
                                    &py_obj,
                                    &py_ssbo))
   {
@@ -427,26 +421,25 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     return nullptr;
   }
 
-  Object *ob = reinterpret_cast<Object *>(id_obj);
-  if (DEG_is_evaluated(ob)) {
-    PyErr_SetString(PyExc_TypeError, "Expected a non evaluated object");
+  Object *ob_eval = reinterpret_cast<Object *>(id_obj);
+  if (!DEG_is_evaluated(ob_eval)) {
+    PyErr_SetString(PyExc_TypeError, "Expected an evaluated object");
     return nullptr;
   }
 
-  if (ob->type != OB_MESH) {
+  if (ob_eval->type != OB_MESH) {
     PyErr_SetString(PyExc_TypeError, "Object does not own a mesh");
     return nullptr;
   }
 
-  Depsgraph *depsgraph = static_cast<Depsgraph *>(PyC_RNA_AsPointer(py_depsgraph, "Depsgraph"));
-  if (depsgraph == nullptr) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "No depsgraph found; pass a Depsgraph explicitly.");
+  Depsgraph *depsgraph = DEG_get_depsgraph_by_id(ob_eval->id);
+  if (!depsgraph) {
+    PyErr_SetString(PyExc_TypeError, "Object is not owned by a depsgraph");
     return nullptr;
   }
 
-  Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
-  Mesh *mesh_orig = static_cast<Mesh *>(ob->data);
+  Object *ob_orig = DEG_get_original(ob_eval);
+  Mesh *mesh_orig = static_cast<Mesh *>(ob_orig->data);
   Mesh *mesh_eval = static_cast<Mesh *>(ob_eval->data);
 
   if (!mesh_eval || !mesh_eval->runtime || !mesh_eval->runtime->batch_cache) {
@@ -460,7 +453,7 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
 
     /* Request geometry rebuild for that object so the draw/cache system will
      * populate VBOs (doesn't block; handled by the draw subsystem on next frame). */
-    DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
+    DEG_id_tag_update(&ob_orig->id, ID_RECALC_GEOMETRY);
     BKE_scene_graph_update_tagged(depsgraph, DEG_get_bmain(depsgraph));
 
     /* Wake UI/draw loop so next frame will run population (if applicable). */
@@ -548,7 +541,7 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
   GPU_shader_unbind();
 
   /* Tag the object for transform to reset TAA samples... */
-  DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
+  DEG_id_tag_update(&ob_orig->id, ID_RECALC_TRANSFORM);
 
   Py_RETURN_NONE;
 }

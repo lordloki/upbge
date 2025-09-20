@@ -15,6 +15,7 @@
 #include <Python.h>
 
 #include "GPU_context.hh"
+#include "GPU_state.hh"
 
 #include "gpu_py_capabilities.hh"
 #include "gpu_py_compute.hh"
@@ -95,6 +96,26 @@ PyObject *BPyInit_gpu()
 
   PyModule_AddObject(mod, "compute", (submodule = bpygpu_compute_init()));
   PyDict_SetItem(sys_modules, PyModule_GetNameObject(submodule), submodule);
+
+  /* Export GPU barrier flags as Python constants (global gpu module). */
+  /* Add to root module */
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_FRAMEBUFFER", (int)GPU_BARRIER_FRAMEBUFFER);
+  PyModule_AddIntConstant(
+      mod, "GPU_BARRIER_SHADER_IMAGE_ACCESS", (int)GPU_BARRIER_SHADER_IMAGE_ACCESS);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_TEXTURE_FETCH", (int)GPU_BARRIER_TEXTURE_FETCH);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_TEXTURE_UPDATE", (int)GPU_BARRIER_TEXTURE_UPDATE);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_COMMAND", (int)GPU_BARRIER_COMMAND);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_SHADER_STORAGE", (int)GPU_BARRIER_SHADER_STORAGE);
+  PyModule_AddIntConstant(
+      mod, "GPU_BARRIER_VERTEX_ATTRIB_ARRAY", (int)GPU_BARRIER_VERTEX_ATTRIB_ARRAY);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_ELEMENT_ARRAY", (int)GPU_BARRIER_ELEMENT_ARRAY);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_UNIFORM", (int)GPU_BARRIER_UNIFORM);
+  PyModule_AddIntConstant(mod, "GPU_BARRIER_BUFFER_UPDATE", (int)GPU_BARRIER_BUFFER_UPDATE);
+
+  /* Composite default constant for convenience. */
+  PyModule_AddIntConstant(mod,
+                          "GPU_BARRIER_DEFAULT",
+                          (int)(GPU_BARRIER_TEXTURE_FETCH | GPU_BARRIER_SHADER_IMAGE_ACCESS));
 
   return mod;
 }

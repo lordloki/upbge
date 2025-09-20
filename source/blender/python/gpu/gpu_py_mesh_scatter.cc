@@ -37,11 +37,6 @@
 #include "gpu_py_storagebuffer.hh"
 #include "gpu_py_vertex_buffer.hh"
 
-struct MeshScatterState {
-  int prev_is_using_skinning = 0;
-  bool requested = false;
-};
-
 struct MeshScatterResources {
   blender::gpu::Shader *shader = nullptr;
   blender::gpu::StorageBuf *ssbo_topology = nullptr;
@@ -56,7 +51,6 @@ struct MeshScatterResources {
 
 /* Orphans to free later when GPU context is available. */
 static std::vector<MeshScatterResources> g_mesh_scatter_orphans;
-static std::unordered_map<const Mesh *, MeshScatterState> g_mesh_scatter_states;
 static std::unordered_map<const Mesh *, MeshScatterResources> g_mesh_scatter_resources;
 static std::mutex g_mesh_scatter_resources_mutex;
 
@@ -75,7 +69,6 @@ extern "C" void bpygpu_mesh_scatter_free_for_mesh(const Mesh *mesh)
     auto it = g_mesh_scatter_resources.find(mesh);
     if (it == g_mesh_scatter_resources.end()) {
       /* Nothing to free. */
-      g_mesh_scatter_states.erase(mesh);
       g_mesh_scatter_resources.erase(mesh);
       return;
     }
@@ -84,7 +77,6 @@ extern "C" void bpygpu_mesh_scatter_free_for_mesh(const Mesh *mesh)
     MeshScatterResources res = std::move(it->second);
 
     /* Clean small helper maps/flags. */
-    g_mesh_scatter_states.erase(mesh);
     g_mesh_scatter_resources.erase(it);
 
     if (GPU_context_active_get()) {
@@ -387,17 +379,23 @@ PyDoc_STRVAR(pygpu_mesh_scatter_doc,
              "   Scatter per-vertex positions (from user SSBO) to per-corner VBOs and recompute\n"
              "   packed normals using the internal compute shader. The mesh VBOs (positions and\n"
              "   normals) will be updated and ready for rendering.\n\n"
-             "   `obj` must be an evaluated bpy.types.Object owning a mesh. `ssbo_positions`\n"
+             "   `obj` must be an original bpy.types.Object owning a mesh. `ssbo_positions`\n"
              "   must be a gpu.types.GPUStorageBuf containing vec4 per vertex.\n");
 
 static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObject *kwds)
 {
+  PyObject *py_depsgraph = nullptr;
   PyObject *py_obj = nullptr;
   BPyGPUStorageBuf *py_ssbo = nullptr;
 
-  static const char *_keywords[] = {"obj", "ssbo", nullptr};
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "OO:scatter_positions_to_corners", (char **)_keywords, &py_obj, &py_ssbo))
+  static const char *_keywords[] = {"depsgraph", "obj", "ssbo", nullptr};
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "OOO:scatter_positions_to_corners",
+                                   (char **)_keywords,
+                                   &py_depsgraph,
+                                   &py_obj,
+                                   &py_ssbo))
   {
     return nullptr;
   }
@@ -429,31 +427,26 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     return nullptr;
   }
 
-  Object *ob_eval = reinterpret_cast<Object *>(id_obj);
-  if (!DEG_is_evaluated(ob_eval)) {
-    PyErr_SetString(PyExc_TypeError, "Expected an evaluated object");
+  Object *ob = reinterpret_cast<Object *>(id_obj);
+  if (DEG_is_evaluated(ob)) {
+    PyErr_SetString(PyExc_TypeError, "Expected a non evaluated object");
     return nullptr;
   }
 
-  if (ob_eval->type != OB_MESH) {
+  if (ob->type != OB_MESH) {
     PyErr_SetString(PyExc_TypeError, "Object does not own a mesh");
     return nullptr;
   }
 
-  Depsgraph *depsgraph = DEG_get_depsgraph_by_id(*id_obj);
-  if (!depsgraph) {
-    PyErr_SetString(PyExc_TypeError, "Object is not owned by a depsgraph");
+  Depsgraph *depsgraph = static_cast<Depsgraph *>(PyC_RNA_AsPointer(py_depsgraph, "Depsgraph"));
+  if (depsgraph == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "No depsgraph found; pass a Depsgraph explicitly.");
     return nullptr;
   }
 
-  /* Get evaluated object and mesh */
-  if (!ob_eval) {
-    PyErr_SetString(PyExc_RuntimeError, "Failed to get evaluated object");
-    return nullptr;
-  }
-
-  Object *ob_orig = DEG_get_original(ob_eval);
-  Mesh *mesh_orig = static_cast<Mesh *>(ob_orig->data);
+  Object *ob_eval = DEG_get_evaluated(depsgraph, ob);
+  Mesh *mesh_orig = static_cast<Mesh *>(ob->data);
   Mesh *mesh_eval = static_cast<Mesh *>(ob_eval->data);
 
   if (!mesh_eval || !mesh_eval->runtime || !mesh_eval->runtime->batch_cache) {
@@ -461,23 +454,18 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
     return nullptr;
   }
 
-  /* Manage per-mesh state so modal handler can be called each frame until cache ready. */
-  MeshScatterState &st = g_mesh_scatter_states[mesh_orig];
-
-  /* Save previous flag on first encounter. */
-  if (!st.requested) {
-    st.prev_is_using_skinning = mesh_orig->is_using_skinning;
+  if (mesh_orig->is_using_skinning == 0) {
+    /* Set this flag to extract the mesh with float4 */
     mesh_orig->is_using_skinning = 1;
 
     /* Request geometry rebuild for that object so the draw/cache system will
      * populate VBOs (doesn't block; handled by the draw subsystem on next frame). */
-    DEG_id_tag_update(&ob_orig->id, ID_RECALC_GEOMETRY);
+    DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
     BKE_scene_graph_update_tagged(depsgraph, DEG_get_bmain(depsgraph));
 
     /* Wake UI/draw loop so next frame will run population (if applicable). */
     WM_main_add_notifier(NC_WINDOW, nullptr);
 
-    st.requested = true;
     /* Return None for this frame; caller (modal operator) will call again next frame. */
     Py_RETURN_NONE;
   }
@@ -559,15 +547,8 @@ static PyObject *pygpu_mesh_scatter(PyObject * /*self*/, PyObject *args, PyObjec
 
   GPU_shader_unbind();
 
-  /* After dispatch : restore previous mesh flag and clear per-mesh state. */
-  auto it_state = g_mesh_scatter_states.find(mesh_orig);
-  if (it_state != g_mesh_scatter_states.end()) {
-    mesh_orig->is_using_skinning = it_state->second.prev_is_using_skinning;
-    g_mesh_scatter_states.erase(it_state);
-    // Next time this mesh will be rebuild in the cache, it will be on float3.
-  }
-
-  DEG_id_tag_update(&ob_orig->id, ID_RECALC_TRANSFORM);
+  /* Tag the object for transform to reset TAA samples... */
+  DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM);
 
   Py_RETURN_NONE;
 }

@@ -148,20 +148,9 @@ jobs:
         if: matrix.os == 'macOS'
         run: make -C build
 
-      - name: Build UPBGE (Windows)
-        if: matrix.os == 'windows'
-        run: cmake --build build --target install --config Release
-
       - name: Copy Release Scripts (Linux / macOS)
         if: matrix.os != 'windows'
         run: make -C build install
-
-      - name: Install PyPI package into UPBGE's Python (Windows)
-        if: matrix.os == 'windows'
-        run: |
-          $pybin = Get-ChildItem -Recurse -Path "build/bin/Release" -Filter "python.exe" | Select-Object -First 1 | ForEach-Object { $_.FullName }
-          & $pybin -m ensurepip
-          & $pybin -m pip install uplogic
 
       - name: Archive Build (Linux/macOS)
         if: matrix.os != 'windows'
@@ -169,18 +158,9 @@ jobs:
           DATE=$(date +"%Y-%m-%d")
           tar zcvf upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}-$DATE.tar.gz build/bin
 
-      - name: Archive Build (Windows)
-        if: matrix.os == 'windows'
-        run: |
-          $DATE = Get-Date -Format "yyyy-MM-dd"
-          Compress-Archive -Path build\bin -DestinationPath upbge-0.50-${{ matrix.os }}-${{ matrix.arch }}.zip
-
       - name: Upload Build as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: upbge-0.50-${{ matrix.os }}-${{ matrix.arch }}
-          path: upbge-0.50-${{ matrix.os }}-${{ matrix.arch }}*.*
+          name: upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}
+          path: upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}-*.*
           retention-days: 7
-
-          prerelease: false
-          files: artifacts/**/*

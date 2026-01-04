@@ -31,9 +31,9 @@ jobs:
           #  arch: arm64
           #  runner: windows-latest
 
-          - os: macos
-            arch: x86_64
-            runner: macos-13
+          #- os: macos
+          #  arch: x86_64
+          #  runner: macos-13
 
           - os: macos
             arch: arm64

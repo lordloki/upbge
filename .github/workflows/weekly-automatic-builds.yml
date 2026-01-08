@@ -1,8 +1,7 @@
 name: weekly-automatic-compilations
 
 on:
-  schedule:
-    - cron: "0 1 * * 0" # Execute Sundays at 1 AM UTC
+
   workflow_dispatch:
 
 permissions:
@@ -152,15 +151,16 @@ jobs:
         if: matrix.os != 'windows'
         run: make -C build install
 
-      - name: Archive Build (Linux/macOS)
-        if: matrix.os != 'windows'
+      - name: Clean and Create DMG (macOS)
+        if: matrix.os == 'macOS'
         run: |
-          DATE=$(date +"%Y-%m-%d")
-          tar zcvf upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}-$DATE.tar.gz build/bin
+          find build/bin -maxdepth 1 ! -name "*.app" ! -name "*.appex" ! -name "." -exec rm -rf {} +
+
+          hdiutil create -volname "UPBGE 0.50" -srcfolder build/bin -ov -format UDZO upbge-0.50-macos-arm64.dmg
 
       - name: Upload Build as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}
-          path: upbge-0.51-alpha-${{ matrix.os }}-${{ matrix.arch }}-*.*
+          name: upbge-0.50-macos-arm64.dmg
+          path: upbge-0.50-macos-arm64.dmg
           retention-days: 7
